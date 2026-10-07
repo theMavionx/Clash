@@ -259,13 +259,18 @@ export function useLeverup() {
       const markPrice = latestPrices.get(normalizeSymbol(row.symbol)) || num(row.mark_price || row.entry_price);
       const entryPrice = num(row.entry_price);
       const qty = num(row.qty ?? row.size ?? row.amount);
-      const direction = normalizeLongSide(row.side) ? 1 : -1;
+      const isLong = normalizeLongSide(row.side);
+      const direction = isLong ? 1 : -1;
       const pricePnl = qty * (markPrice - entryPrice) * direction;
       const fundingPnl = num(row.funding_fee);
       const holdingFee = Math.max(0, num(row.holding_fee));
       const unrealizedPnl = pricePnl + fundingPnl - holdingFee;
       return {
         ...row,
+        // The terminal treats only 'bid' as long; the API's 'long'/'short'
+        // made every long render as SHORT with an inverted PnL %.
+        side: isLong ? 'bid' : 'ask',
+        isLong,
         mark_price: markPrice,
         price_pnl: pricePnl,
         unrealized_pnl: unrealizedPnl,
@@ -841,7 +846,12 @@ export function useLeverup() {
         await new Promise(resolve => window.setTimeout(resolve, attempt === 0 ? 500 : 750));
         const query = `?dex=leverup&address=${encodeURIComponent(walletAddr)}`;
         const rows = await fetchJson(`/api/futures/leverup/positions${query}`);
-        const nextPositions = (Array.isArray(rows) ? rows : []).filter(row => !closedPositionsRef.current.has(positionKey(walletAddr, row)));
+        const nextPositions = (Array.isArray(rows) ? rows : [])
+          .filter(row => !closedPositionsRef.current.has(positionKey(walletAddr, row)))
+          .map(row => {
+            const isLong = normalizeLongSide(row.side);
+            return { ...row, side: isLong ? 'bid' : 'ask', isLong };
+          });
         setPositions(nextPositions);
         position = findPosition(nextPositions);
       }
