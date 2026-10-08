@@ -1670,6 +1670,14 @@ function TournamentsPanel({ tournaments, reload }) {
     await reload();
   }
 
+  async function exportHibachiTrades(tournament) {
+    try {
+      await adminDownload(`/admin/tournaments/${tournament.id}/hibachi-trades.csv`, `tournament-${tournament.id}-hibachi-trades.csv`);
+    } catch (error) {
+      window.alert(error.message || 'Could not export Hibachi trades');
+    }
+  }
+
   async function deleteTournament(id) {
     if (!window.confirm(`Delete tournament #${id} and participant rows?`)) return;
     await adminDelete(`/admin/tournaments/${id}`);
@@ -1789,6 +1797,7 @@ function TournamentsPanel({ tournaments, reload }) {
                       <div className="admin-filter-row">
                         <button className="admin-btn" onClick={() => setEditing(tournamentToForm(t))}>Edit</button>
                         <button className="admin-btn" onClick={() => openLeaderboard(t)}>Leaderboard</button>
+                        <button className="admin-btn" title="All Hibachi executions (with trade ids) by participants during the tournament" onClick={() => exportHibachiTrades(t)}>Trades CSV</button>
                         {t.status === 'active' && !t.paused_at && <button className="admin-btn" onClick={() => pauseTournament(t)}>Pause</button>}
                         {t.status === 'active' && !!t.paused_at && <button className="admin-btn green" onClick={() => resumeTournament(t)}>Resume</button>}
                         {t.status !== 'ended' && <button className="admin-btn danger" onClick={() => forceEnd(t.id)}>End</button>}

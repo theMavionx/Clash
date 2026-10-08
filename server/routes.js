@@ -26474,6 +26474,69 @@ router.post('/admin/tournaments/:id/resume', adminAuth, (req, res) => {
 // Force-end a tournament: sets status='ended' so it disappears from
 // `getActiveTournamentForPlayer` immediately. Counters stay around so the
 // admin can still inspect the leaderboard.
+// Every recorded Hibachi execution (with trade ids) placed by tournament
+// participants between the tournament's start and end, for partner reward audits.
+router.get('/admin/tournaments/:id/hibachi-trades.csv', adminAuth, (req, res) => {
+  try {
+    const tournamentId = Number(req.params.id);
+    const tournament = db.db.prepare('SELECT id, name, start_at, end_at FROM tournaments WHERE id = ?').get(tournamentId);
+    if (!tournament) return res.status(404).json({ error: 'Tournament not found' });
+    const fdb = futuresDbReadonly();
+    if (!fdb) return res.status(503).json({ error: 'Trade records database unavailable' });
+    const toIso = (value) => {
+      const ms = Date.parse(/Z$|[+-]\d\d:?\d\d$/.test(String(value)) ? value : `${String(value).replace(' ', 'T')}Z`);
+      return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+    };
+    const startIso = toIso(tournament.start_at) || '1970-01-01T00:00:00.000Z';
+    const endIso = toIso(tournament.end_at) || new Date().toISOString();
+    const participants = db.db.prepare(`
+      SELECT tp.player_id, tp.joined_at, tp.left_at, p.name
+      FROM tournament_participants tp LEFT JOIN players p ON p.id = tp.player_id
+      WHERE tp.tournament_id = ?
+    `).all(tournamentId);
+    const byPlayer = new Map(participants.map(row => [String(row.player_id), row]));
+    const ids = [...byPlayer.keys()];
+    const rows = [];
+    for (let i = 0; i < ids.length; i += 500) {
+      const chunk = ids.slice(i, i + 500);
+      rows.push(...fdb.prepare(`
+        SELECT player_id, username, account_id, trade_id, order_id, market, side,
+               quantity, price, volume_quote, volume_currency, executed_at, recorded_at
+        FROM hibachi_trade_records
+        WHERE player_id IN (${chunk.map(() => '?').join(',')})
+          AND executed_at >= ? AND executed_at < ?
+      `).all(...chunk, startIso, endIso));
+    }
+    rows.sort((a, b) => String(a.executed_at).localeCompare(String(b.executed_at))
+      || String(a.account_id).localeCompare(String(b.account_id))
+      || String(a.trade_id).localeCompare(String(b.trade_id)));
+    const columns = ['tournament_id', 'clash_player_id', 'clash_name', 'hibachi_username', 'account_id',
+      'trade_id', 'order_id', 'market', 'side', 'quantity', 'price', 'volume', 'volume_currency',
+      'executed_at', 'recorded_at', 'joined_tournament_at'];
+    const csvCell = (value) => {
+      let text = value == null ? '' : String(value);
+      if (/^[=+\-@]/.test(text)) text = `'${text}`;
+      return `"${text.replace(/"/g, '""')}"`;
+    };
+    const lines = [columns.map(csvCell).join(',')];
+    for (const row of rows) {
+      const participant = byPlayer.get(String(row.player_id)) || {};
+      lines.push([
+        tournamentId, row.player_id, participant.name, row.username, row.account_id,
+        row.trade_id, row.order_id, row.market, row.side, row.quantity, row.price,
+        row.volume_quote, row.volume_currency, row.executed_at, row.recorded_at, participant.joined_at,
+      ].map(csvCell).join(','));
+    }
+    res.set('Cache-Control', 'no-store');
+    res.set('Content-Type', 'text/csv; charset=utf-8');
+    res.set('Content-Disposition', `attachment; filename="tournament-${tournamentId}-hibachi-trades.csv"`);
+    return res.send(`﻿${lines.join('\r\n')}`);
+  } catch (error) {
+    console.warn('[admin] hibachi trade export failed:', error?.message || error);
+    return res.status(500).json({ error: 'Hibachi trade export failed' });
+  }
+});
+
 router.post('/admin/tournaments/:id/end', adminAuth, (req, res) => {
   const tid = parseInt(req.params.id, 10);
   if (!Number.isFinite(tid)) return res.status(400).json({ error: 'invalid id' });
