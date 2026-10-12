@@ -188,6 +188,7 @@ const TASK_TYPES = [
   { id: 'positions', label: 'Positions opened' },
   { id: 'combo_volume_attack', label: 'Volume + accepted attack' },
   { id: 'daily_trade_gold', label: 'Daily trade gold' },
+  { id: 'throne_quest', label: 'Throne partner quest' },
 ];
 
 const TASK_SIDES = [
@@ -4363,6 +4364,16 @@ function TaskEditorDrawer({ task, onClose, onSaved }) {
                 <label className="admin-field"><span className="admin-label">Gold target</span><input className="admin-input" type="number" value={form.params.target_gold ?? 0} onChange={(e) => updateParam('target_gold', Number(e.target.value) || 0)} /></label>
               </div>
             )}
+            {form.type === 'throne_quest' && (
+              <div className="admin-form-grid">
+                <label className="admin-field"><span className="admin-label">Min Throne volume (USD)</span><input className="admin-input" type="number" value={form.params.min_volume ?? 0} onChange={(e) => updateParam('min_volume', Number(e.target.value) || 0)} /></label>
+                <label className="admin-field"><span className="admin-label">Required Throne flag</span>
+                  <select className="admin-input" value={form.params.require || 'pass'} onChange={(e) => updateParam('require', e.target.value)}>
+                    {['pass', 'qualified', 'traded', 'hasSide', 'named', 'checkedIn'].map(flag => <option key={flag} value={flag}>{flag}</option>)}
+                  </select>
+                </label>
+              </div>
+            )}
             <details>
               <summary className="admin-help">Raw params</summary>
               <textarea className="admin-textarea admin-mono" value={JSON.stringify(form.params || {}, null, 2)} onChange={(e) => {
@@ -6083,6 +6094,7 @@ function taskPrimaryTarget(form) {
   const p = form.params || {};
   if (form.type === 'positions') return p.target_positions ?? 0;
   if (form.type === 'daily_trade_gold') return p.target_gold ?? 0;
+  if (form.type === 'throne_quest') return p.min_volume ?? 0;
   return p.target_volume ?? 0;
 }
 
@@ -6090,6 +6102,7 @@ function setTaskPrimaryTarget(form, value) {
   const params = { ...(form.params || {}) };
   if (form.type === 'positions') params.target_positions = value;
   else if (form.type === 'daily_trade_gold') params.target_gold = value;
+  else if (form.type === 'throne_quest') params.min_volume = value;
   else params.target_volume = value;
   return params;
 }
@@ -6108,6 +6121,10 @@ function taskFormToBody(form) {
   if (form.type === 'daily_trade_gold') {
     if (params.target_gold == null) params.target_gold = Number(params.target || 0) || 0;
     if (params.window_hours == null) params.window_hours = 24;
+  }
+  if (form.type === 'throne_quest') {
+    if (params.min_volume == null) params.min_volume = 0;
+    if (!params.require) params.require = 'pass';
   }
   delete params.target;
   delete params.target_value;

@@ -17172,7 +17172,8 @@ async function maybeRefreshTaskProgress(player, task, playerTask, requestHeaders
   if (!playerTask || playerTask.claimed_at) return playerTask;
   const requestedDex = requestedTaskDexFromHeaders(requestHeaders);
   const dex = requestedDex || String(player?.dex || '').toLowerCase();
-  if (!LIVE_TASK_PROGRESS_DEXES.has(dex)) return playerTask;
+  // Throne quests read the partner's public status by wallet, independent of the player's DEX.
+  if (!LIVE_TASK_PROGRESS_DEXES.has(dex) && task?.type !== 'throne_quest') return playerTask;
   try {
     const taskPlayer = requestedDex && requestedDex !== String(player?.dex || '').toLowerCase()
       ? { ...player, dex: requestedDex }

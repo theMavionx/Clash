@@ -75,7 +75,7 @@ try {
   try { db.db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_schedule ON tasks(active, starts_at, ends_at, sort_order, id)`); } catch {}
 } catch (e) { console.error('tasks schema error', e); }
 
-const VALID_TYPES = ['volume', 'positions', 'combo_volume_attack', 'daily_trade_gold'];
+const VALID_TYPES = ['volume', 'positions', 'combo_volume_attack', 'daily_trade_gold', 'throne_quest'];
 const VALID_SIDES = ['any', 'long', 'short'];
 const TASK_ELIGIBILITY_MODES = new Set([
   'all',
@@ -1220,8 +1220,73 @@ async function verifyDailyTradeGold(player, task, snap) {
   return { progress_value: sum, target_value: target, completed: sum >= target };
 }
 
+// ---------- Throne (partner perp DEX) ----------
+// Throne exposes public per-wallet quest status over plain HTTPS, no auth:
+// GET https://throne.network/api/arena/quest?wallet=0x…&min=N
+// -> { traded, points, side, flags: { hasSide, traded, named, checkedIn, qualified, pass } }
+const THRONE_QUEST_URL = process.env.THRONE_QUEST_URL || 'https://throne.network/api/arena/quest';
+const THRONE_FLAGS = new Set(['pass', 'qualified', 'traded', 'hasSide', 'named', 'checkedIn']);
+const THRONE_CACHE_MS = 60_000;
+const throneCache = new Map();
+
+function playerEvmWallets(player) {
+  const out = new Set();
+  if (isEvmWallet(player?.wallet)) out.add(String(player.wallet).toLowerCase());
+  try {
+    for (const row of db.db.prepare(
+      `SELECT address FROM player_wallets WHERE player_id = ? AND chain_type = 'evm' ORDER BY is_primary DESC, id ASC`
+    ).all(player.id)) {
+      if (isEvmWallet(row.address)) out.add(String(row.address).toLowerCase());
+    }
+  } catch { /* player_wallets unavailable in isolated fixtures */ }
+  return [...out].slice(0, 5);
+}
+
+async function fetchThroneQuest(wallet, minVolume, fetchImpl) {
+  const useCache = !fetchImpl;
+  const key = `${wallet}:${minVolume}`;
+  const cached = useCache ? throneCache.get(key) : null;
+  if (cached && Date.now() - cached.at < THRONE_CACHE_MS) return cached.data;
+  fetchImpl = fetchImpl || fetch;
+  const url = `${THRONE_QUEST_URL}?wallet=${encodeURIComponent(wallet)}${minVolume > 0 ? `&min=${minVolume}` : ''}`;
+  const response = await fetchImpl(url, { signal: AbortSignal.timeout(8_000), headers: { accept: 'application/json' } });
+  if (!response.ok) throw new Error(`Throne quest status ${response.status}`);
+  const data = await response.json();
+  if (!useCache) return data;
+  throneCache.set(key, { at: Date.now(), data });
+  if (throneCache.size > 2_000) throneCache.delete(throneCache.keys().next().value);
+  return data;
+}
+
+async function verifyThroneQuest(player, task, _snap, opts = {}) {
+  const p = parseParams(task.params);
+  const minVolume = Math.max(0, Number(p.min_volume) || 0);
+  const requireFlag = THRONE_FLAGS.has(p.require) ? p.require : 'pass';
+  const wallets = playerEvmWallets(player);
+  let best = { progress_value: 0, target_value: minVolume, completed: false };
+  for (const wallet of wallets) {
+    let status;
+    try {
+      status = await fetchThroneQuest(wallet, minVolume, opts.fetchImpl);
+    } catch (e) {
+      console.warn(`[tasks] throne quest read failed player=${player?.name || player?.id}:`, e.message);
+      continue;
+    }
+    const traded = Math.max(0, Number(status?.traded) || 0);
+    const flagged = !!(status?.flags?.[requireFlag] ?? status?.[requireFlag]);
+    const completed = flagged && traded >= minVolume;
+    const target = minVolume || Math.max(0, Number(status?.floorUsd) || 0);
+    if (completed || traded > best.progress_value) {
+      best = { progress_value: traded, target_value: target, completed, throne_wallet: wallet, throne_flag: requireFlag };
+    }
+    if (completed) break;
+  }
+  return best;
+}
+
 async function verifyTask(player, task, snap, opts = {}) {
   switch (task.type) {
+    case 'throne_quest': return verifyThroneQuest(player, task, snap, opts);
     case 'volume': return verifyVolume(player, task, snap, opts);
     case 'positions': return verifyPositions(player, task, snap, opts);
     case 'combo_volume_attack': return verifyComboVolumeAttack(player, task, snap, opts);
