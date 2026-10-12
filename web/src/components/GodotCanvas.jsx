@@ -1092,7 +1092,7 @@ const overlayStyle = {
   left: 0,
   width: '100%',
   height: '100%',
-  backgroundColor: '#0a0b1a', // Match App.jsx background
+  backgroundColor: '#0d0f14', // ClashBot canvas, matches index.css
   display: 'flex',
   flexDirection: 'column',
   justifyContent: 'center', // Center progress block within screen easily
@@ -1141,14 +1141,13 @@ const progressWrapperStyle = {
   zIndex: 2,
 };
 
+// ClashBot progress bar: thin pill track on a dark translucent base.
 const barContainerStyle = {
   width: '60%',
-  maxWidth: '450px',
-  height: '28px',
-  backgroundColor: '#2e1c10', // Dark wood background
-  border: '1px solid #5a3a22', // Thick wood edge
-  borderRadius: '8px',
-  boxShadow: 'inset 0 4px 8px rgba(0,0,0,0.6), 0 4px 12px rgba(0,0,0,0.5)',
+  maxWidth: '420px',
+  height: '6px',
+  backgroundColor: 'rgba(13, 15, 20, 0.55)',
+  borderRadius: '999px',
   overflow: 'hidden',
   position: 'relative',
 };
@@ -1948,9 +1947,9 @@ function GodotCanvas({ onEngineReady }) {
 
   const showLoadingOverlay = !isLoaded || webglReloading || !!loadingError;
   const displayedProgress = webglReloading ? 100 : stageProgress;
-  const progressLabel = loadingError ? 'UNABLE TO LOAD GAME' : webglReloading
-    ? 'RELOADING GAME'
-    : 'LOADING GAME';
+  const progressLabel = loadingError ? 'Unable to load the game' : webglReloading
+    ? 'Reloading game'
+    : 'Loading game';
 
   if (godotSkipped) {
     return (
@@ -1976,13 +1975,11 @@ function GodotCanvas({ onEngineReady }) {
           <div style={progressWrapperStyle}>
             {/* Stage label */}
             <div style={{
-              color: 'var(--terminal-on-accent)',
-              marginBottom: '14px',
-              fontFamily: '"Inter", "Segoe UI", sans-serif',
-              fontSize: '22px',
-              fontWeight: 700,
-              textShadow: 'none',
-              letterSpacing: '1px',
+              color: '#ffffff',
+              marginBottom: '12px',
+              fontSize: '14px',
+              fontWeight: 600,
+              textShadow: '0 1px 2px rgba(0, 0, 0, 0.45)',
               textAlign: 'center',
             }}>
               {progressLabel}
@@ -1994,9 +1991,8 @@ function GodotCanvas({ onEngineReady }) {
                 style={{
                   width: `${displayedProgress}%`,
                   height: '100%',
-                  background: 'linear-gradient(to bottom, #ffe066, #e6b800)',
-                  borderRight: '1px solid #fff8dc',
-                  boxShadow: 'inset 0 2px 4px var(--terminal-chip-overlay)',
+                  borderRadius: '999px',
+                  background: '#f26522',
                   transition: 'width 0.1s linear',
                 }}
               />
@@ -2004,25 +2000,24 @@ function GodotCanvas({ onEngineReady }) {
 
             {/* Percentage */}
             <div style={{
-              color: 'var(--terminal-on-accent)',
-              marginTop: '10px',
-              fontFamily: '"Inter", "Segoe UI", sans-serif',
-              fontSize: '18px',
-              fontWeight: 700,
-              textShadow: 'none',
-              letterSpacing: '1px',
+              color: 'rgba(255, 255, 255, 0.85)',
+              marginTop: '8px',
+              fontSize: '12px',
+              fontWeight: 600,
+              fontVariantNumeric: 'tabular-nums',
+              textShadow: '0 1px 2px rgba(0, 0, 0, 0.45)',
               textAlign: 'center',
             }}>
               {loadingError ? '' : webglReloading ? 'Restoring graphics...' : `${stageProgress}%`}
             </div>
 
             {loadingError && (
-              <div role="alert" style={{ maxWidth: 440, padding: '16px 20px', margin: '0 16px', borderRadius: 12, background: '#101827', color: '#fff', textAlign: 'center' }}>
-                <p style={{ margin: '0 0 14px', lineHeight: 1.5 }}>{loadingError}</p>
+              <div role="alert" style={{ maxWidth: 440, padding: '20px', margin: '0 16px', borderRadius: 16, border: '1px solid #2a2f3a', background: '#171a22', color: '#f4f5f7', textAlign: 'center', fontSize: 13 }}>
+                <p style={{ margin: '0 0 16px', lineHeight: 1.5, color: '#a7afbc' }}>{loadingError}</p>
                 <button
                   type="button"
                   onClick={() => window.location.reload()}
-                  style={{ minHeight: 44, padding: '10px 24px', borderRadius: 8, border: '2px solid #ffe066', background: '#ffe066', color: '#171717', fontWeight: 700, cursor: 'pointer' }}
+                  style={{ minHeight: 44, padding: '10px 20px', borderRadius: 999, border: '1px solid #f26522', background: '#f26522', color: '#ffffff', fontWeight: 600, cursor: 'pointer' }}
                 >
                   Retry loading game
                 </button>

@@ -276,13 +276,13 @@ export default memo(BasicAmountSlider);
 const S = {
   tightTitle: {
     fontSize: 'clamp(16px, 3vh, 20px)',
-    fontWeight: 700, color: colors.ink,
+    fontWeight: 600, color: colors.ink,
     textAlign: 'center', letterSpacing: '0.3px',
     margin: '2px 0 4px', lineHeight: 1.1,
   },
   bigUsd: {
     fontSize: 'clamp(32px, 6.5vh, 48px)',
-    fontWeight: 700,
+    fontWeight: 600,
     textAlign: 'center', letterSpacing: '-1px',
     fontVariantNumeric: 'tabular-nums',
     margin: '2px 0 0',
@@ -299,7 +299,7 @@ const S = {
     border: 'none',
     background: 'transparent',
     font: 'inherit',
-    fontWeight: 700,
+    fontWeight: 600,
     lineHeight: 1,
     cursor: 'text',
     fontVariantNumeric: 'tabular-nums',
@@ -313,7 +313,7 @@ const S = {
   },
   amountPrefix: {
     font: 'inherit',
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'inherit',
     lineHeight: 1,
   },
@@ -324,7 +324,7 @@ const S = {
     outline: 'none',
     background: 'transparent',
     font: 'inherit',
-    fontWeight: 700,
+    fontWeight: 600,
     lineHeight: 1,
     textAlign: 'left',
     fontVariantNumeric: 'tabular-nums',
@@ -332,7 +332,7 @@ const S = {
     margin: 0,
   },
   pctLabel: {
-    fontSize: 11, fontWeight: 700, color: colors.inkFaint,
+    fontSize: 11, fontWeight: 600, color: colors.inkFaint,
     textAlign: 'center', marginBottom: 4,
   },
   // Flex row, vertically centred. Native `align-items: center` aligns the
@@ -393,7 +393,7 @@ const S = {
     color: colors.ink,
     background: 'var(--terminal-surface)',
     borderWidth: 1, borderStyle: 'solid', borderColor: colors.border,
-    borderRadius: 10, cursor: 'pointer',
+    borderRadius: 999, cursor: 'pointer',
     fontFamily: 'inherit',
     boxSizing: 'border-box',
     transition: 'all 0.15s ease',
@@ -406,7 +406,7 @@ const S = {
   },
   backLink: {
     background: 'transparent', border: 'none',
-    color: colors.inkFaint, fontSize: 13, fontWeight: 700,
+    color: colors.inkFaint, fontSize: 13, fontWeight: 600,
     textAlign: 'center', padding: '8px 0', marginTop: 4,
     cursor: 'pointer', fontFamily: 'inherit',
   },

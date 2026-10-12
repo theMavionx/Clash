@@ -776,9 +776,8 @@ const STARTER_PROMPTS = [
 // colliding with anything global.
 const HERMES_CHAT_CSS = `
 @keyframes hermesStatusPulse {
-  0%   { box-shadow: 0 0 0 0 rgba(76,175,80,0.55); }
-  70%  { box-shadow: 0 0 0 6px rgba(76,175,80,0); }
-  100% { box-shadow: 0 0 0 0 rgba(76,175,80,0); }
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.55; }
 }
 @keyframes hermesTypingDot {
   0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
@@ -3689,7 +3688,7 @@ function AiShopModal({
               return (
                 <div key={product.id} style={cardStyle}>
                   {!isPack && (
-                    <div className="hermes-ribbon" style={styles.aiProductRibbon}>BEST VALUE</div>
+                    <div className="hermes-ribbon" style={styles.aiProductRibbon}>Best value</div>
                   )}
                   <div style={isPack ? styles.aiProductIconPack : styles.aiProductIconPro}>
                     {isPack ? (
@@ -3768,7 +3767,7 @@ const styles = {
     inset: 0,
     zIndex: 80,
     pointerEvents: 'auto',
-    background: 'rgba(20, 12, 4, 0.55)',
+    background: 'var(--terminal-overlay)',
     display: 'flex',
     // Bottom-center on desktop — sits above the action button row but
     // not stuck to either edge of the viewport. Mobile sheet inherits
@@ -3788,17 +3787,14 @@ const styles = {
     height: 'min(640px, calc(100vh - 32px))',
     background: 'var(--terminal-surface)',
     border: '1px solid var(--terminal-border)',
-    borderRadius: 18,
-    boxShadow:
-      '0 24px 60px rgba(0,0,0,0.45),' +
-      ' 0 2px 0 var(--terminal-chip-overlay) inset,' +
-      ' 0 0 0 1px var(--terminal-chip-overlay) inset',
+    borderRadius: 16,
+    boxShadow: 'none',
     color: 'var(--terminal-text)',
     display: 'flex',
     flexDirection: 'column',
     overflow: 'hidden',
     position: 'relative',
-    fontFamily: '"Inter","Segoe UI",sans-serif',
+    fontFamily: 'inherit',
   },
   // ── Mobile bottom-sheet overrides ─────────────────────────────────
   // backdrop anchors content to the BOTTOM so the sheet rises from the
@@ -3808,7 +3804,7 @@ const styles = {
     alignItems: 'flex-end',
     justifyContent: 'center',
     padding: 0,
-    background: 'rgba(20, 12, 4, 0.45)',
+    background: 'var(--terminal-overlay)',
   },
   panelMobile: {
     width: '100%',
@@ -3842,8 +3838,8 @@ const styles = {
   dragHandle: {
     width: 40, height: 4,
     borderRadius: 3,
-    background: 'linear-gradient(90deg, var(--terminal-border-strong) 0%, var(--terminal-border) 50%, var(--terminal-border-strong) 100%)',
-    boxShadow: '0 1px 0 var(--terminal-chip-overlay)',
+    background: 'var(--terminal-border-strong)',
+    boxShadow: 'none',
   },
   header: {
     display: 'flex',
@@ -3853,8 +3849,8 @@ const styles = {
     padding: '8px 12px 10px',
     // Subtle warm wash so the header reads as a distinct band above
     // the message stream — like a banner on parchment, not flat.
-    background: 'linear-gradient(180deg, rgba(255,246,220,0.85) 0%, rgba(253,248,231,0) 100%)',
-    borderBottom: '1px solid #e6dcc1',
+    background: 'var(--terminal-surface)',
+    borderBottom: '1px solid var(--terminal-border)',
     flex: '0 0 auto',
   },
   // Desktop-only header overrides — turn it into a drag handle with the
@@ -3881,10 +3877,7 @@ const styles = {
     alignItems: 'center',
     justifyContent: 'center',
     background: 'var(--terminal-surface)',
-    boxShadow:
-      '0 0 0 1.5px var(--terminal-border),' +
-      ' 0 0 0 4px rgba(255,215,0,0.18),' +
-      ' 0 2px 4px rgba(95,58,33,0.18)',
+    boxShadow: 'none',
     flexShrink: 0,
   },
   titleLine: {
@@ -3899,13 +3892,13 @@ const styles = {
     gap: 4,
     padding: '2px 6px 2px 5px',
     borderRadius: 999,
-    background: 'rgba(76,175,80,0.14)',
-    border: '1px solid rgba(76,175,80,0.35)',
-    color: '#1B5E20',
+    background: 'var(--terminal-long-soft)',
+    border: '1px solid var(--terminal-long-border)',
+    color: 'var(--terminal-long)',
     fontSize: 9,
-    fontWeight: 700,
+    fontWeight: 600,
     letterSpacing: 0.4,
-    textTransform: 'uppercase',
+    textTransform: 'none',
     lineHeight: 1,
   },
   statusDot: {
@@ -3935,28 +3928,28 @@ const styles = {
     opacity: 0.7,
   },
   title: {
-    fontSize: 15, fontWeight: 700, color: 'var(--terminal-text)',
+    fontSize: 15, fontWeight: 600, color: 'var(--terminal-text)',
     letterSpacing: 0.2,
     lineHeight: 1.1,
     textShadow: 'none',
   },
   sub: {
-    fontSize: 11, fontWeight: 600, color: '#1B5E20',
-    textTransform: 'uppercase', letterSpacing: 0.4, marginTop: 2,
+    fontSize: 11, fontWeight: 600, color: 'var(--terminal-long)',
+    textTransform: 'none', letterSpacing: 0.4, marginTop: 2,
     display: 'inline-flex', alignItems: 'center', gap: 5,
   },
   onlineDot: {
     display: 'inline-block',
     width: 8, height: 8, borderRadius: '50%',
     background: 'var(--terminal-long)',
-    boxShadow: '0 0 6px rgba(76,175,80,0.7)',
+    boxShadow: 'none',
   },
   close: {
     width: 22, height: 22, borderRadius: '50%',
     background: 'var(--terminal-short)', border: '1.5px solid var(--terminal-surface)', color: 'var(--terminal-on-accent)',
     cursor: 'pointer', padding: 0,
-    fontSize: 12, fontWeight: 700, lineHeight: '20px',
-    boxShadow: '0 1px 2px rgba(0,0,0,0.25)',
+    fontSize: 12, fontWeight: 600, lineHeight: '20px',
+    boxShadow: 'none',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
   },
   titleBlock: {
@@ -3986,15 +3979,15 @@ const styles = {
   },
   quotaSummaryTitle: {
     fontSize: 11,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-text)',
-    textTransform: 'uppercase',
+    textTransform: 'none',
     letterSpacing: 0.35,
   },
   quotaSummaryTotal: {
     fontSize: 11,
-    fontWeight: 700,
-    color: '#1B5E20',
+    fontWeight: 600,
+    color: 'var(--terminal-long)',
     whiteSpace: 'nowrap',
   },
   quotaStats: {
@@ -4006,12 +3999,12 @@ const styles = {
     minWidth: 0,
     padding: '6px 7px',
     borderRadius: 9,
-    border: '1px solid rgba(139,107,63,0.22)',
-    background: 'rgba(255,250,240,0.72)',
+    border: '1px solid var(--terminal-border)',
+    background: 'var(--terminal-surface-muted)',
   },
   quotaStatStrong: {
-    border: '1px solid rgba(31,109,52,0.35)',
-    background: 'rgba(225,246,211,0.72)',
+    border: '1px solid var(--terminal-long-border)',
+    background: 'var(--terminal-surface-muted)',
   },
   quotaStatLabel: {
     display: 'block',
@@ -4026,7 +4019,7 @@ const styles = {
     display: 'block',
     marginTop: 2,
     fontSize: 13,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-text)',
     whiteSpace: 'nowrap',
     overflow: 'hidden',
@@ -4041,7 +4034,7 @@ const styles = {
   shopToggle: {
     ...uiButton('secondary', { minHeight: 34, padding: '6px 11px 6px 9px', fontSize: 11 }),
     letterSpacing: 0.3,
-    textTransform: 'uppercase',
+    textTransform: 'none',
   },
 
   // ── Shop modal (separate overlay above the chat panel) ───────────
@@ -4050,7 +4043,7 @@ const styles = {
   newChatToggle: {
     ...uiButton('secondary', { minHeight: 34, padding: '6px 10px 6px 8px', fontSize: 11 }),
     letterSpacing: 0.25,
-    textTransform: 'uppercase',
+    textTransform: 'none',
     whiteSpace: 'nowrap',
   },
   newChatToggleMobile: {
@@ -4064,7 +4057,7 @@ const styles = {
   shopBackdrop: {
     position: 'fixed', inset: 0,
     zIndex: 90,
-    background: 'rgba(20, 12, 4, 0.55)',
+    background: 'var(--terminal-overlay)',
     backdropFilter: 'blur(2px)',
     WebkitBackdropFilter: 'blur(2px)',
     display: 'flex',
@@ -4078,15 +4071,13 @@ const styles = {
     maxHeight: 'min(640px, calc(100vh - 32px))',
     background: 'var(--terminal-surface)',
     border: '1px solid var(--terminal-border)',
-    borderRadius: 18,
-    boxShadow:
-      '0 28px 60px rgba(0,0,0,0.55),' +
-      ' 0 2px 0 var(--terminal-chip-overlay) inset',
+    borderRadius: 16,
+    boxShadow: 'none',
     color: 'var(--terminal-text)',
     display: 'flex',
     flexDirection: 'column',
     overflow: 'hidden',
-    fontFamily: '"Inter","Segoe UI",sans-serif',
+    fontFamily: 'inherit',
   },
   shopHeader: {
     display: 'flex',
@@ -4105,11 +4096,11 @@ const styles = {
     display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0,
   },
   shopHeaderTitle: {
-    fontSize: 15, fontWeight: 700, color: 'var(--terminal-text)',
+    fontSize: 15, fontWeight: 600, color: 'var(--terminal-text)',
     lineHeight: 1.1, letterSpacing: 0.2,
   },
   shopHeaderSub: {
-    fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-secondary)',
+    fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-secondary)',
     lineHeight: 1.2,
   },
   shopBody: {
@@ -4132,7 +4123,7 @@ const styles = {
     justifyContent: 'space-between',
     gap: 10,
     padding: '4px 12px 7px',
-    borderBottom: '1px solid #e6dcc1',
+    borderBottom: '1px solid var(--terminal-border)',
     flex: '0 0 auto',
   },
   mobileHeaderActions: {
@@ -4162,7 +4153,7 @@ const styles = {
   },
   shopSummaryTitle: {
     fontSize: 13,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-text)',
   },
   shopSummarySub: {
@@ -4175,10 +4166,10 @@ const styles = {
     padding: '5px 8px',
     borderRadius: 999,
     fontSize: 10,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-short-strong)',
     background: 'var(--terminal-short-soft)',
-    border: '1px solid #e8a39f',
+    border: '1px solid var(--terminal-short-border)',
     whiteSpace: 'nowrap',
   },
   shopReadyBadgeOn: {
@@ -4198,9 +4189,9 @@ const styles = {
     gap: 8,
     padding: '0 2px',
     fontSize: 10,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-text-secondary)',
-    textTransform: 'uppercase',
+    textTransform: 'none',
     letterSpacing: 0,
   },
   shopChainRow: {
@@ -4215,7 +4206,7 @@ const styles = {
   },
   shopChainBtn: {
     border: '1px solid var(--terminal-border)',
-    borderRadius: 9,
+    borderRadius: 999,
     background: 'var(--terminal-surface)',
     color: 'var(--terminal-text)',
     padding: '7px 6px',
@@ -4234,7 +4225,7 @@ const styles = {
   shopChainLabel: {
     display: 'block',
     fontSize: 11,
-    fontWeight: 700,
+    fontWeight: 600,
     whiteSpace: 'nowrap',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
@@ -4263,7 +4254,7 @@ const styles = {
   shopPaymentBtn: {
     minWidth: 62,
     border: '1.5px solid var(--terminal-border)',
-    borderRadius: 11,
+    borderRadius: 999,
     background: 'var(--terminal-surface)',
     color: 'var(--terminal-text)',
     padding: '7px 10px',
@@ -4272,7 +4263,7 @@ const styles = {
     alignItems: 'center',
     gap: 8,
     transition: 'transform 0.12s ease, border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease',
-    boxShadow: '0 1px 2px rgba(95,58,33,0.05)',
+    boxShadow: 'none',
   },
   shopPaymentBtnActive: {
     background: 'var(--terminal-brand-soft)',
@@ -4301,7 +4292,7 @@ const styles = {
     display: 'block',
   },
   shopPaymentLogoFallback: {
-    fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)',
+    fontSize: 11, fontWeight: 600, color: 'var(--terminal-text)',
   },
   shopPaymentText: {
     display: 'flex', flexDirection: 'column', minWidth: 0,
@@ -4310,7 +4301,7 @@ const styles = {
   shopPaymentLabel: {
     display: 'block',
     fontSize: 11,
-    fontWeight: 700,
+    fontWeight: 600,
   },
   shopPaymentSub: {
     display: 'block',
@@ -4321,7 +4312,7 @@ const styles = {
   shopNotice: {
     color: 'var(--terminal-text)',
     background: 'var(--terminal-brand-soft)',
-    border: '1px solid #d7a536',
+    border: '1px solid var(--terminal-warning-border)',
     borderRadius: 9,
     padding: '7px 9px',
     fontSize: 12,
@@ -4340,9 +4331,9 @@ const styles = {
   },
   jobsSectionTitle: {
     fontSize: 11,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-text-secondary)',
-    textTransform: 'uppercase',
+    textTransform: 'none',
     letterSpacing: 0.35,
   },
   jobsEmpty: {
@@ -4356,7 +4347,7 @@ const styles = {
   },
   jobCard: {
     border: '1px solid var(--terminal-border)',
-    borderRadius: 12,
+    borderRadius: 16,
     padding: 10,
     background: 'var(--terminal-surface-subtle)',
     boxShadow: 'none',
@@ -4372,7 +4363,7 @@ const styles = {
   },
   jobName: {
     fontSize: 13,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-text)',
   },
   jobMeta: {
@@ -4389,8 +4380,8 @@ const styles = {
     color: 'var(--terminal-warning)',
     padding: '3px 7px',
     fontSize: 9,
-    fontWeight: 700,
-    textTransform: 'uppercase',
+    fontWeight: 600,
+    textTransform: 'none',
   },
   jobStatusActive: {
     border: '1px solid var(--terminal-long)',
@@ -4398,14 +4389,14 @@ const styles = {
     color: 'var(--terminal-long)',
   },
   jobStatusBlocked: {
-    border: '1px solid #e8a39f',
+    border: '1px solid var(--terminal-short-border)',
     background: 'var(--terminal-short-soft)',
     color: 'var(--terminal-short-strong)',
   },
   jobInstruction: {
     fontSize: 12,
     lineHeight: 1.35,
-    fontWeight: 750,
+    fontWeight: 600,
     color: 'var(--terminal-text)',
   },
   jobFacts: {
@@ -4419,16 +4410,16 @@ const styles = {
   jobSummary: {
     borderRadius: 8,
     background: 'var(--terminal-surface)',
-    border: '1px solid rgba(139,107,63,0.2)',
+    border: '1px solid var(--terminal-border)',
     padding: '6px 7px',
     fontSize: 11,
-    fontWeight: 750,
+    fontWeight: 600,
     color: 'var(--terminal-text)',
   },
   jobError: {
     borderRadius: 8,
     background: 'var(--terminal-short-soft)',
-    border: '1px solid #e8a39f',
+    border: '1px solid var(--terminal-short-border)',
     padding: '6px 7px',
     fontSize: 11,
     fontWeight: 600,
@@ -4451,21 +4442,21 @@ const styles = {
     flexDirection: 'column',
     gap: 4,
     fontSize: 10,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-text-secondary)',
-    textTransform: 'uppercase',
+    textTransform: 'none',
     letterSpacing: 0.25,
   },
   jobInput: {
     width: '100%',
     boxSizing: 'border-box',
     border: '1px solid var(--terminal-border)',
-    borderRadius: 9,
+    borderRadius: 12,
     background: 'var(--terminal-surface)',
     color: 'var(--terminal-text)',
     padding: '8px 9px',
     fontSize: 12,
-    fontWeight: 750,
+    fontWeight: 600,
     outline: 'none',
     textTransform: 'none',
   },
@@ -4481,12 +4472,12 @@ const styles = {
   },
   jobSegmentButton: {
     border: '1px solid var(--terminal-border)',
-    borderRadius: 9,
+    borderRadius: 999,
     background: 'var(--terminal-surface)',
     color: 'var(--terminal-text)',
     padding: '7px 6px',
     fontSize: 10,
-    fontWeight: 700,
+    fontWeight: 600,
     cursor: 'pointer',
   },
   jobSegmentActive: {
@@ -4510,7 +4501,7 @@ const styles = {
     alignItems: 'center',
     gap: 12,
     padding: '12px 13px',
-    borderRadius: 14,
+    borderRadius: 16,
     border: '1px solid var(--terminal-border)',
     background: 'var(--terminal-surface)',
     boxShadow: 'var(--terminal-shadow-card)',
@@ -4528,7 +4519,7 @@ const styles = {
     top: -8, right: 12,
     padding: '3px 8px',
     fontSize: 9,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-brand-text)',
     background: 'var(--terminal-brand-soft)',
     border: '1px solid var(--terminal-brand-border)',
@@ -4562,10 +4553,10 @@ const styles = {
 
   aiProductInfo: { minWidth: 0 },
   aiProductTitle: {
-    fontSize: 14, fontWeight: 700, color: 'var(--terminal-text)', lineHeight: 1.2,
+    fontSize: 14, fontWeight: 600, color: 'var(--terminal-text)', lineHeight: 1.2,
   },
   aiProductSub: {
-    fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-secondary)',
+    fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-secondary)',
     marginTop: 2, lineHeight: 1.35,
   },
   aiProductMeta: {
@@ -4580,14 +4571,14 @@ const styles = {
   },
   aiProductPrice: {
     fontSize: 15,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-long)',
     textShadow: 'none',
   },
-  aiProductDot: { color: 'var(--terminal-border-strong)', fontWeight: 700 },
+  aiProductDot: { color: 'var(--terminal-border-strong)', fontWeight: 600 },
   aiProductMetaMain: { color: 'var(--terminal-text)' },
   aiProductPerMsg: {
-    fontSize: 10, fontWeight: 700,
+    fontSize: 10, fontWeight: 600,
     color: 'var(--terminal-text-secondary)',
     fontStyle: 'italic',
   },
@@ -4598,7 +4589,7 @@ const styles = {
     color: 'var(--terminal-long)',
     border: '1px solid var(--terminal-long-border)',
     fontSize: 9.5,
-    fontWeight: 700,
+    fontWeight: 600,
     letterSpacing: 0.3,
   },
 
@@ -4622,7 +4613,7 @@ const styles = {
   // Premium CTA — same green base but with a warmer halo so the
   // "best value" card's button has more visual weight than the pack's.
   aiBuyBtnPremium: {
-    boxShadow: '0 2px 6px var(--terminal-shadow)',
+    boxShadow: 'none',
   },
   messages: {
     flex: 1, minHeight: 0,
@@ -4636,7 +4627,7 @@ const styles = {
     padding: '8px 12px',
     border: '1px solid var(--terminal-border)',
     lineHeight: 1.45,
-    boxShadow: '0 1px 2px var(--terminal-shadow-soft)',
+    boxShadow: 'none',
     minWidth: 0,
   },
   userBubble: {
@@ -4658,8 +4649,8 @@ const styles = {
     borderRadius: '14px 14px 14px 4px',
   },
   role: {
-    fontSize: 10, color: 'var(--terminal-text-secondary)', fontWeight: 700,
-    textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 3,
+    fontSize: 10, color: 'var(--terminal-text-secondary)', fontWeight: 600,
+    textTransform: 'none', letterSpacing: 0.5, marginBottom: 3,
   },
   text: { fontSize: 13, fontWeight: 600, whiteSpace: 'pre-wrap' },
   meta: { fontSize: 10, color: 'var(--terminal-text-muted)', marginTop: 6, fontStyle: 'italic' },
@@ -4670,7 +4661,7 @@ const styles = {
     border: '1px solid var(--terminal-short)',
     borderRadius: 8,
     padding: '6px 9px',
-    fontSize: 12, fontWeight: 700,
+    fontSize: 12, fontWeight: 600,
   },
   composer: {
     display: 'flex',
@@ -4703,7 +4694,7 @@ const styles = {
     // Use the full `border` shorthand here so React doesn't warn about
     // mixing shorthand (base) + longhand (active) during re-render.
     border: '1px solid var(--terminal-orange)',
-    boxShadow: '0 0 0 3px var(--terminal-brand-ring)',
+    boxShadow: 'none',
   },
   input: {
     flex: 1,
@@ -4774,14 +4765,11 @@ const styles = {
     alignItems: 'center',
     justifyContent: 'center',
     background: 'var(--terminal-surface)',
-    boxShadow:
-      '0 0 0 2px var(--terminal-border),' +
-      ' 0 0 0 6px rgba(255,215,0,0.18),' +
-      ' 0 3px 6px rgba(95,58,33,0.2)',
+    boxShadow: 'none',
   },
   welcomeTitle: {
     fontSize: 15,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-text)',
     letterSpacing: 0.3,
     margin: '4px 0 4px',
@@ -4805,25 +4793,25 @@ const styles = {
     textAlign: 'left',
     border: '1.5px solid var(--terminal-border)',
     background: 'var(--terminal-surface)',
-    borderRadius: 11,
+    borderRadius: 999,
     padding: '8px 10px',
     color: 'var(--terminal-text)',
     fontFamily: 'inherit',
-    boxShadow: '0 1px 2px rgba(95,58,33,0.06)',
+    boxShadow: 'none',
     display: 'flex',
     flexDirection: 'column',
     gap: 2,
   },
   starterChipLabel: {
     fontSize: 10,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-brand-strong)',
     letterSpacing: 0.6,
-    textTransform: 'uppercase',
+    textTransform: 'none',
   },
   starterChipText: {
     fontSize: 12,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-text)',
     lineHeight: 1.35,
   },
@@ -4852,9 +4840,7 @@ const styles = {
     alignItems: 'center',
     justifyContent: 'center',
     background: 'var(--terminal-surface)',
-    boxShadow:
-      '0 0 0 1px var(--terminal-border),' +
-      ' 0 1px 2px rgba(95,58,33,0.18)',
+    boxShadow: 'none',
     marginBottom: 2,
     flexShrink: 0,
   },
@@ -4887,7 +4873,7 @@ const styles = {
 const topUpStyles = {
   overlay: {
     position: 'fixed', inset: 0,
-    background: 'rgba(20, 12, 4, 0.55)',
+    background: 'var(--terminal-overlay)',
     backdropFilter: 'blur(2px)',
     WebkitBackdropFilter: 'blur(2px)',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -4896,8 +4882,8 @@ const topUpStyles = {
   panel: {
     width: 380, maxWidth: '100%', maxHeight: '88vh',
     background: 'var(--terminal-surface)',
-    border: '1px solid var(--terminal-border)', borderRadius: 18,
-    boxShadow: '0 18px 50px rgba(0,0,0,0.45)',
+    border: '1px solid var(--terminal-border)', borderRadius: 16,
+    boxShadow: 'none',
     display: 'flex', flexDirection: 'column',
     fontFamily: 'inherit', overflow: 'hidden',
   },
@@ -4905,7 +4891,7 @@ const topUpStyles = {
     width: 460, maxWidth: '100%', maxHeight: '88vh',
     background: 'var(--terminal-surface)',
     border: '1px solid var(--terminal-border)', borderRadius: 18,
-    boxShadow: '0 18px 50px rgba(0,0,0,0.45)',
+    boxShadow: 'none',
     display: 'flex', flexDirection: 'column',
     fontFamily: 'inherit', overflow: 'hidden',
   },
@@ -4914,7 +4900,7 @@ const topUpStyles = {
     padding: '12px 14px',
     background: 'var(--terminal-border)', borderBottom: '1px solid var(--terminal-border-strong)',
   },
-  title: { fontSize: 16, fontWeight: 700, color: 'var(--terminal-text)' },
+  title: { fontSize: 16, fontWeight: 600, color: 'var(--terminal-text)' },
   closeBtn: uiIconButton('danger', 30),
   body: {
     padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 12,
@@ -4929,17 +4915,17 @@ const topUpStyles = {
   stepBubble: {
     width: 28, height: 28, borderRadius: '50%',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
-    fontSize: 13, fontWeight: 700, flexShrink: 0,
+    fontSize: 13, fontWeight: 600, flexShrink: 0,
     background: 'var(--terminal-surface-subtle)', color: 'var(--terminal-text-muted)', border: '1px solid var(--terminal-border)',
     transition: 'background 0.2s, border-color 0.2s',
   },
   stepBubble_pending: {},
   stepBubble_active: {
     background: 'var(--terminal-surface)', border: '1px solid var(--terminal-brand-strong)', color: 'var(--terminal-text)',
-    boxShadow: '0 0 0 3px rgba(255,217,122,0.4)',
+    boxShadow: 'none',
   },
   stepBubble_done: {
-    background: 'linear-gradient(180deg, var(--terminal-long-border) 0%, var(--terminal-long) 100%)',
+    background: 'var(--terminal-long-border)',
     border: '1px solid var(--terminal-long-strong)', color: 'var(--terminal-on-accent)',
   },
   stepBubble_error: {
@@ -4951,7 +4937,7 @@ const topUpStyles = {
   stepLabel_done:   { color: 'var(--terminal-text)' },
   stepLabel_error:  { color: 'var(--terminal-short-strong)' },
   stepLabel_pending: {},
-  stepHint: { fontSize: 11, color: 'var(--terminal-text-muted)', fontWeight: 700 },
+  stepHint: { fontSize: 11, color: 'var(--terminal-text-muted)', fontWeight: 600 },
 
   // Spinner inside the "active" step bubble — same look as the bridge
   // modal's, driven by the local `.hermes-step-spinner` class.
@@ -4959,7 +4945,7 @@ const topUpStyles = {
     width: 12, height: 12, borderRadius: '50%',
     borderWidth: 1,
     borderStyle: 'solid',
-    borderColor: 'rgba(92,58,33,0.25)',
+    borderColor: 'var(--terminal-border)',
     borderTopColor: 'var(--terminal-text)',
     display: 'inline-block',
   },
@@ -4967,17 +4953,17 @@ const topUpStyles = {
   successBox: {
     position: 'relative',
     padding: '14px 12px', borderRadius: 12,
-    background: 'linear-gradient(180deg, var(--terminal-long-soft) 0%, var(--terminal-long-soft) 100%)',
+    background: 'var(--terminal-long-soft)',
     border: '1px solid var(--terminal-long-border)', color: 'var(--terminal-long-strong)',
     display: 'flex', flexDirection: 'column', alignItems: 'center',
     gap: 4, overflow: 'visible',
     textAlign: 'center',
   },
   successHeadline: {
-    fontSize: 16, fontWeight: 700, color: '#1B5E20',
+    fontSize: 16, fontWeight: 600, color: 'var(--terminal-long)',
     textShadow: 'none',
   },
-  successSub: { fontSize: 12, fontWeight: 700, color: '#3a6320' },
+  successSub: { fontSize: 12, fontWeight: 600, color: 'var(--terminal-long)' },
 
   resultBox: {
     padding: '10px 12px', borderRadius: 12,
@@ -4985,7 +4971,7 @@ const topUpStyles = {
     color: 'var(--terminal-text)',
   },
   resultHeadline: {
-    fontSize: 13, fontWeight: 700, color: 'var(--terminal-text)', lineHeight: 1.35,
+    fontSize: 13, fontWeight: 600, color: 'var(--terminal-text)', lineHeight: 1.35,
   },
   resultMono: {
     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
@@ -4995,7 +4981,7 @@ const topUpStyles = {
   pendingBox: {
     padding: '9px 10px', borderRadius: 10,
     background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)',
-    color: 'var(--terminal-text-secondary)', fontSize: 12, fontWeight: 700, lineHeight: 1.35,
+    color: 'var(--terminal-text-secondary)', fontSize: 12, fontWeight: 600, lineHeight: 1.35,
   },
 
   policyBox: {
@@ -5015,13 +5001,13 @@ const topUpStyles = {
   },
   policyTitle: {
     fontSize: 13,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-text)',
   },
   policySub: {
     marginTop: 2,
     fontSize: 11,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-text-secondary)',
     lineHeight: 1.35,
   },
@@ -5031,7 +5017,7 @@ const topUpStyles = {
     background: 'var(--terminal-long)',
     color: 'var(--terminal-on-accent)',
     fontSize: 10,
-    fontWeight: 700,
+    fontWeight: 600,
     whiteSpace: 'nowrap',
   },
   fieldBlock: {
@@ -5041,10 +5027,10 @@ const topUpStyles = {
   },
   fieldLabel: {
     fontSize: 10,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-brand-strong)',
     letterSpacing: 0.5,
-    textTransform: 'uppercase',
+    textTransform: 'none',
   },
   fieldRow: {
     display: 'grid',
@@ -5060,17 +5046,17 @@ const topUpStyles = {
     width: '100%',
     boxSizing: 'border-box',
     border: '1px solid var(--terminal-border)',
-    borderRadius: 8,
+    borderRadius: 12,
     background: 'var(--terminal-surface)',
     color: 'var(--terminal-text)',
     padding: '6px 7px',
     fontSize: 12,
-    fontWeight: 700,
+    fontWeight: 600,
     outline: 'none',
   },
   unitText: {
     fontSize: 11,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-text)',
   },
   segmented: {
@@ -5080,12 +5066,12 @@ const topUpStyles = {
   },
   segmentButton: {
     border: '1px solid var(--terminal-border)',
-    borderRadius: 9,
+    borderRadius: 999,
     background: 'var(--terminal-surface)',
     color: 'var(--terminal-text-secondary)',
     padding: '7px 8px',
     fontSize: 11,
-    fontWeight: 700,
+    fontWeight: 600,
     cursor: 'pointer',
   },
   segmentButtonActive: {
@@ -5096,9 +5082,9 @@ const topUpStyles = {
   policySummary: {
     padding: '7px 9px',
     borderRadius: 9,
-    background: 'rgba(255,250,240,0.72)',
-    border: '1px solid rgba(139,107,63,0.22)',
-    color: '#6d4b23',
+    background: 'var(--terminal-surface-muted)',
+    border: '1px solid var(--terminal-border)',
+    color: 'var(--terminal-text-muted)',
     fontSize: 11,
     fontWeight: 600,
     lineHeight: 1.35,
@@ -5107,20 +5093,20 @@ const topUpStyles = {
   errorBox: {
     padding: '8px 10px', borderRadius: 10,
     background: 'var(--terminal-short-soft)', border: '1px solid var(--terminal-short)', color: 'var(--terminal-short-strong)',
-    fontSize: 12, fontWeight: 700,
+    fontSize: 12, fontWeight: 600,
   },
 
   infoGrid: {
     display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8,
   },
   infoCard: {
-    padding: '9px 10px', borderRadius: 10,
+    padding: '9px 10px', borderRadius: 16,
     background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)',
     display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0,
   },
   infoLabel: {
-    fontSize: 10, fontWeight: 700, color: 'var(--terminal-brand-strong)',
-    letterSpacing: 0.5, textTransform: 'uppercase',
+    fontSize: 10, fontWeight: 600, color: 'var(--terminal-brand-strong)',
+    letterSpacing: 0.5, textTransform: 'none',
   },
   infoValue: {
     fontSize: 12, fontWeight: 600, color: 'var(--terminal-text)',
@@ -5130,7 +5116,7 @@ const topUpStyles = {
     display: 'flex', alignItems: 'center', gap: 6, minWidth: 0,
   },
   miniBtn: {
-    padding: '4px 7px', borderRadius: 7, fontSize: 10, fontWeight: 700,
+    padding: '4px 7px', borderRadius: 999, fontSize: 10, fontWeight: 600,
     background: 'var(--terminal-surface)', border: '1px solid var(--terminal-text-muted)', color: 'var(--terminal-text)',
     cursor: 'pointer', flexShrink: 0,
   },

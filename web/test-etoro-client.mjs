@@ -103,12 +103,12 @@ const etoroGate = panel.split('// ==================== ETORO API KEY GATE ======
 assert.ok(etoroGate);
 assert.doesNotMatch(etoroGate, /<select|<option|etoroEnvironmentInput/u);
 assert.match(etoroGate, /Real — real funds/u);
-assert.match(etoroGate, /CONNECT REAL ACCOUNT/u);
+assert.match(etoroGate, /Connect real account/u);
 assert.match(etoroGate, /environment: 'real'/u);
 assert.equal(ETORO_TRADING_SETTINGS_URL, 'https://www.etoro.com/settings/trade');
 assert.match(etoroGate, /<EtoroSetupGuide\s*\/>/u);
 assert.match(etoroGate, /window.open\(ETORO_TRADING_SETTINGS_URL, '_blank', 'noopener,noreferrer'\)/u);
-assert.match(etoroGate, /OPEN ETORO TRADING SETTINGS/u);
+assert.match(etoroGate, /Open eToro trading settings/u);
 assert.doesNotMatch(etoroGate, /builders\.etoro|OPEN ETORO BUILDERS/u);
 const guide = fs.readFileSync(new URL('./src/components/trading/EtoroSetupGuide.jsx', import.meta.url), 'utf8');
 for (const phrase of ['Settings → Trading', 'API Key Management', 'Create New Key', '>Real<', '>Write<', 'Generate Key', 'Try via Phone Call', 'Generated Keys', 'ETORO_USER_KEY', 'application API key']) {
@@ -126,7 +126,7 @@ assert.match(profile, /return \{ apiKey, userKey, environment: 'real' \}/u);
 assert.match(panel, /dex === 'etoro'/u);
 assert.match(panel, /eToro requires a Stop Loss/u);
 assert.match(panel, /fetchCandles/u);
-assert.match(registration, /API ACCOUNT · CEX/u);
+assert.match(registration, /API account · CEX/u);
 assert.match(dexContext, /logo: '\/etoro\.svg'/u);
 assert.match(history, /fetchTradeHistory/u);
 assert.ok(fs.existsSync(new URL('./public/etoro.svg', import.meta.url)));

@@ -99,7 +99,7 @@ function BattleLogPanel({ onClose }) {
 
   const handleWatchReplay = useCallback((battle) => {
     if (!battle.replay_data || !battle.buildings_snapshot) return;
-    const replayLabel = battle.replay_data?.[0]?.ai_agent ? 'AI AGENT ATTACK' : '';
+    const replayLabel = battle.replay_data?.[0]?.ai_agent ? 'AI agent attack' : '';
     // Close panel first (unpauses tree), then send replay after a tick
     onClose();
     setTimeout(() => {
@@ -283,10 +283,10 @@ function BattleLogPanel({ onClose }) {
             // Badge logic
             let badgeText, relationText;
             if (isAttack) {
-              badgeText = isVictory ? 'VICTORY' : 'DEFEAT';
+              badgeText = isVictory ? 'Victory' : 'Defeat';
               relationText = 'vs';
             } else {
-              badgeText = isVictory ? 'RAIDED' : 'DEFENDED';
+              badgeText = isVictory ? 'Raided' : 'Defended';
               relationText = 'by';
             }
             const opponentName = String(b.opponent_name || 'Unknown player');
@@ -298,8 +298,8 @@ function BattleLogPanel({ onClose }) {
               <article key={b.id} className="battle-log-card" style={{
                 ...S.card,
                 borderColor: 'var(--terminal-border)',
-                borderLeftWidth: 4,
-                borderLeftColor: isPositiveResult ? 'var(--terminal-long)' : 'var(--terminal-short)',
+                borderLeftWidth: 1,
+                borderLeftColor: 'var(--terminal-border)',
               }}>
                 <button
                   className="battle-log-summary"
@@ -329,7 +329,7 @@ function BattleLogPanel({ onClose }) {
                   </div>
                   <div style={S.trophyTotal}>
                     <img src={trophyIcon} alt="" style={S.trophyMini} />
-                    <span className="battle-log-trophy-value" aria-hidden="true" style={{ color: isPositiveResult ? 'var(--terminal-warning)' : 'var(--terminal-short)', fontWeight: 700, fontSize: 14, fontVariantNumeric: 'tabular-nums' }}>
+                    <span className="battle-log-trophy-value" aria-hidden="true" style={{ color: isPositiveResult ? 'var(--terminal-warning)' : 'var(--terminal-short)', fontWeight: 600, fontSize: 14, fontVariantNumeric: 'tabular-nums' }}>
                       {trophyDelta > 0 ? `+${trophyDelta}` : trophyDelta}
                     </span>
                   </div>
@@ -342,9 +342,9 @@ function BattleLogPanel({ onClose }) {
                       <div className="battle-log-detail-row" style={S.detailRow}>
                         <span style={S.detailLabel}>{isAttack ? 'Looted' : 'Stolen'}</span>
                         <span className="battle-log-detail-value" style={S.detailVal}>
-                          {b.loot.gold > 0 && <span style={{ color: '#e8b830' }}>{fmt(b.loot.gold)} gold </span>}
-                          {b.loot.wood > 0 && <span style={{ color: '#6ab344' }}>{fmt(b.loot.wood)} wood </span>}
-                          {b.loot.ore > 0 && <span style={{ color: '#8a9aaa' }}>{fmt(b.loot.ore)} ore</span>}
+                          {b.loot.gold > 0 && <span style={{ color: 'var(--terminal-warning)' }}>{fmt(b.loot.gold)} gold </span>}
+                          {b.loot.wood > 0 && <span style={{ color: 'var(--terminal-long)' }}>{fmt(b.loot.wood)} wood </span>}
+                          {b.loot.ore > 0 && <span style={{ color: 'var(--terminal-text-secondary)' }}>{fmt(b.loot.ore)} ore</span>}
                         </span>
                       </div>
                     )}
@@ -424,30 +424,30 @@ function BattleLogPanel({ onClose }) {
 export default memo(BattleLogPanel);
 
 const S = {
-  backdrop: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 200, pointerEvents: 'auto' },
+  backdrop: { position: 'fixed', inset: 0, background: 'var(--terminal-overlay)', zIndex: 200, pointerEvents: 'auto' },
   modal: {
     position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
     width: 'min(440px, calc(100dvw - 16px))', maxHeight: 'calc(100dvh - 16px)', boxSizing: 'border-box',
-    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 20,
-    boxShadow: '0 8px 18px rgba(0,0,0,0.34)', display: 'flex', flexDirection: 'column',
-    zIndex: 201, pointerEvents: 'auto', overflow: 'hidden', fontFamily: '"Inter","Segoe UI",sans-serif',
+    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 16,
+    boxShadow: 'var(--terminal-shadow-card)', display: 'flex', flexDirection: 'column',
+    zIndex: 201, pointerEvents: 'auto', overflow: 'hidden', fontFamily: 'inherit',
   },
   header: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    padding: '14px 16px', background: 'var(--terminal-border)', borderBottom: '1px solid var(--terminal-border-strong)',
+    padding: '14px 16px', background: 'var(--terminal-surface)', borderBottom: '1px solid var(--terminal-border)',
   },
-  headerTitle: { fontSize: 18, fontWeight: 700, color: 'var(--terminal-text)' },
-  closeBtn: uiIconButton('danger', 44),
+  headerTitle: { fontSize: 18, fontWeight: 600, color: 'var(--terminal-text)' },
+  closeBtn: uiIconButton('ghost', 44),
   filterRow: {
     display: 'flex', gap: 0, overflowX: 'auto', overscrollBehaviorX: 'contain', touchAction: 'pan-x',
-    background: 'var(--terminal-surface-subtle)', flexShrink: 0,
+    background: 'var(--terminal-surface)', borderBottom: '1px solid var(--terminal-border)', flexShrink: 0,
   },
   filterTab: (active) => ({
     flex: '1 0 100px', minHeight: 44, padding: '8px 10px', border: 'none', cursor: 'pointer',
-    fontSize: 12, fontWeight: 700,
+    fontSize: 13,
     background: active ? 'var(--terminal-surface)' : 'var(--terminal-surface-subtle)',
     color: active ? 'var(--terminal-text)' : 'var(--terminal-text-muted)',
-    boxShadow: active ? 'inset 0 -3px 0 var(--terminal-orange)' : 'none',
+    boxShadow: active ? 'inset 0 -1px 0 var(--terminal-text)' : 'none', fontWeight: 500,
   }),
   body: {
     flex: 1, padding: 12, display: 'flex', flexDirection: 'column', gap: 8,
@@ -455,28 +455,28 @@ const S = {
   },
   revengeMessage: {
     background: 'var(--terminal-short-soft)',
-    border: '1px solid #d8715b',
-    color: '#9b2c21',
-    borderRadius: 8,
+    border: '1px solid var(--terminal-short-border)',
+    color: 'var(--terminal-short)',
+    borderRadius: 12,
     padding: '6px 8px',
     fontSize: 11,
-    fontWeight: 700,
+    fontWeight: 600,
   },
   revengeBtn: (disabled) => ({
     ...uiButton(disabled ? 'neutral' : 'primary', { minHeight: 44, padding: '8px 12px' }),
     flex: '0 0 112px',
     cursor: disabled ? 'not-allowed' : 'pointer',
   }),
-  empty: { textAlign: 'center', padding: 40, color: 'var(--terminal-text-muted)', fontWeight: 700, fontSize: 14 },
+  empty: { textAlign: 'center', padding: 40, color: 'var(--terminal-text-muted)', fontWeight: 600, fontSize: 14 },
   card: {
-    background: 'var(--terminal-surface-subtle)',
+    background: 'var(--terminal-surface-muted)',
     borderWidth: 1,
     borderStyle: 'solid',
     borderColor: 'var(--terminal-border)',
     borderRadius: 12,
     padding: '10px 12px',
     boxSizing: 'border-box', minWidth: 0, overflow: 'hidden', flex: '0 0 auto',
-    boxShadow: '0 2px 4px rgba(0,0,0,0.16)',
+    boxShadow: 'none',
   },
   summaryButton: {
     display: 'block', width: '100%', minWidth: 0, minHeight: 44, padding: 0, margin: 0,
@@ -488,15 +488,15 @@ const S = {
     alignItems: 'center', columnGap: 10, width: '100%', minWidth: 0,
   },
   sideBadge: (isPositiveResult) => ({
-    padding: '3px 8px', borderRadius: 6, fontSize: 10, fontWeight: 700, letterSpacing: '0.5px',
-    background: isPositiveResult ? 'var(--terminal-long)' : 'var(--terminal-short)',
-    color: 'var(--terminal-on-accent)', textShadow: 'none', flexShrink: 0,
+    padding: '3px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600,
+    background: isPositiveResult ? 'var(--terminal-long-soft)' : 'var(--terminal-short-soft)', border: `1px solid ${isPositiveResult ? 'var(--terminal-long-border)' : 'var(--terminal-short-border)'}`,
+    color: isPositiveResult ? 'var(--terminal-long)' : 'var(--terminal-short)', flexShrink: 0,
   }),
   cardInfo: { minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 },
   opponentLine: { display: 'grid', gridTemplateColumns: 'max-content minmax(0, 1fr)', alignItems: 'start', gap: 4, minWidth: 0 },
-  relationText: { fontSize: 14, lineHeight: 1.25, fontWeight: 700, color: 'var(--terminal-text-secondary)' },
-  opponentName: { minWidth: 0, fontSize: 14, lineHeight: 1.25, fontWeight: 700, color: 'var(--terminal-text)', overflowWrap: 'anywhere' },
-  time: { fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-muted)' },
+  relationText: { fontSize: 14, lineHeight: 1.25, fontWeight: 600, color: 'var(--terminal-text-secondary)' },
+  opponentName: { minWidth: 0, fontSize: 14, lineHeight: 1.25, fontWeight: 600, color: 'var(--terminal-text)', overflowWrap: 'anywhere' },
+  time: { fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-muted)' },
   trophyTotal: { display: 'flex', alignItems: 'center', gap: 3, minWidth: 'max-content', whiteSpace: 'nowrap', justifySelf: 'end' },
   trophyMini: { width: 16, height: 16, objectFit: 'contain', filter: 'invert(60%) sepia(90%) saturate(500%) hue-rotate(10deg)' },
   details: {
@@ -504,8 +504,8 @@ const S = {
     display: 'flex', flexDirection: 'column', gap: 5,
   },
   detailRow: { display: 'grid', gridTemplateColumns: 'minmax(0, 0.9fr) minmax(0, 1.1fr)', alignItems: 'start', gap: 8, minWidth: 0 },
-  detailLabel: { minWidth: 0, fontSize: 12, fontWeight: 700, color: 'var(--terminal-text-secondary)', overflowWrap: 'anywhere' },
-  detailVal: { minWidth: 0, fontSize: 12, fontWeight: 700, color: 'var(--terminal-text)', textAlign: 'right', overflowWrap: 'anywhere', wordBreak: 'break-word' },
+  detailLabel: { minWidth: 0, fontSize: 12, fontWeight: 600, color: 'var(--terminal-text-secondary)', overflowWrap: 'anywhere' },
+  detailVal: { minWidth: 0, fontSize: 12, fontWeight: 600, color: 'var(--terminal-text)', textAlign: 'right', overflowWrap: 'anywhere', wordBreak: 'break-word' },
   actionRow: {
     marginTop: 6,
     display: 'flex',

@@ -228,7 +228,7 @@ export default function NftGoldBoostButton({ placement = 'side' }) {
         <span
           style={{
             ...S.statusDot,
-            background: status.eligible ? '#32d46b' : '#f6c343',
+            background: status.eligible ? 'var(--terminal-long)' : 'var(--terminal-warning)',
           }}
         />
       </button>
@@ -252,7 +252,7 @@ export default function NftGoldBoostButton({ placement = 'side' }) {
                 <div
                   style={{
                     ...S.statusText,
-                    color: status.eligible ? '#186b32' : '#5f4020',
+                    color: status.eligible ? 'var(--terminal-long)' : 'var(--terminal-warning)',
                   }}
                 >
                   {status.message}
@@ -265,7 +265,7 @@ export default function NftGoldBoostButton({ placement = 'side' }) {
                   onClick={verifyOwnership}
                   disabled={busy || status.eligible}
                 >
-                  {busy ? 'VERIFYING...' : status.eligible ? 'VERIFICATION PASSED' : 'VERIFY'}
+                  {busy ? 'Verifying…' : status.eligible ? 'Verification passed' : 'Verify'}
                 </button>
               ) : (
                 <button type="button" style={S.verifyButton} onClick={() => setWalletModalOpen(true)}>
@@ -319,7 +319,7 @@ const S = {
     height: 8,
     borderRadius: '50%',
     border: '1px solid var(--terminal-surface)',
-    boxShadow: '0 1px 3px var(--terminal-shadow)',
+    boxShadow: 'none',
   },
   backdrop: {
     position: 'fixed',
@@ -334,12 +334,12 @@ const S = {
   },
   modal: {
     width: 'min(360px, calc(100vw - 32px))',
-    borderRadius: 20,
+    borderRadius: 16,
     border: '1px solid var(--terminal-border)',
     background: 'var(--terminal-surface)',
-    boxShadow: '0 20px 60px var(--terminal-shadow)',
+    boxShadow: 'none',
     overflow: 'hidden',
-    fontFamily: '"Inter", "Segoe UI", sans-serif',
+    fontFamily: 'inherit',
     color: 'var(--terminal-text)',
   },
   header: {
@@ -353,7 +353,7 @@ const S = {
   },
   title: {
     fontSize: 15,
-    fontWeight: 700,
+    fontWeight: 600,
     letterSpacing: 0,
     color: 'var(--terminal-text)',
   },
@@ -385,7 +385,7 @@ const S = {
   meta: {
     fontSize: 12,
     lineHeight: 1.3,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-text-muted)',
     textAlign: 'center',
   },

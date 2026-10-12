@@ -35,13 +35,13 @@ export default function OndoDepositNetworkSelector({
             style={{
               minWidth: 0,
               border: selected ? '1px solid var(--terminal-orange)' : '1px solid transparent',
-              borderRadius: 8,
+              borderRadius: 999,
               minHeight: 36,
               padding: '7px 8px',
               background: selected ? 'var(--terminal-brand-soft)' : 'transparent',
               color: selected ? 'var(--terminal-brand-strong)' : 'var(--terminal-text-muted)',
               fontSize: 11,
-              fontWeight: 700,
+              fontWeight: 600,
               cursor: disabled ? 'default' : 'pointer',
               boxShadow: 'none',
             }}

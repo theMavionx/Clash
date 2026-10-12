@@ -381,7 +381,7 @@ function OrderBook({
           <span style={S.title}>Pricing</span>
         </div>
         <div style={S.oracleOnly}>
-          <span style={S.oracleBadge}>ORACLE</span>
+          <span style={S.oracleBadge}>Oracle</span>
           <strong style={S.oracleTitle}>Oracle-priced market</strong>
           <span style={S.oracleCopy}>LeverUp V2 does not publish a public L2 order book. Orders use the live LeverUp oracle and on-chain slippage configuration.</span>
         </div>
@@ -426,7 +426,7 @@ function OrderBook({
 
       {/* Spread line */}
       <div style={S.spreadLine}>
-        <span style={{fontSize: 14, fontWeight: 750, color: 'var(--terminal-text)', fontVariantNumeric: 'tabular-nums'}}>
+        <span style={{fontSize: 14, fontWeight: 600, color: 'var(--terminal-text)', fontVariantNumeric: 'tabular-nums'}}>
           {book.bids[0]?.price?.toLocaleString() || '—'}
         </span>
       </div>
@@ -457,13 +457,13 @@ const S = {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
     minHeight: 34, padding: '5px 8px', borderBottom: '1px solid var(--terminal-border)',
   },
-  title: { fontSize: 11, fontWeight: 750, color: 'var(--terminal-text)', textTransform: 'uppercase', letterSpacing: '0.04em' },
-  spread: { fontSize: 10, fontWeight: 650, color: 'var(--terminal-text-faint)', whiteSpace: 'nowrap' },
+  title: { fontSize: 11, fontWeight: 600, color: 'var(--terminal-text)', textTransform: 'uppercase', letterSpacing: '0.04em' },
+  spread: { fontSize: 10, fontWeight: 600, color: 'var(--terminal-text-faint)', whiteSpace: 'nowrap' },
   headerRight: { display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 },
   columns: {
     display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8,
     padding: '4px 8px', borderBottom: '1px solid var(--terminal-surface-muted)',
-    color: 'var(--terminal-text-faint)', fontSize: 9, fontWeight: 700,
+    color: 'var(--terminal-text-faint)', fontSize: 9, fontWeight: 600,
     letterSpacing: '0.04em', textTransform: 'uppercase',
   },
   stepSelect: {
@@ -471,10 +471,10 @@ const S = {
     minWidth: 54,
     background: 'var(--terminal-surface)',
     border: '1px solid var(--terminal-border-strong)',
-    borderRadius: 6,
+    borderRadius: 999,
     color: 'var(--terminal-text-control)',
     fontSize: 10,
-    fontWeight: 700,
+    fontWeight: 600,
     outline: 'none',
     cursor: 'pointer',
   },
@@ -491,7 +491,7 @@ const S = {
   barBid: { background: 'var(--terminal-long)' },
   barAsk: { background: 'var(--terminal-short)' },
   price: {
-    flex: 1, fontWeight: 700, color: 'var(--terminal-short)', zIndex: 1,
+    flex: 1, fontWeight: 600, color: 'var(--terminal-short)', zIndex: 1,
     fontSize: 11, fontVariantNumeric: 'tabular-nums',
   },
   amount: {
@@ -521,9 +521,9 @@ const S = {
     color: 'var(--terminal-brand-text)',
     background: 'var(--terminal-brand-soft)',
     fontSize: 10,
-    fontWeight: 700,
+    fontWeight: 600,
     letterSpacing: '0.06em',
   },
-  oracleTitle: { color: 'var(--terminal-text)', fontSize: 13, fontWeight: 700 },
+  oracleTitle: { color: 'var(--terminal-text)', fontSize: 13, fontWeight: 600 },
   oracleCopy: { color: 'var(--terminal-text-muted)', fontSize: 11, lineHeight: 1.45, maxWidth: 240 },
 };

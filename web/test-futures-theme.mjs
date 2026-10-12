@@ -61,8 +61,9 @@ test('the complete Futures surface consumes the shared token contract', () => {
     assert.match(css, new RegExp(`${token}:`, 'u'), `missing ${token}`);
   }
   assert.match(css, /:root\[data-futures-theme='dark'\]/u);
-  assert.equal((css.match(/--terminal-icon: #768399;/gu) || []).length, 2);
-  assert.equal((css.match(/--terminal-icon-active: #F26522;/gu) || []).length, 2);
+  assert.match(css, /--terminal-icon: #768399;/u);
+  assert.match(css, /--terminal-icon: #8d96a6;/u);
+  assert.equal((css.match(/--terminal-icon-active: #f26522;/giu) || []).length, 2);
   assert.match(css, /\.tab-btn > svg\s*\{[^}]*var\(--terminal-icon\)/su);
   assert.match(css, /\.tab-btn\[aria-pressed='true'\] > svg[\s\S]*?var\(--terminal-icon-active\)/u);
   assert.match(css, /color: var\(--terminal-button-icon, currentColor\);/u);
@@ -89,7 +90,7 @@ test('the complete Futures surface consumes the shared token contract', () => {
 test('canvas chart resolves scoped terminal colors and recreates with the theme', () => {
   const chart = read('src/components/TradingViewWidget.jsx');
   assert.match(chart, /useFuturesTheme\(\)/u);
-  assert.match(chart, /darkTheme \? '#111827' : '#FFFFFF'/u);
+  assert.match(chart, /darkTheme \? '#171A22' : '#FFFFFF'/u);
   assert.match(chart, /getComputedStyle\(containerRef.current\)/u);
   for (const token of ['--terminal-surface', '--terminal-text-muted', '--terminal-chart-grid', '--terminal-border']) {
     assert.ok(chart.includes(`color('${token}'`), `canvas resolves ${token}`);

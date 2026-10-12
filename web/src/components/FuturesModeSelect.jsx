@@ -23,7 +23,7 @@ function FuturesModeSelect({ onClose }) {
 
   return (
     <div className="perps-mode-select" style={S.body}>
-      <div style={S.title}>CHOOSE YOUR MODE</div>
+      <div style={S.title}>Choose your mode</div>
       <div style={S.subtitle}>
         Pick how the futures panel feels. You can switch any time from your profile.
       </div>
@@ -34,7 +34,7 @@ function FuturesModeSelect({ onClose }) {
           style={{...S.card, ...S.cardBasic, ...(busy === 'basic' ? S.cardBusy : {})}}
           disabled={!!busy}
         >
-          <div style={S.cardName}>BASIC</div>
+          <div style={S.cardName}>Basic</div>
           <div style={S.cardDesc}>
             Simplified UI. Market orders only, no advanced widgets — perfect
             if you just want to trade and earn gold.
@@ -48,7 +48,7 @@ function FuturesModeSelect({ onClose }) {
           style={{...S.card, ...S.cardPro, ...(busy === 'pro' ? S.cardBusy : {})}}
           disabled={!!busy}
         >
-          <div style={S.cardName}>PRO</div>
+          <div style={S.cardName}>Pro</div>
           <div style={S.cardDesc}>
             Full feature set: limit orders, leverage slider, AI trade ideas,
             funding history, full chart and orderbook.
@@ -74,9 +74,9 @@ const S = {
     width: '100%', maxWidth: 720, margin: '0 auto',
   },
   title: {
-    fontSize: 24, fontWeight: 750, color: 'var(--terminal-text)',
-    letterSpacing: '1px', textAlign: 'center',
-    fontFamily: '"Inter","Segoe UI",sans-serif',
+    fontSize: 24, fontWeight: 700, color: 'var(--terminal-text)',
+    letterSpacing: '-0.02em', textAlign: 'center',
+    fontFamily: 'inherit',
   },
   subtitle: {
     fontSize: 13, fontWeight: 600, color: 'var(--terminal-text-muted)',
@@ -96,7 +96,7 @@ const S = {
     gap: 10, cursor: 'pointer',
     boxShadow: '0 8px 24px var(--terminal-shadow-soft)',
     transition: 'all 0.15s ease',
-    fontFamily: '"Inter","Segoe UI",sans-serif',
+    fontFamily: 'inherit',
   },
   cardBasic: {
     border: '1px solid var(--terminal-border)',
@@ -108,16 +108,16 @@ const S = {
     opacity: 0.7, cursor: 'wait', transform: 'scale(0.98)',
   },
   cardName: {
-    fontSize: 22, fontWeight: 750, color: 'var(--terminal-text)', letterSpacing: '0.5px',
+    fontSize: 22, fontWeight: 700, color: 'var(--terminal-text)', letterSpacing: 0,
   },
   cardDesc: {
     fontSize: 13, fontWeight: 600, color: 'var(--terminal-text-muted)',
     textAlign: 'center', flex: 1, lineHeight: 1.5,
   },
   cardCta: {
-    fontSize: 13, fontWeight: 700, color: 'var(--terminal-brand-text)',
+    fontSize: 13, fontWeight: 600, color: 'var(--terminal-brand-text)',
     background: 'var(--terminal-brand-soft)', border: '1px solid var(--terminal-orange)',
-    padding: '9px 18px', borderRadius: 10,
+    padding: '9px 18px', borderRadius: 999,
   },
   skipBtn: uiButton('ghost', { alignSelf: 'center', minHeight: 34, fontSize: 12, textDecoration: 'underline', marginTop: 8 }),
 };

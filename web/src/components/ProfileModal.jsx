@@ -796,7 +796,7 @@ function ProfileModal({ onClose, onSwitchDex }) {
                 </div>
               ) : (
                 <div style={S.nameDisplayWrap}>
-                  <span style={{color: 'var(--terminal-text)', fontSize: 20, fontWeight: 700, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis'}}>{currentName}</span>
+                  <span style={{color: 'var(--terminal-text)', fontSize: 20, fontWeight: 600, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis'}}>{currentName}</span>
                   <button
                     type="button"
                     style={S.nameEditBtn}
@@ -853,9 +853,8 @@ function ProfileModal({ onClose, onSwitchDex }) {
                   />
                   {!cfg.logoIsWordmark && (
                     <span style={{
-                      fontSize: 16, fontWeight: 700, color: 'var(--terminal-text)',
-                      letterSpacing: '0.6px',
-                      textShadow: 'none',
+                      fontSize: 16, fontWeight: 600, color: 'var(--terminal-text)',
+                      
                       textTransform: 'lowercase',
                     }}>{cfg.label.toLowerCase()}</span>
                   )}
@@ -864,23 +863,20 @@ function ProfileModal({ onClose, onSwitchDex }) {
                   <div style={{
                     fontSize: 10, fontWeight: 600,
                     color: 'var(--terminal-text-muted)',
-                    letterSpacing: '0.5px',
-                    textShadow: 'none',
-                  }}>TRADING ON</div>
+                    
+                  }}>Trading on</div>
                   <div style={{
-                    fontSize: 12, fontWeight: 700, color: 'var(--terminal-text)',
-                    letterSpacing: '0.8px',
-                    textShadow: 'none',
+                    fontSize: 12, fontWeight: 600, color: 'var(--terminal-text)',
                     marginTop: 1,
                   }}>
-                    {cfg.chain} · SELF-CUSTODY
+                    {cfg.chain} · Self-custody
                   </div>
                 </div>
                 <button
                   type="button"
                   onClick={switchDex}
                   style={uiButton('secondary', { minHeight: 32, height: 32, padding: '0 11px', fontSize: 10 })}
-                >SWITCH</button>
+                >Switch</button>
               </div>
             );
           })()}
@@ -893,15 +889,15 @@ function ProfileModal({ onClose, onSwitchDex }) {
               display: 'flex', alignItems: 'center', gap: 10,
               padding: '8px 12px', borderRadius: 12,
               background: 'var(--terminal-surface-muted)',
-              border: '1px solid var(--terminal-surface-muted)',
+              border: '1px solid var(--terminal-border)',
             }}>
               <div style={{flex: 1, minWidth: 0}}>
                 <div style={{
                   fontSize: 9, fontWeight: 600, color: 'var(--terminal-text-muted)',
                   letterSpacing: '0.6px',
-                }}>FUTURES MODE</div>
+                }}>Futures mode</div>
                 <div style={{
-                  fontSize: 12, fontWeight: 700, color: 'var(--terminal-text)',
+                  fontSize: 12, fontWeight: 600, color: 'var(--terminal-text)',
                   marginTop: 1,
                 }}>
                   {futuresMode === 'pro' ? 'Pro — full feature set' : 'Basic — simplified UI'}
@@ -915,7 +911,7 @@ function ProfileModal({ onClose, onSwitchDex }) {
                   style={uiButton(futuresMode === 'basic' ? 'primary' : 'secondary', {
                     minHeight: 32, height: 32, padding: '0 12px', fontSize: 11,
                   })}
-                >BASIC</button>
+                >Basic</button>
                 <button
                   type="button"
                   onClick={() => futuresMode !== 'pro' && setFuturesMode('pro')}
@@ -923,7 +919,7 @@ function ProfileModal({ onClose, onSwitchDex }) {
                   style={uiButton(futuresMode === 'pro' ? 'primary' : 'secondary', {
                     minHeight: 32, height: 32, padding: '0 12px', fontSize: 11,
                   })}
-                >PRO</button>
+                >Pro</button>
               </div>
             </div>
           )}
@@ -995,7 +991,7 @@ function ProfileModal({ onClose, onSwitchDex }) {
                   <line x1="15" y1="9" x2="19" y2="13" />
                 </svg>
               )}
-              <span>{soundEnabled ? 'ON' : 'OFF'}</span>
+              <span>{soundEnabled ? 'ON' : 'Off'}</span>
             </button>
           </div>
 
@@ -1016,7 +1012,7 @@ function ProfileModal({ onClose, onSwitchDex }) {
                   }}
                   disabled={!referralLink}
                 >
-                  {copied === 'referral-link' ? 'COPIED' : 'COPY'}
+                  {copied === 'referral-link' ? 'Copied' : 'Copy'}
                 </button>
               </div>
               <div style={S.referralLink}>{referralLink || referralSummary.code}</div>
@@ -1066,11 +1062,11 @@ function ProfileModal({ onClose, onSwitchDex }) {
                         <div style={S.walletRowTop}>
                           <span style={S.walletChain}>{chainLabel(wallet.chain_type)}</span>
                           <span style={S.walletAddress}>{shortWallet(wallet.address)}</span>
-                          {isLogin && <span style={S.loginChip}>LOGIN</span>}
-                          {isConnected ? <span style={S.connectedChip}>CONNECTED</span> : <span style={S.offlineChip}>LINKED</span>}
+                          {isLogin && <span style={S.loginChip}>Login</span>}
+                          {isConnected ? <span style={S.connectedChip}>Connected</span> : <span style={S.offlineChip}>Linked</span>}
                           {seekerHandle?.full && wallet.chain_type === 'solana' && canonicalWallet(wallet.address) === canonicalWallet(activeWallet) && (
                             <span title={`Seeker .skr handle for ${wallet.address}`} style={S.seekerChip}>
-                              <span style={{ fontSize: 9, opacity: 0.85 }}>SEEKER</span>
+                              <span style={{ fontSize: 9, opacity: 0.85 }}>Seeker</span>
                               <strong>{seekerHandle.full}</strong>
                             </span>
                           )}
@@ -1131,102 +1127,102 @@ function ProfileModal({ onClose, onSwitchDex }) {
             <button
               style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
               onClick={() => setEvmModalOpen(true)}
-            >CONNECT BASE WALLET</button>
+            >Connect Base wallet</button>
           ) : dex === 'domfi' ? (
             <button
               style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
               onClick={() => setEvmModalOpen(true)}
-            >CONNECT BASE WALLET</button>
+            >Connect Base wallet</button>
           ) : dex === 'etoro' ? (
             <button
               style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
               onClick={() => setEvmModalOpen(true)}
-            >CONNECT CLASH LOGIN WALLET</button>
+            >Connect Clash login wallet</button>
           ) : dex === 'gmx' ? (
             <button
               style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
               onClick={() => setEvmModalOpen(true)}
-            >CONNECT ARBITRUM WALLET</button>
+            >Connect Arbitrum wallet</button>
           ) : dex === 'ostium' ? (
             <button
               style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
               onClick={() => setEvmModalOpen(true)}
-            >CONNECT OSTIUM WALLET</button>
+            >Connect Ostium wallet</button>
           ) : dex === 'monad' ? (
             <button
               style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
               onClick={() => setEvmModalOpen(true)}
-            >CONNECT MONAD WALLET</button>
+            >Connect Monad wallet</button>
           ) : dex === 'hyperliquid' ? (
             <button
               style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
               onClick={() => setEvmModalOpen(true)}
-            >CONNECT HYPERLIQUID WALLET</button>
+            >Connect Hyperliquid wallet</button>
           ) : dex === 'decibel' ? (
             <button
               style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
               onClick={() => aptosConnect?.()}
-            >CONNECT PETRA WALLET</button>
+            >Connect Petra wallet</button>
           ) : dex === 'risex' ? (
             <button
               style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
               onClick={() => setEvmModalOpen(true)}
-            >CONNECT RISE WALLET</button>
+            >Connect RISE wallet</button>
           ) : dex === 'nado' ? (
             <button
               style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
               onClick={() => setEvmModalOpen(true)}
-            >CONNECT INK WALLET</button>
+            >Connect Ink wallet</button>
           ) : dex === 'ondo' ? (
             <button
               style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
               onClick={() => setEvmModalOpen(true)}
-            >CONNECT ETHEREUM WALLET</button>
+            >Connect Ethereum wallet</button>
           ) : dex === 'leverup' ? (
             <button
               style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
               onClick={() => setEvmModalOpen(true)}
-            >CONNECT MONAD WALLET</button>
+            >Connect Monad wallet</button>
           ) : dex === 'aster' ? (
             <button
               style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
               onClick={() => setEvmModalOpen(true)}
-            >CONNECT ASTER WALLET</button>
+            >Connect Aster wallet</button>
           ) : dex === 'hibachi' ? (
             <button
               style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
               onClick={() => setEvmModalOpen(true)}
-            >CONNECT HIBACHI WALLET</button>
+            >Connect Hibachi wallet</button>
           ) : dex === 'hotstuff' ? (
             <button
               style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
               onClick={() => setEvmModalOpen(true)}
-            >CONNECT ETHEREUM WALLET</button>
+            >Connect Ethereum wallet</button>
           ) : dex === 'grvt' ? (
             <button
               style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
               onClick={() => setEvmModalOpen(true)}
-            >CONNECT GRVT WALLET</button>
+            >Connect GRVT wallet</button>
           ) : dex === 'katana' ? (
             <button
               style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
               onClick={() => setEvmModalOpen(true)}
-            >CONNECT KATANA WALLET</button>
+            >Connect Katana wallet</button>
           ) : dex === 'lighter' ? (
             <button
               style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
               onClick={() => setEvmModalOpen(true)}
-            >CONNECT LIGHTER WALLET</button>
+            >Connect Lighter wallet</button>
           ) : dex === 'rhlighter' ? (
             <button
               style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
               onClick={() => setEvmModalOpen(true)}
-            >CONNECT ROBINHOOD LIGHTER WALLET</button>
+            >Connect Robinhood Lighter wallet</button>
           ) : (
             <button
               style={uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px' })}
               onClick={openSolanaConnect}
-            >CONNECT WALLET</button>
+            >Connect wallet</button>
           )}
 
           {activeWallet && !liveWallet && (
@@ -1376,9 +1372,9 @@ function ProfileModal({ onClose, onSwitchDex }) {
               border: '1px solid var(--terminal-brand-border)',
             }}>
               <div style={{
-                fontSize: 12, fontWeight: 700, color: 'var(--terminal-brand-text)',
+                fontSize: 12, fontWeight: 600, color: 'var(--terminal-brand-text)',
                 letterSpacing: '1px', marginBottom: 4,
-              }}>💰 FUND BASE WALLET</div>
+              }}>💰 Fund Base wallet</div>
               <div style={{
                 fontSize: 12, color: 'var(--terminal-text-secondary)', fontWeight: 600,
                 lineHeight: 1.4,
@@ -1391,9 +1387,9 @@ function ProfileModal({ onClose, onSwitchDex }) {
           {/* Game resources */}
           <div style={S.sectionTitle}>Game Resources</div>
           <div style={{display: 'flex', gap: 6}}>
-            <div style={S.resCard}><span style={{...S.resVal, color: '#e8b830'}}>{resources?.gold || 0}</span><span style={S.resLabel}>Gold</span></div>
-            <div style={S.resCard}><span style={{...S.resVal, color: '#6ab344'}}>{resources?.wood || 0}</span><span style={S.resLabel}>Wood</span></div>
-            <div style={S.resCard}><span style={{...S.resVal, color: '#8a9aaa'}}>{resources?.ore || 0}</span><span style={S.resLabel}>Ore</span></div>
+            <div style={S.resCard}><span style={{...S.resVal, color: 'var(--terminal-warning)'}}>{resources?.gold || 0}</span><span style={S.resLabel}>Gold</span></div>
+            <div style={S.resCard}><span style={{...S.resVal, color: 'var(--terminal-long)'}}>{resources?.wood || 0}</span><span style={S.resLabel}>Wood</span></div>
+            <div style={S.resCard}><span style={{...S.resVal, color: 'var(--terminal-text-secondary)'}}>{resources?.ore || 0}</span><span style={S.resLabel}>Ore</span></div>
           </div>
 
           {/* Game stats */}
@@ -1438,8 +1434,8 @@ function ProfileModal({ onClose, onSwitchDex }) {
                 <div style={{display: 'flex', alignItems: 'center', gap: 8}}>
                   <span style={{fontSize: 28}}>🪙</span>
                   <div>
-                    <div style={{fontSize: 22, fontWeight: 700, color: 'var(--terminal-text)'}}>{tradingStats.total_gold.toLocaleString()} Gold</div>
-                    <div style={{fontSize: 11, color: 'var(--terminal-text-muted)', fontWeight: 700}}>Volume: ${parseFloat(tradingStats.total_volume || 0).toFixed(0)}</div>
+                    <div style={{fontSize: 22, fontWeight: 600, color: 'var(--terminal-text)'}}>{tradingStats.total_gold.toLocaleString()} Gold</div>
+                    <div style={{fontSize: 11, color: 'var(--terminal-text-muted)', fontWeight: 600}}>Volume: ${parseFloat(tradingStats.total_volume || 0).toFixed(0)}</div>
                   </div>
                 </div>
               </div>
@@ -1450,8 +1446,8 @@ function ProfileModal({ onClose, onSwitchDex }) {
                   <div style={S.sectionTitle}>Gold History</div>
                   {tradingStats.gold_history.map((h, i) => (
                     <div key={i} style={S.historyRow}>
-                      <span style={{fontSize: 14, fontWeight: 700, color: 'var(--terminal-long)'}}>+{h.amount}</span>
-                      <span style={{fontSize: 12, fontWeight: 700, color: 'var(--terminal-text-secondary)', flex: 1}}>{h.reason}</span>
+                      <span style={{fontSize: 14, fontWeight: 600, color: 'var(--terminal-long)'}}>+{h.amount}</span>
+                      <span style={{fontSize: 12, fontWeight: 600, color: 'var(--terminal-text-secondary)', flex: 1}}>{h.reason}</span>
                       <span style={{fontSize: 10, color: 'var(--terminal-text-muted)'}}>{h.created_at?.split(' ')[0]}</span>
                     </div>
                   ))}
@@ -1466,8 +1462,8 @@ function ProfileModal({ onClose, onSwitchDex }) {
               <div style={S.sectionTitle}>Trade History</div>
               {tradingStats.trades.slice(0, 20).map((t, i) => (
                 <div key={i} style={S.historyRow}>
-                  <span style={{fontSize: 13, fontWeight: 700, color: 'var(--terminal-text)', minWidth: 40}}>{t.symbol}</span>
-                  <span style={{fontSize: 12, fontWeight: 700, color: 'var(--terminal-text-secondary)', flex: 1}}>{t.amount} @ ${parseFloat(t.price).toLocaleString()}</span>
+                  <span style={{fontSize: 13, fontWeight: 600, color: 'var(--terminal-text)', minWidth: 40}}>{t.symbol}</span>
+                  <span style={{fontSize: 12, fontWeight: 600, color: 'var(--terminal-text-secondary)', flex: 1}}>{t.amount} @ ${parseFloat(t.price).toLocaleString()}</span>
                   <span style={{fontSize: 10, color: 'var(--terminal-text-muted)'}}>{t.created_at?.split(' ')[0] || '—'}</span>
                 </div>
               ))}
@@ -1488,26 +1484,26 @@ function ProfileModal({ onClose, onSwitchDex }) {
 export default memo(ProfileModal);
 
 const S = {
-  backdrop: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 200, pointerEvents: 'auto' },
+  backdrop: { position: 'fixed', inset: 0, background: 'var(--terminal-overlay)', zIndex: 200, pointerEvents: 'auto' },
   modal: {
     position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-    width: '90%', maxWidth: 370, maxHeight: '85vh', background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 24,
-    boxShadow: '0 20px 60px rgba(0,0,0,0.5)', display: 'flex', flexDirection: 'column',
-    zIndex: 201, pointerEvents: 'auto', overflow: 'hidden', fontFamily: '"Inter","Segoe UI",sans-serif',
+    width: '90%', maxWidth: 370, maxHeight: '85vh', background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 16,
+    boxShadow: 'var(--terminal-shadow-card)', display: 'flex', flexDirection: 'column',
+    zIndex: 201, pointerEvents: 'auto', overflow: 'hidden', fontFamily: 'inherit',
   },
   header: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    padding: '14px 16px', background: 'var(--terminal-border)', borderBottom: '1px solid var(--terminal-border-strong)',
+    padding: '14px 16px', background: 'var(--terminal-surface)', borderBottom: '1px solid var(--terminal-border)',
   },
   levelBadge: {
     width: 44, height: 44, borderRadius: 10,
-    background: 'radial-gradient(circle at 30% 30%, #7bd9ff 0%, #46b8e8 70%, #2a9ccb 100%)',
-    border: '1px solid #1a1a1a', display: 'flex', alignItems: 'center', justifyContent: 'center',
-    boxShadow: '0 3px 6px rgba(0,0,0,0.4)',
+    background: 'var(--terminal-surface-muted)',
+    border: '1px solid var(--terminal-border)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+    boxShadow: 'none',
     position: 'relative',
     overflow: 'hidden',
   },
-  levelNum: { color: 'var(--terminal-on-accent)', fontSize: 22, fontWeight: 700, textShadow: 'none' },
+  levelNum: { color: 'var(--terminal-text)', fontSize: 22, fontWeight: 600, fontVariantNumeric: 'tabular-nums' },
   nameDisplayWrap: {
     display: 'flex', alignItems: 'center', gap: 7, minWidth: 0, maxWidth: 190,
   },
@@ -1516,9 +1512,9 @@ const S = {
   },
   nameInput: {
     width: 110, minWidth: 0, height: 30, padding: '0 8px',
-    borderRadius: 8, border: '1px solid var(--terminal-border-strong)', background: 'var(--terminal-surface)',
-    color: 'var(--terminal-text)', fontSize: 15, fontWeight: 700, outline: 'none',
-    boxShadow: 'inset 0 2px 0 rgba(0,0,0,0.08)',
+    borderRadius: 12, border: '1px solid var(--terminal-border)', background: 'var(--terminal-input)',
+    color: 'var(--terminal-text)', fontSize: 15, fontWeight: 600, outline: 'none',
+    boxShadow: 'none',
   },
   nameEditBtn: uiIconButton('secondary', 30),
   nameSaveBtn: uiButton('success', { minHeight: 30, height: 30, padding: '0 9px', fontSize: 11 }),
@@ -1527,15 +1523,15 @@ const S = {
     maxWidth: 240,
     padding: '5px 8px',
     borderRadius: 8,
-    border: '1px solid rgba(198,40,40,0.35)',
-    background: 'rgba(198,40,40,0.09)',
+    border: '1px solid var(--terminal-short-border)',
+    background: 'var(--terminal-short-soft)',
     color: 'var(--terminal-short-strong)',
     fontSize: 11,
-    fontWeight: 700,
+    fontWeight: 600,
     lineHeight: 1.2,
     marginTop: 2,
   },
-  closeBtn: uiIconButton('danger', 30),
+  closeBtn: uiIconButton('ghost', 30, { borderRadius: 999 }),
   body: { flex: 1, padding: 16, display: 'flex', flexDirection: 'column', gap: 8, overflowY: 'auto' },
   soundBox: {
     display: 'flex', alignItems: 'center', gap: 10,
@@ -1551,47 +1547,46 @@ const S = {
     border: '1px solid var(--terminal-border-strong)',
   },
   futuresThemeLabel: {
-    fontSize: 10, fontWeight: 700, color: 'var(--terminal-text-muted)',
-    letterSpacing: '0.7px', textTransform: 'uppercase',
+    fontSize: 10, fontWeight: 600, color: 'var(--terminal-text-muted)',
+    letterSpacing: '0.06em', textTransform: 'uppercase',
   },
   futuresThemeState: {
-    marginTop: 2, fontSize: 12, fontWeight: 700, color: 'var(--terminal-text)',
+    marginTop: 2, fontSize: 12, fontWeight: 600, color: 'var(--terminal-text)',
     whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
   },
   futuresThemeChoices: {
-    display: 'inline-flex', gap: 3, padding: 3, borderRadius: 10,
-    background: 'var(--terminal-border)', flexShrink: 0,
+    display: 'inline-flex', gap: 3, padding: 3, borderRadius: 999,
+    background: 'var(--terminal-surface-muted)', border: '1px solid var(--terminal-border)', flexShrink: 0,
   },
   futuresThemeChoice: {
-    minWidth: 66, height: 34, padding: '0 9px', borderRadius: 8,
+    minWidth: 66, height: 34, padding: '0 9px', borderRadius: 999,
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6,
     fontSize: 11, fontWeight: 600, cursor: 'pointer',
   },
   futuresThemeChoiceActive: {
-    background: 'var(--terminal-surface)', color: 'var(--terminal-brand-text)', border: '1px solid var(--terminal-orange)',
-    boxShadow: '0 1px 3px rgba(17,24,39,0.14)',
+    background: 'var(--terminal-neutral-button)', color: '#ffffff', border: '1px solid var(--terminal-neutral-button)',
+    boxShadow: 'none',
   },
   futuresThemeChoiceIdle: {
     background: 'transparent', color: 'var(--terminal-text-secondary)', border: '1px solid transparent',
   },
   themeSwatch: {
     width: 11, height: 11, borderRadius: '50%', border: '1px solid var(--terminal-text-faint)',
-    boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.2)',
+    boxShadow: 'none',
   },
   soundLabel: {
-    fontSize: 10, fontWeight: 700, color: 'var(--terminal-text-muted)',
-    letterSpacing: '0.7px', textTransform: 'uppercase',
+    fontSize: 10, fontWeight: 600, color: 'var(--terminal-text-muted)',
+    letterSpacing: '0.06em', textTransform: 'uppercase',
   },
   soundState: {
-    marginTop: 2, fontSize: 12, fontWeight: 700, color: 'var(--terminal-text)',
+    marginTop: 2, fontSize: 12, fontWeight: 600, color: 'var(--terminal-text)',
     whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
   },
   soundToggle: {
-    minWidth: 84, height: 42, borderRadius: 10,
+    minWidth: 84, height: 42, borderRadius: 999,
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 7,
     cursor: 'pointer',
-    fontSize: 12, fontWeight: 700, letterSpacing: '0.8px',
-    textShadow: 'none',
+    fontSize: 12, fontWeight: 600,
     boxShadow: 'none',
     transition: 'background-color 160ms ease-out, border-color 160ms ease-out, color 160ms ease-out',
   },
@@ -1615,19 +1610,19 @@ const S = {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
   },
   referralSub: {
-    marginTop: 2, color: 'var(--terminal-long-strong)', fontSize: 11, fontWeight: 700,
+    marginTop: 2, color: 'var(--terminal-long-strong)', fontSize: 11, fontWeight: 600,
   },
   referralCopyBtn: uiButton('secondary', { minHeight: 34, height: 34, padding: '0 12px', fontSize: 11 }),
   referralLink: {
     padding: '8px 9px', borderRadius: 9,
     background: 'var(--terminal-chip-overlay)',
     border: '1px solid var(--terminal-long-border)',
-    color: 'var(--terminal-long-strong)', fontSize: 12, fontWeight: 700,
+    color: 'var(--terminal-long-strong)', fontSize: 12, fontWeight: 600,
     fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
   },
   referralBy: {
-    color: 'var(--terminal-long-strong)', fontSize: 11, fontWeight: 700,
+    color: 'var(--terminal-long-strong)', fontSize: 11, fontWeight: 600,
   },
   referralStats: {
     display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 6,
@@ -1637,11 +1632,11 @@ const S = {
     minWidth: 0, padding: '7px 5px', borderRadius: 9,
     background: 'var(--terminal-chip-overlay)',
     border: '1px solid var(--terminal-long-border)',
-    color: 'var(--terminal-long-strong)', fontSize: 11, fontWeight: 700,
+    color: 'var(--terminal-long-strong)', fontSize: 11, fontWeight: 600,
     textAlign: 'center',
   },
   referralStatLabel: {
-    color: 'var(--terminal-long)', fontSize: 9, fontWeight: 700,
+    color: 'var(--terminal-long)', fontSize: 9, fontWeight: 600,
     textTransform: 'uppercase',
   },
   connectedBox: {
@@ -1653,53 +1648,52 @@ const S = {
     background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border-strong)', borderRadius: 12, padding: 10,
   },
   walletListTitle: {
-    color: 'var(--terminal-text-secondary)', fontSize: 11, fontWeight: 700,
-    textTransform: 'uppercase', letterSpacing: 0.7,
+    color: 'var(--terminal-text-faint)', fontSize: 11, fontWeight: 600,
+    textTransform: 'uppercase', letterSpacing: '0.06em',
   },
   walletRow: {
     display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 8,
     alignItems: 'center', padding: '11px 10px', borderRadius: 10,
-    background: 'var(--terminal-surface-raised)', border: '1px solid var(--terminal-border-strong)',
-    boxShadow: '0 1px 2px var(--terminal-shadow-soft)',
+    background: 'var(--terminal-surface-muted)', border: '1px solid var(--terminal-border)',
+    boxShadow: 'none',
   },
   walletRowMain: { display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 },
   walletRowText: { minWidth: 0, display: 'flex', flexDirection: 'column', gap: 5 },
   walletRowTop: { display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flexWrap: 'wrap' },
-  walletChain: { color: 'var(--terminal-text)', fontSize: 12, fontWeight: 700 },
-  walletAddress: { color: 'var(--terminal-text-secondary)', fontSize: 12, fontWeight: 700, fontFamily: 'monospace' },
+  walletChain: { color: 'var(--terminal-text)', fontSize: 12, fontWeight: 600 },
+  walletAddress: { color: 'var(--terminal-text-secondary)', fontSize: 12, fontWeight: 600, fontFamily: 'monospace' },
   walletRowSub: { color: 'var(--terminal-text-secondary)', fontSize: 11, fontWeight: 600, lineHeight: 1.3 },
   walletRowActions: { display: 'flex', alignItems: 'center', gap: 6 },
   copyBtn: uiIconButton('secondary', 28),
   loginChip: {
     padding: '2px 7px', borderRadius: 999,
-    background: 'rgba(14,165,233,0.14)', border: '1px solid rgba(2,132,199,0.45)',
-    color: '#0369A1', fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4,
+    background: 'var(--terminal-info-soft)', border: '1px solid var(--terminal-info-border)',
+    color: 'var(--terminal-info)', fontSize: 11, fontWeight: 600,
   },
   connectedChip: {
     padding: '2px 7px', borderRadius: 999,
     background: 'var(--terminal-long-soft)', border: '1px solid var(--terminal-long-border)',
-    color: 'var(--terminal-long)', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4,
+    color: 'var(--terminal-long)', fontSize: 11, fontWeight: 600,
   },
-  dot: { width: 10, height: 10, borderRadius: '50%', background: 'var(--terminal-long)', boxShadow: '0 0 6px var(--terminal-long)' },
-  offlineDot: { width: 10, height: 10, borderRadius: '50%', background: 'var(--terminal-text-muted)', boxShadow: '0 0 6px rgba(163,144,106,0.5)' },
+  dot: { width: 10, height: 10, borderRadius: '50%', background: 'var(--terminal-long)', boxShadow: 'none' },
+  offlineDot: { width: 10, height: 10, borderRadius: '50%', background: 'var(--terminal-text-muted)', boxShadow: 'none' },
   offlineChip: {
     padding: '2px 7px', borderRadius: 999,
     background: 'var(--terminal-surface-muted)', border: '1px solid var(--terminal-border-strong)',
-    color: 'var(--terminal-text-secondary)', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4,
+    color: 'var(--terminal-text-secondary)', fontSize: 11, fontWeight: 600,
   },
   seekerChip: {
     display: 'inline-flex', alignItems: 'center', gap: 5,
     padding: '2px 8px', borderRadius: 999,
     background: 'var(--terminal-info-soft)', border: '1px solid var(--terminal-info-border)',
-    color: 'var(--terminal-info)', fontSize: 10, fontWeight: 700, letterSpacing: '0.4px',
+    color: 'var(--terminal-info)', fontSize: 10, fontWeight: 600, 
     textTransform: 'lowercase',
-    textShadow: 'none',
   },
   walletError: {
     padding: '6px 8px', borderRadius: 8,
-    border: '1px solid rgba(198,40,40,0.35)',
-    background: 'rgba(198,40,40,0.09)', color: 'var(--terminal-short-strong)',
-    fontSize: 11, fontWeight: 700, lineHeight: 1.25,
+    border: '1px solid var(--terminal-short-border)',
+    background: 'var(--terminal-short-soft)', color: 'var(--terminal-short-strong)',
+    fontSize: 11, fontWeight: 600, lineHeight: 1.25,
   },
   walletRepair: {
     padding: '10px 12px', borderRadius: 12,
@@ -1724,7 +1718,7 @@ const S = {
   credentialsMessage: {
     padding: '6px 8px', borderRadius: 8,
     background: 'var(--terminal-info-soft)', border: '1px solid var(--terminal-info-border)',
-    color: 'var(--terminal-info)', fontSize: 11, fontWeight: 700, lineHeight: 1.25,
+    color: 'var(--terminal-info)', fontSize: 11, fontWeight: 600, lineHeight: 1.25,
   },
   credentialRow: {
     display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 8,
@@ -1742,7 +1736,7 @@ const S = {
     display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', minWidth: 0,
   },
   credentialName: {
-    color: 'var(--terminal-text)', fontSize: 12, fontWeight: 700,
+    color: 'var(--terminal-text)', fontSize: 12, fontWeight: 600,
   },
   credentialSub: {
     color: 'var(--terminal-text-secondary)', fontSize: 10, fontWeight: 600, lineHeight: 1.2, marginTop: 2,
@@ -1750,12 +1744,12 @@ const S = {
   credentialActiveChip: {
     padding: '2px 7px', borderRadius: 999,
     background: 'var(--terminal-long-soft)', border: '1px solid var(--terminal-long-border)',
-    color: 'var(--terminal-long-strong)', fontSize: 8, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.35,
+    color: 'var(--terminal-long-strong)', fontSize: 8, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.35,
   },
   credentialIdleChip: {
     padding: '2px 7px', borderRadius: 999,
     background: 'var(--terminal-surface-muted)', border: '1px solid var(--terminal-border)',
-    color: 'var(--terminal-text-secondary)', fontSize: 8, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.35,
+    color: 'var(--terminal-text-secondary)', fontSize: 8, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.35,
   },
   credentialActions: {
     display: 'flex', alignItems: 'center', gap: 5,
@@ -1795,7 +1789,7 @@ const S = {
   },
   aiKeyName: {
     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-    fontSize: 12, fontWeight: 700, color: 'var(--terminal-text)',
+    fontSize: 12, fontWeight: 600, color: 'var(--terminal-text)',
   },
   aiKeyMeta: {
     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
@@ -1804,21 +1798,20 @@ const S = {
   aiRevokeBtn: uiButton('danger', { minHeight: 30, padding: '5px 8px', fontSize: 10 }),
   disconnectBtn: uiButton('danger', { minHeight: 32, padding: '5px 12px', fontSize: 11 }),
   sectionTitle: {
-    fontSize: 12, fontWeight: 600, color: 'var(--terminal-text-muted)', textTransform: 'uppercase',
-    marginTop: 6, paddingBottom: 2, borderBottom: '1px solid var(--terminal-surface-subtle)',
+    fontSize: 12, fontWeight: 600, color: 'var(--terminal-text-muted)',     marginTop: 6, paddingBottom: 2, borderBottom: '1px solid var(--terminal-surface-subtle)',
   },
   statRow: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
     padding: '8px 12px', background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 10,
   },
-  statLabel: { fontSize: 13, fontWeight: 700, color: 'var(--terminal-text-secondary)' },
-  statVal: { fontSize: 15, fontWeight: 700, color: 'var(--terminal-text)' },
+  statLabel: { fontSize: 13, fontWeight: 600, color: 'var(--terminal-text-secondary)' },
+  statVal: { fontSize: 15, fontWeight: 600, color: 'var(--terminal-text)' },
   resCard: {
     flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
     background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 10, padding: 8,
   },
-  resVal: { fontSize: 16, fontWeight: 700 },
-  resLabel: { fontSize: 10, fontWeight: 700, color: 'var(--terminal-text-muted)', textTransform: 'uppercase' },
+  resVal: { fontSize: 16, fontWeight: 600 },
+  resLabel: { fontSize: 10, fontWeight: 600, color: 'var(--terminal-text-muted)', textTransform: 'uppercase' },
   goldCard: {
     background: 'var(--terminal-warning-soft)',
     border: '1px solid var(--terminal-warning-border)', borderRadius: 14, padding: 14,

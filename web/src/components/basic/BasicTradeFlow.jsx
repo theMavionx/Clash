@@ -539,10 +539,10 @@ const S = {
   errorBanner: {
     margin: '0 14px 8px', padding: '10px 14px',
     borderRadius: 10,
-    background: 'rgba(239,83,80,0.18)',
+    background: 'var(--terminal-brand-soft)',
     border: `1px solid ${colors.aggressive}`,
     color: colors.shortDark,
-    fontSize: 13, fontWeight: 700,
+    fontSize: 13, fontWeight: 600,
     cursor: 'pointer',
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
     gap: 12,
@@ -553,7 +553,7 @@ const S = {
     overflowWrap: 'anywhere',
     wordBreak: 'break-word',
   },
-  errorClose: { fontWeight: 700, opacity: 0.6, flexShrink: 0 },
+  errorClose: { fontWeight: 600, opacity: 0.6, flexShrink: 0 },
   stepWrap: {
     flex: 1, position: 'relative', minHeight: 0,
     overflow: 'hidden',

@@ -4,8 +4,9 @@ import { useCredentialVaultUnlock } from '../hooks/useCredentialVaultUnlock';
 import { credentialVault } from '../lib/encryptedCredentialStorage';
 import { clearTradePrefetchCache } from '../lib/tradePrefetch';
 
-const box = { background: '#121c2a', color: '#f3f7fc', border: '1px solid #40516a', borderRadius: 16, padding: 18 };
-const button = { background: '#f58230', border: 0, borderRadius: 9, color: '#fff', padding: '10px 14px', cursor: 'pointer', fontWeight: 700 };
+const box = { background: 'var(--terminal-surface)', color: 'var(--terminal-text)', border: '1px solid var(--terminal-border)', borderRadius: 16, padding: 18, boxShadow: 'var(--terminal-shadow-card)' };
+const button = { background: 'var(--terminal-neutral-button)', border: '1px solid var(--terminal-neutral-button)', borderRadius: 999, color: '#ffffff', padding: '10px 16px', cursor: 'pointer', fontWeight: 600, fontSize: 13, fontFamily: 'inherit' };
+const closeButton = { width: 32, height: 32, padding: 0, borderRadius: 999, border: '1px solid transparent', background: 'transparent', color: 'var(--terminal-text-secondary)', cursor: 'pointer', fontSize: 18, lineHeight: 1 };
 const short = value => value ? `${value.slice(0, 8)}…${value.slice(-6)}` : '';
 
 export default function CredentialVaultBoundary({ children }) {
@@ -58,13 +59,13 @@ export default function CredentialVaultBoundary({ children }) {
         <button type="button" style={{ ...button, marginLeft: 10 }} onClick={() => run(() => credentialVault.refresh())}>Retry</button>
       </div>}
     {showManager && <button type="button" style={{ ...button, position: 'fixed', left: '50%', bottom: 9, transform: 'translateX(-50%)',
-      zIndex: 1100, background: '#172436', fontSize: 11, padding: '6px 10px', border: '1px solid #52647a' }}
+      zIndex: 1100, background: 'var(--terminal-surface)', color: 'var(--terminal-text)', fontSize: 11, padding: '6px 12px', border: '1px solid var(--terminal-border)' }}
       onClick={() => setOpen(true)}>{needsAttention ? 'Trading key sync · action needed' : 'Manage trading key sync'}</button>}
-    {open && <div style={{ position: 'fixed', inset: 0, zIndex: 3000, background: '#000a', display: 'grid', placeItems: 'center', padding: 16 }}>
+    {open && <div style={{ position: 'fixed', inset: 0, zIndex: 3000, background: 'var(--terminal-overlay)', display: 'grid', placeItems: 'center', padding: 16 }}>
       <section role="dialog" aria-modal="true" aria-labelledby="vault-title" style={{ ...box, width: 'min(520px, 100%)', maxHeight: '85vh', overflowY: 'auto' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <h2 id="vault-title" style={{ fontSize: 18, margin: 0 }}>Secure trading keys</h2>
-          <button type="button" aria-label="Close secure trading keys" onClick={() => setOpen(false)} style={button}>×</button>
+          <h2 id="vault-title" style={{ fontSize: 18, fontWeight: 600, margin: 0 }}>Secure trading keys</h2>
+          <button type="button" aria-label="Close secure trading keys" onClick={() => setOpen(false)} style={closeButton}>×</button>
         </div>
         <p style={{ fontSize: 13, lineHeight: 1.5 }}>Exchange API keys and delegated trading signers sync to your Clash account, encrypted on our server. Main wallet keys and seed phrases are never uploaded. This does not authorize a bot to trade.</p>
         <p style={{ fontSize: 13 }}>{state.count} saved on this device · {state.pending} waiting to sync</p>
@@ -77,20 +78,20 @@ export default function CredentialVaultBoundary({ children }) {
           })}
         </>}
         {state.candidates.length > 0 && <>
-          <h3 style={{ fontSize: 15 }}>Older keys on this browser</h3>
+          <h3 style={{ fontSize: 16, fontWeight: 600 }}>Older keys on this browser</h3>
           <p style={{ fontSize: 12 }}>Import only keys that belong to this Clash account. Shared-browser keys cannot be assigned automatically.</p>
-          {state.candidates.map(row => <div key={row.name} style={{ borderTop: '1px solid #40516a', padding: '10px 0' }}>
+          {state.candidates.map(row => <div key={row.name} style={{ borderTop: '1px solid var(--terminal-border)', padding: '10px 0' }}>
             <span>{row.label} {row.owner ? short(row.owner) : '(account not verified)'}</span>{' '}
             <button type="button" disabled={!state.unlocked || busy || working} style={button}
               onClick={() => run(() => credentialVault.approveLegacy(row.name))}>Import to this account</button>
           </div>)}
         </>}
-        {state.conflicts.map(row => <div key={row.key} style={{ borderTop: '1px solid #40516a', padding: '10px 0' }}>
+        {state.conflicts.map(row => <div key={row.key} style={{ borderTop: '1px solid var(--terminal-border)', padding: '10px 0' }}>
           <p style={{ fontSize: 12 }}>{row.label}: a newer key or deletion exists on the server. Your conflicting local {row.deleted ? 'deletion' : 'key'} is preserved encrypted.</p>
           <button type="button" disabled={!state.unlocked || busy || working} style={button}
             onClick={() => run(() => credentialVault.useConflict(row.key))}>Replace server version with local {row.deleted ? 'deletion' : 'key'}</button>
         </div>)}
-        {(error || unlockError || state.error) && <p role="alert" style={{ color: '#ffbdac', fontSize: 13 }}>{error || unlockError || state.error}</p>}
+        {(error || unlockError || state.error) && <p role="alert" style={{ color: 'var(--terminal-short)', fontSize: 13 }}>{error || unlockError || state.error}</p>}
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
           <button type="button" disabled={busy || working} style={button} onClick={() => run(() => credentialVault.refresh())}>Retry sync</button>
           {needsReload && <button type="button" style={button} onClick={() => window.location.reload()}>Reload to reconnect venues</button>}

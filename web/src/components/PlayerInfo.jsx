@@ -67,11 +67,11 @@ function PlayerInfo({ onOpenProfile, onOpenLeaderboard }) {
       >
         <div style={{
           ...styles.levelCircle,
-          ...(mobile ? { width: 48, height: 48, borderRadius: 10, padding: 5 } : {}),
-          background: `conic-gradient(from -90deg, var(--terminal-surface) ${progressPct * 3.6}deg, #1a1a1a ${progressPct * 3.6}deg)`,
+          ...(mobile ? { width: 48, height: 48, borderRadius: 14, padding: 4 } : {}),
+          background: `conic-gradient(from -90deg, var(--terminal-orange) ${progressPct * 3.6}deg, var(--terminal-surface-muted) ${progressPct * 3.6}deg)`,
         }}>
-          <div style={{ ...styles.innerSquare, ...(mobile ? { borderRadius: 7 } : {}) }}>
-            <span style={{ ...styles.levelText, ...(mobile ? { fontSize: 24 } : {}) }}>{townHallLevel}</span>
+          <div style={{ ...styles.innerSquare, ...(mobile ? { borderRadius: 10 } : {}) }}>
+            <span style={{ ...styles.levelText, ...(mobile ? { fontSize: 22 } : {}) }}>{townHallLevel}</span>
           </div>
         </div>
       </div>
@@ -79,7 +79,7 @@ function PlayerInfo({ onOpenProfile, onOpenLeaderboard }) {
       <div style={styles.infoStack}>
         {playerState.player_name && (
           <span
-            style={{ ...styles.name, ...(mobile ? { fontSize: 18 } : {}) }}
+            style={{ ...styles.name, ...(mobile ? { fontSize: 15 } : {}) }}
             onClick={onOpenProfile}
             onKeyDown={(event) => activateOnKeyboard(event, onOpenProfile)}
             role="button"
@@ -115,7 +115,7 @@ function PlayerInfo({ onOpenProfile, onOpenLeaderboard }) {
               title={`Shield protects your base for ${formatShieldRemaining(shieldRemainingMs)}`}
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style={styles.shieldChipIcon}>
-                <path d="M12 2 L20 5 L20 12 C20 17 16 21 12 22 C8 21 4 17 4 12 L4 5 Z" fill="var(--terminal-surface)" stroke="var(--terminal-info)" strokeWidth="2" />
+                <path d="M12 2 L20 5 L20 12 C20 17 16 21 12 22 C8 21 4 17 4 12 L4 5 Z" fill="none" stroke="var(--terminal-info)" strokeWidth="2" />
                 <path d="M9 12 L11 14 L15 9" stroke="var(--terminal-info)" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" fill="none" />
               </svg>
               <span style={styles.shieldChipText}>{formatShieldRemaining(shieldRemainingMs)}</span>
@@ -129,6 +129,8 @@ function PlayerInfo({ onOpenProfile, onOpenLeaderboard }) {
 
 export default memo(PlayerInfo);
 
+const hudSurface = 'rgba(17,20,27,0.95)';
+
 const styles = {
   wrap: {
     position: 'fixed',
@@ -139,7 +141,7 @@ const styles = {
     gap: 12,
     pointerEvents: 'auto',
     zIndex: 10,
-    fontFamily: 'system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
+    fontFamily: 'inherit',
   },
   levelCircleContainer: {
     position: 'relative',
@@ -149,129 +151,133 @@ const styles = {
   levelCircle: {
     width: 68,
     height: 68,
-    borderRadius: 14,
-    background: '#1a1a1a',
-    border: '3.5px solid #0a0a0a',
-    boxShadow: 'inset 0 1.5px 0 rgba(255,255,255,0.34), 0 0 0 2px rgba(255,255,255,0.86), 0 5px 12px rgba(0,0,0,0.62)',
+    boxSizing: 'border-box',
+    borderRadius: 16,
+    background: 'var(--terminal-surface-muted)',
+    border: '1px solid var(--terminal-border)',
+    boxShadow: 'var(--terminal-shadow-card)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',
-    padding: 7,
+    padding: 5,
   },
   innerSquare: {
     width: '100%',
     height: '100%',
-    borderRadius: 10,
-    background: 'linear-gradient(180deg, #5899ff 0%, #3d86ef 100%)',
-    border: '2.5px solid #0a0a0a',
+    boxSizing: 'border-box',
+    borderRadius: 12,
+    background: hudSurface,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',
     overflow: 'hidden',
-    boxShadow: 'inset 0 2px 3px var(--terminal-chip-overlay), 0 2px 4px rgba(0,0,0,0.3)',
   },
   levelText: {
-    color: 'var(--terminal-on-accent)',
-    fontSize: 34,
+    color: 'var(--terminal-text)',
+    fontSize: 28,
     fontWeight: 700,
+    fontVariantNumeric: 'tabular-nums',
     textShadow: 'none',
     zIndex: 2,
-    transform: 'translateY(-1px)',
-    letterSpacing: '-1px',
+    letterSpacing: '-0.02em',
   },
   infoStack: {
     display: 'flex',
     flexDirection: 'column',
     justifyContent: 'center',
-    gap: 2,
+    alignItems: 'flex-start',
+    gap: 6,
   },
   name: {
-    color: 'var(--terminal-on-accent)',
-    fontSize: 24,
-    fontWeight: 700,
+    color: 'var(--terminal-text)',
+    fontSize: 18,
+    fontWeight: 600,
     textShadow: 'none',
-    marginLeft: 4,
-    letterSpacing: '0.5px',
+    letterSpacing: 0,
     cursor: 'pointer',
+    background: hudSurface,
+    border: '1px solid var(--terminal-border)',
+    borderRadius: 999,
+    padding: '4px 12px',
+    lineHeight: 1.2,
   },
   trophyRow: {
     display: 'flex',
     alignItems: 'center',
     gap: 8,
-    marginLeft: 4,
   },
   trophyContainer: {
     position: 'relative',
     display: 'flex',
     alignItems: 'center',
+    gap: 8,
     height: 40,
+    boxSizing: 'border-box',
+    padding: '0 14px 0 4px',
+    borderRadius: 999,
+    background: hudSurface,
+    border: '1px solid var(--terminal-border)',
+    cursor: 'pointer',
   },
   shieldChip: {
     display: 'flex',
     alignItems: 'center',
-    gap: 5,
-    height: 26,
-    padding: '0 9px 0 7px',
-    borderRadius: 13,
-    background: 'linear-gradient(180deg, #5cabff 0%, #2c6ed8 100%)',
-    border: '1px solid #0a0a0a',
-    boxShadow: 'inset 0 1.5px 1px rgba(255,255,255,0.45), 0 2px 4px rgba(0,0,0,0.45)',
-    color: 'var(--terminal-on-accent)',
-    fontWeight: 700,
+    gap: 6,
+    height: 28,
+    boxSizing: 'border-box',
+    padding: '0 10px 0 8px',
+    borderRadius: 999,
+    background: 'var(--terminal-info-soft)',
+    border: '1px solid var(--terminal-info-border)',
+    color: 'var(--terminal-info)',
+    fontWeight: 600,
     fontSize: 12,
+    fontVariantNumeric: 'tabular-nums',
     textShadow: 'none',
-    letterSpacing: 0.3,
+    letterSpacing: 0,
     pointerEvents: 'auto',
     cursor: 'help',
   },
   shieldChipIcon: {
     flexShrink: 0,
-    filter: 'drop-shadow(0 1px 1px rgba(0,0,0,0.4))',
   },
   shieldChipText: {
     lineHeight: 1,
   },
   trophyBox: {
-    width: 34,
-    height: 34,
-    borderRadius: 8,
-    background: 'linear-gradient(180deg, #ffa22a 0%, #d87b1c 100%)',
-    border: '2.5px solid #1a1a1a',
-    boxShadow: 'inset 0 1.5px 1px rgba(255, 255, 255, 0.7), 0 3px 4px rgba(0, 0, 0, 0.5)',
+    width: 30,
+    height: 30,
+    borderRadius: 999,
+    background: 'var(--terminal-surface-muted)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 3,
     position: 'relative',
+    flexShrink: 0,
   },
   trophyImg: {
-    width: '75%',
-    height: '75%',
+    width: '65%',
+    height: '65%',
     objectFit: 'contain',
-    filter: 'invert(88%) sepia(87%) saturate(2224%) hue-rotate(334deg) brightness(105%) contrast(106%) drop-shadow(0 1px 1px rgba(0,0,0,0.4))',
+    filter: 'invert(88%) sepia(87%) saturate(2224%) hue-rotate(334deg) brightness(105%) contrast(106%)',
   },
   trophyBar: {
-    height: 26,
-    minWidth: 80,
-    background: 'rgba(0, 0, 0, 0.35)',
-    border: '1.5px solid #1a1a1a',
-    borderRadius: '0 6px 6px 0',
+    minWidth: 56,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    marginLeft: -4,
-    padding: '0 12px 0 12px',
     zIndex: 2,
-    boxShadow: '0 2px 4px rgba(0,0,0,0.4)',
   },
   trophiesText: {
-    fontSize: 16,
-    fontWeight: 700,
-    color: 'var(--terminal-on-accent)',
+    fontSize: 15,
+    fontWeight: 600,
+    color: 'var(--terminal-text)',
+    fontVariantNumeric: 'tabular-nums',
     textShadow: 'none',
-    letterSpacing: '0.5px',
+    letterSpacing: 0,
     width: '100%',
     textAlign: 'center',
   },

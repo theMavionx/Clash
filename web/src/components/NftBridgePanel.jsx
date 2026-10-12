@@ -1621,7 +1621,7 @@ function BridgeStatusModal({
 
           {pendingRelay && status === 'error' && (
             <div style={modalStyles.pendingBox}>
-              <div style={{ fontWeight: 700, marginBottom: 2 }}>Burn saved</div>
+              <div style={{ fontWeight: 600, marginBottom: 2 }}>Burn saved</div>
               <div style={{ fontSize: 12, opacity: 0.85 }}>
                 Burn: {shortAddr(pendingRelay.burnTxHash, 8, 6)}<br />
                 Retry mints on the destination — burn won't happen twice.
@@ -1683,10 +1683,10 @@ const localStyles = {
   },
   intro: { fontSize: 13, color: 'var(--terminal-text)', margin: '4px 0 8px', lineHeight: 1.4 },
   row: { display: 'flex', flexDirection: 'column', gap: 6 },
-  label: { fontSize: 12, fontWeight: 700, color: 'var(--terminal-text)', letterSpacing: 0.2 },
+  label: { fontSize: 12, fontWeight: 600, color: 'var(--terminal-text)', letterSpacing: 0.2 },
   chainPicker: { display: 'flex', flexWrap: 'wrap', gap: 6 },
   chainChip: {
-    padding: '6px 10px', borderRadius: 10, fontSize: 13, fontWeight: 600,
+    padding: '6px 10px', borderRadius: 999, fontSize: 13, fontWeight: 600,
     background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', color: 'var(--terminal-text)',
     cursor: 'pointer',
     display: 'inline-flex', alignItems: 'center', gap: 6,
@@ -1696,13 +1696,13 @@ const localStyles = {
   },
   chainChipDisabled: { opacity: 0.4, cursor: 'not-allowed' },
   walletChip: {
-    alignSelf: 'flex-start', padding: '6px 12px', borderRadius: 10, fontSize: 12,
+    alignSelf: 'flex-start', padding: '6px 12px', borderRadius: 999, fontSize: 12,
     background: 'var(--terminal-surface)', border: '1px solid var(--terminal-text-muted)', color: 'var(--terminal-text)',
     cursor: 'pointer', fontWeight: 600,
   },
   input: {
-    padding: '8px 10px', borderRadius: 8, border: '1px solid var(--terminal-border)',
-    background: 'var(--terminal-surface)', color: 'var(--terminal-text)', fontSize: 13, fontFamily: 'monospace',
+    padding: '8px 10px', borderRadius: 12, border: '1px solid var(--terminal-border)',
+    background: 'var(--terminal-surface)', color: 'var(--terminal-text)', fontSize: 13, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
     outline: 'none',
   },
   checkboxRow: {
@@ -1738,7 +1738,7 @@ const localStyles = {
     gap: 8, padding: '6px 8px', borderRadius: 10,
     background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)',
   },
-  batchPickerText: { fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)' },
+  batchPickerText: { fontSize: 11, fontWeight: 600, color: 'var(--terminal-text)' },
   batchPickerActions: { display: 'flex', gap: 6, flexShrink: 0 },
   miniBtn: uiButton('primary', { minHeight: 30, padding: '4px 8px', fontSize: 11 }),
   miniBtnMuted: uiButton('secondary', { minHeight: 30, padding: '4px 8px', fontSize: 11 }),
@@ -1764,7 +1764,7 @@ const localStyles = {
   nftCardActive: {
     border: '1px solid var(--terminal-text-muted)',
     background: 'var(--terminal-brand-border)',
-    boxShadow: '0 1px 2px rgba(0,0,0,0.18)',
+    boxShadow: 'none',
   },
   nftImg: {
     width: 72, height: 72, objectFit: 'cover', borderRadius: 6,
@@ -1772,10 +1772,10 @@ const localStyles = {
   },
   nftMeta: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    width: '100%', minWidth: 0, fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)',
+    width: '100%', minWidth: 0, fontSize: 11, fontWeight: 600, color: 'var(--terminal-text)',
   },
   nftId: {
-    fontFamily: 'monospace',
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
     flex: 1,
     minWidth: 0,
     textAlign: 'left',
@@ -1787,7 +1787,7 @@ const localStyles = {
 
   // ── Wizard chrome ─────────────────────────────────────────────────
   stepHeader: { display: 'flex', flexDirection: 'column', gap: 2, marginBottom: 4 },
-  stepTitle:  { fontSize: 17, fontWeight: 700, color: 'var(--terminal-text)' },
+  stepTitle:  { fontSize: 17, fontWeight: 600, color: 'var(--terminal-text)' },
   stepSubtitle: { fontSize: 11, color: 'var(--terminal-text-muted)', letterSpacing: 0.4, textTransform: 'uppercase' },
 
   stepDots: {
@@ -1797,7 +1797,7 @@ const localStyles = {
     width: 8, height: 8, borderRadius: '50%', background: 'var(--terminal-surface-subtle)',
     border: '1px solid var(--terminal-border)',
   },
-  stepDotActive: { background: 'var(--terminal-brand-border)', border: '1px solid var(--terminal-text-muted)', boxShadow: '0 0 0 2px rgba(255,217,122,0.4)' },
+  stepDotActive: { background: 'var(--terminal-brand-border)', border: '1px solid var(--terminal-text-muted)', boxShadow: 'none' },
   stepDotDone:   { background: 'var(--terminal-long)', border: '1px solid var(--terminal-long)' },
 
   connectBtn: uiButton('primary', { alignSelf: 'flex-start', minHeight: 38, padding: '8px 14px', fontSize: 13 }),
@@ -1806,9 +1806,9 @@ const localStyles = {
   nftCardLarge: {
     display: 'flex', alignItems: 'center', gap: 12,
     padding: 10, borderRadius: 14,
-    background: 'linear-gradient(180deg, var(--terminal-surface) 0%, var(--terminal-brand-soft) 100%)',
+    background: 'var(--terminal-surface)',
     border: '1px solid var(--terminal-border)',
-    boxShadow: '0 2px 6px rgba(95,58,33,0.08)',
+    boxShadow: 'none',
   },
   nftCardLargeImgWrap: {
     width: 80, height: 80, borderRadius: 12,
@@ -1823,13 +1823,13 @@ const localStyles = {
   nftCardLargeTitle: { fontSize: 15, fontWeight: 600, color: 'var(--terminal-text)' },
   nftCardLargeSub: { fontSize: 12, color: 'var(--terminal-text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   nftCardLargeSubText: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-  nftCardLargeLevel: { fontSize: 12, fontWeight: 700, color: '#b8860b' },
+  nftCardLargeLevel: { fontSize: 12, fontWeight: 600, color: 'var(--terminal-warning)' },
   batchCard: {
     display: 'flex', alignItems: 'center', gap: 12,
-    padding: 10, borderRadius: 14,
-    background: 'linear-gradient(180deg, var(--terminal-surface) 0%, var(--terminal-brand-soft) 100%)',
+    padding: 10, borderRadius: 16,
+    background: 'var(--terminal-surface)',
     border: '1px solid var(--terminal-border)',
-    boxShadow: '0 2px 6px rgba(95,58,33,0.08)',
+    boxShadow: 'none',
   },
   batchThumbStack: {
     position: 'relative',
@@ -1850,14 +1850,14 @@ const localStyles = {
     alignItems: 'center',
     justifyContent: 'center',
     color: 'var(--terminal-text)',
-    fontWeight: 700,
+    fontWeight: 600,
   },
   batchMeta: {
     display: 'flex', flexDirection: 'column', gap: 3, flex: 1, minWidth: 0,
   },
   batchIds: {
     fontSize: 11,
-    fontFamily: 'monospace',
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
     color: 'var(--terminal-text)',
     minWidth: 0,
     overflow: 'hidden',
@@ -1885,8 +1885,8 @@ const localStyles = {
     background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)',
     fontSize: 12, color: 'var(--terminal-text)',
   },
-  confirmLabel: { fontWeight: 700, marginRight: 6, color: 'var(--terminal-text-secondary)' },
-  confirmValue: { fontFamily: 'monospace', wordBreak: 'break-all' },
+  confirmLabel: { fontWeight: 600, marginRight: 6, color: 'var(--terminal-text-secondary)' },
+  confirmValue: { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', wordBreak: 'break-all' },
 };
 
 // ── Bridge progress modal styles ─────────────────────────────────────
@@ -1897,7 +1897,7 @@ const localStyles = {
 const modalStyles = {
   overlay: {
     position: 'fixed', inset: 0,
-    background: 'rgba(20, 12, 4, 0.55)',
+    background: 'var(--terminal-overlay)',
     backdropFilter: 'blur(2px)',
     WebkitBackdropFilter: 'blur(2px)',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -1906,8 +1906,8 @@ const modalStyles = {
   panel: {
     width: 380, maxWidth: '100%', maxHeight: '88vh',
     background: 'var(--terminal-surface)',
-    border: '1px solid var(--terminal-border)', borderRadius: 18,
-    boxShadow: '0 18px 50px rgba(0,0,0,0.45)',
+    border: '1px solid var(--terminal-border)', borderRadius: 16,
+    boxShadow: 'none',
     display: 'flex', flexDirection: 'column',
     fontFamily: 'inherit', overflow: 'hidden',
   },
@@ -1916,7 +1916,7 @@ const modalStyles = {
     padding: '12px 14px',
     background: 'var(--terminal-border)', borderBottom: '1px solid var(--terminal-border-strong)',
   },
-  title: { fontSize: 16, fontWeight: 700, color: 'var(--terminal-text)' },
+  title: { fontSize: 16, fontWeight: 600, color: 'var(--terminal-text)' },
   closeBtn: uiIconButton('danger', 30),
   body: {
     padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 12,
@@ -1933,17 +1933,17 @@ const modalStyles = {
   stepBubble: {
     width: 28, height: 28, borderRadius: '50%',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
-    fontSize: 13, fontWeight: 700, flexShrink: 0,
+    fontSize: 13, fontWeight: 600, flexShrink: 0,
     background: 'var(--terminal-surface-subtle)', color: 'var(--terminal-text-muted)', border: '1px solid var(--terminal-border)',
     transition: 'background 0.2s, border-color 0.2s',
   },
   stepBubble_pending: {},
   stepBubble_active: {
     background: 'var(--terminal-surface)', border: '1px solid var(--terminal-brand-strong)', color: 'var(--terminal-text)',
-    boxShadow: '0 0 0 3px rgba(255,217,122,0.4)',
+    boxShadow: 'none',
   },
   stepBubble_done: {
-    background: 'linear-gradient(180deg, var(--terminal-long-border) 0%, var(--terminal-long) 100%)',
+    background: 'var(--terminal-long-border)',
     border: '1px solid var(--terminal-long-strong)', color: 'var(--terminal-on-accent)',
   },
   stepBubble_error: {
@@ -1955,7 +1955,7 @@ const modalStyles = {
   stepLabel_done:   { color: 'var(--terminal-text)' },
   stepLabel_error:  { color: 'var(--terminal-short-strong)' },
   stepLabel_pending: {},
-  stepHint: { fontSize: 11, color: 'var(--terminal-text-muted)', fontWeight: 700 },
+  stepHint: { fontSize: 11, color: 'var(--terminal-text-muted)', fontWeight: 600 },
 
   // Tiny CSS spinner used in the "active" bubble. Rotation is driven by
   // the global `nft-mint-ring-spin` keyframes injected by NftMintPanel —
@@ -1965,7 +1965,7 @@ const modalStyles = {
     width: 12, height: 12, borderRadius: '50%',
     borderWidth: 1,
     borderStyle: 'solid',
-    borderColor: 'rgba(92,58,33,0.25)',
+    borderColor: 'var(--terminal-border)',
     borderTopColor: 'var(--terminal-text)',
     animation: 'nft-mint-ring-spin 0.9s linear infinite',
   },
@@ -1982,23 +1982,23 @@ const modalStyles = {
   batchIndex: {
     width: 20, height: 20, borderRadius: '50%',
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-    background: 'var(--terminal-border)', color: 'var(--terminal-text)', fontWeight: 700,
+    background: 'var(--terminal-border)', color: 'var(--terminal-text)', fontWeight: 600,
   },
   batchLabel: {
     minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-    fontFamily: 'monospace', fontWeight: 600,
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontWeight: 600,
   },
   batchPill: {
     padding: '2px 6px', borderRadius: 999,
     background: 'var(--terminal-surface-subtle)', color: 'var(--terminal-text-secondary)',
-    fontSize: 10, fontWeight: 700, textTransform: 'uppercase',
+    fontSize: 10, fontWeight: 600, textTransform: 'uppercase',
   },
   batchPillDone: { background: 'var(--terminal-long-soft)', color: 'var(--terminal-long-strong)' },
   batchPillError: { background: 'var(--terminal-short-soft)', color: 'var(--terminal-short-strong)' },
 
   resultBox: {
     padding: '10px 12px', borderRadius: 10,
-    background: 'linear-gradient(180deg, var(--terminal-long-soft) 0%, var(--terminal-long-soft) 100%)',
+    background: 'var(--terminal-long-soft)',
     border: '1px solid var(--terminal-long-border)', color: 'var(--terminal-long-strong)',
     display: 'flex', flexDirection: 'column', gap: 6,
   },
@@ -2007,7 +2007,7 @@ const modalStyles = {
     display: 'grid', gridTemplateColumns: 'auto 1fr', columnGap: 10, rowGap: 3,
     fontSize: 12,
   },
-  resultMono: { fontFamily: 'monospace', wordBreak: 'break-all' },
+  resultMono: { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', wordBreak: 'break-all' },
   batchResultGrid: {
     display: 'flex', flexDirection: 'column', gap: 4,
     fontSize: 11,
@@ -2015,7 +2015,7 @@ const modalStyles = {
   batchResultRow: {
     display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto minmax(0, 1fr)',
     gap: 8, alignItems: 'center',
-    padding: '4px 0', borderTop: '1px solid rgba(31, 109, 52, 0.18)',
+    padding: '4px 0', borderTop: '1px solid var(--terminal-long)',
   },
 
   pendingBox: {
@@ -2026,7 +2026,7 @@ const modalStyles = {
   errorBox: {
     padding: '8px 10px', borderRadius: 10,
     background: 'var(--terminal-short-soft)', border: '1px solid var(--terminal-short)', color: 'var(--terminal-short-strong)',
-    fontSize: 12, fontWeight: 700,
+    fontSize: 12, fontWeight: 600,
   },
 
   workingHint: {

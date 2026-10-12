@@ -41,8 +41,9 @@ test('button icons keep a stable palette across themes and pressed controls do n
   const css = read('src/components/FuturesTerminal.css');
   const theme = read('src/styles/theme.js');
   const actions = read('src/components/ActionButtons.jsx');
-  assert.equal((css.match(/--terminal-icon: #768399;/gu) || []).length, 2);
-  assert.equal((css.match(/--terminal-icon-active: #F26522;/gu) || []).length, 2);
+  assert.match(css, /--terminal-icon: #768399;/u);
+  assert.match(css, /--terminal-icon: #8d96a6;/u);
+  assert.equal((css.match(/--terminal-icon-active: #f26522;/giu) || []).length, 2);
   assert.match(css, /\.clash-ui-root button > svg,[\s\S]*?color: var\(--terminal-button-icon, currentColor\);/u);
   assert.doesNotMatch(css, /\.clash-ui-root button > svg,[\s\S]{0,220}?(?:filter|opacity):/u);
   assert.match(css, /\.futures-terminal-shell \.tab-btn > svg\s*\{[^}]*var\(--terminal-icon\)/su);
@@ -84,7 +85,7 @@ test('primary non-trading screens consume the shared theme tokens', () => {
 
 test('profile wallet rows stay legible in both interface themes', () => {
   const profile = read('src/components/ProfileModal.jsx');
-  assert.match(profile, /walletRow:[\s\S]*?background: 'var\(--terminal-surface-raised\)'[\s\S]*?border: '1px solid var\(--terminal-border-strong\)'/u);
+  assert.match(profile, /walletRow:[\s\S]*?background: 'var\(--terminal-surface-muted\)'[\s\S]*?border: '1px solid var\(--terminal-border\)'/u);
   assert.match(profile, /walletRowSub: \{ color: 'var\(--terminal-text-secondary\)'/u);
   assert.match(profile, /connectedChip:[\s\S]*?background: 'var\(--terminal-long-soft\)'[\s\S]*?border: '1px solid var\(--terminal-long-border\)'/u);
   assert.match(profile, /copied === wallet\.address \? 'var\(--terminal-long-soft\)' : 'var\(--terminal-surface-muted\)'/u);
@@ -99,10 +100,10 @@ test('shared button contract owns geometry, semantic tones, and icon controls', 
     assert.match(theme, new RegExp(`\\n  ${variant}: \\{`, 'u'), `missing ${variant} button variant`);
   }
   assert.match(theme, /minHeight: 40/u);
-  assert.match(theme, /borderRadius: 10/u);
+  assert.match(theme, /borderRadius: 999/u);
   assert.match(theme, /boxSizing: 'border-box'/u);
-  assert.match(theme, /const depth = variant === 'ghost' \? 'none' : 'var\(--terminal-shadow-control\)'/u);
-  assert.match(theme, /boxShadow: depth/u);
+  // ClashBot buttons are flat pills: no depth shadow on any variant.
+  assert.match(theme, /boxShadow: 'none'/u);
   assert.match(theme, /export const cartoonBtn = \(bg, border\) => uiButton\('primary'/u);
   for (const file of componentFiles()) {
     assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /cartoonBtn\(/u, `${path.relative(root, file)} bypasses the shared semantic variants`);
@@ -116,7 +117,8 @@ test('shared depth tokens add restrained volume in both themes', () => {
   assert.equal((shared.match(/--terminal-shadow-control:/gu) || []).length, 2);
   assert.equal((shared.match(/--terminal-shadow-card:/gu) || []).length, 2);
   assert.doesNotMatch(css, /\.clash-ui-root button \{[\s\S]{0,180}box-shadow:/u);
-  assert.match(player, /0 0 0 2px rgba\(255,255,255,0\.86\)/u);
+  assert.match(player, /boxShadow: 'var\(--terminal-shadow-card\)'/u);
+  assert.doesNotMatch(player, /inset 0 1\.5px|linear-gradient/u);
 });
 
 test('responsive controls keep equal geometry and independent click targets', () => {

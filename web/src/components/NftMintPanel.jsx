@@ -1362,7 +1362,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
             ) : (
             <>
             {rhNftOrders.filter(order => order.state !== 'expired').slice(0,3).map(order => (
-              <div key={order.id} role="status" style={{ padding: '10px 14px', marginBottom: 8, border: '1px solid #FFFFFF12', borderRadius: 10, fontSize: 13 }}>
+              <div key={order.id} role="status" style={{ padding: '10px 14px', marginBottom: 8, border: '1px solid var(--terminal-border)', borderRadius: 10, fontSize: 13 }}>
                 <strong>Dragon · CLASH on Robinhood</strong>
                 <div>{order.message}</div>
                 <small>Order {order.id}</small>
@@ -1386,10 +1386,10 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                   >
                     <span>{panelMobile ? (tab.mobileLabel || tab.label) : tab.label}</span>
                     {tab.id === 'clashsol' && clashSolClaimReady && (
-                      <span style={styles.shopTabClaimBadge}>CLAIM</span>
+                      <span style={styles.shopTabClaimBadge}>Claim</span>
                     )}
                     {tab.id === 'holder-gold' && holderGoldClaimReady && (
-                      <span style={styles.shopTabClaimBadge}>CLAIM</span>
+                      <span style={styles.shopTabClaimBadge}>Claim</span>
                     )}
                   </button>
                 );
@@ -1553,7 +1553,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                         Genesis supply {saleMintLocked ? '???' : formatCount(displayedTotalSupplyInfo.maxSupply)}
                       </span>
                       {saleMintSoldOut && (
-                        <span style={styles.soldOutPill}>SOLD OUT</span>
+                        <span style={styles.soldOutPill}>Sold out</span>
                       )}
                     </div>
                   </div>
@@ -1599,7 +1599,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                               </span>
                               <span style={styles.optionPrice}>{displayPrice}</span>
                               {displayDealText && <span style={styles.optionDealText}>{displayDealText}</span>}
-                              {saleMintSoldOut && <span style={styles.soonBadge}>SOLD OUT</span>}
+                              {saleMintSoldOut && <span style={styles.soonBadge}>Sold out</span>}
                             </button>
                           );
                         })}
@@ -2369,7 +2369,7 @@ function DemonKingUpgradePanel({
               ? `Level ${displayNextLevel}: ${wins} / ${requiredWins} wins`
               : `Level ${displayNextLevel}: NFT level verified`}
           </span>
-          <span style={{ fontSize: 12, color: winsReady ? 'var(--terminal-long)' : 'var(--terminal-warning)', fontWeight: 700 }}>
+          <span style={{ fontSize: 12, color: winsReady ? 'var(--terminal-long)' : 'var(--terminal-warning)', fontWeight: 600 }}>
             {winsReady ? 'Wins requirement complete' : 'Win more battles to unlock the NFT upgrade'}
           </span>
         </div>
@@ -2417,7 +2417,7 @@ function DemonKingUpgradePanel({
       )}
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--terminal-text)' }}>Your upgradeable NFTs</div>
+        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--terminal-text)' }}>Your upgradeable NFTs</div>
         {tokens.length > 0 ? (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
             {tokens.map((tokenItem) => {
@@ -2746,7 +2746,7 @@ function ResourceCardSkeleton({ isMobile }) {
   const btnStyle = {
     ...styles.resourceBuyBtn,
     ...(isMobile ? styles.resourceBuyBtnMobile : null),
-    background: 'linear-gradient(90deg, var(--terminal-border) 0%, var(--terminal-surface-subtle) 50%, var(--terminal-border) 100%)',
+    background: 'var(--terminal-border)',
     backgroundSize: '200% 100%',
     color: 'transparent',
     border: '1px solid var(--terminal-border)',
@@ -3063,7 +3063,7 @@ async function handleSolanaMint({ selected, solWallet, config, setBusy, setNotic
 }
 
 function getPrimaryState({ selected, soldOut = false, evmAddress, evmOnBase, solAddress, aptosAddress, preparingPrivySolWallet, solanaConfigured, solanaSaleActive, busy }) {
-  if (soldOut) return { label: 'SOLD OUT', glyph: '!', ready: false };
+  if (soldOut) return { label: 'Sold out', glyph: '!', ready: false };
   if (busy === 'mint') return { label: 'Minting...', glyph: '...', ready: false };
   if (busy === selected.chain) return { label: 'Preparing...', glyph: '...', ready: false };
   // Bridge-only fallback (no direct mint endpoint on this chain). Used if
@@ -3435,14 +3435,12 @@ const overlayStyles = {
   },
   backdrop: {
     position: 'absolute', inset: 0,
-    background:
-      'radial-gradient(circle at 50% 45%, rgba(255,228,160,0.85) 0%, rgba(253,248,231,0.92) 55%, rgba(212,200,176,0.96) 100%)',
+    background: 'transparent',
   },
   rays: {
     position: 'absolute',
     width: 720, height: 720,
-    background:
-      'conic-gradient(from 0deg, rgba(255,217,120,0.55) 0deg 12deg, transparent 12deg 30deg, rgba(255,200,90,0.45) 30deg 42deg, transparent 42deg 60deg, rgba(255,217,120,0.55) 60deg 72deg, transparent 72deg 90deg, rgba(255,200,90,0.45) 90deg 102deg, transparent 102deg 120deg, rgba(255,217,120,0.55) 120deg 132deg, transparent 132deg 150deg, rgba(255,200,90,0.45) 150deg 162deg, transparent 162deg 180deg, rgba(255,217,120,0.55) 180deg 192deg, transparent 192deg 210deg, rgba(255,200,90,0.45) 210deg 222deg, transparent 222deg 240deg, rgba(255,217,120,0.55) 240deg 252deg, transparent 252deg 270deg, rgba(255,200,90,0.45) 270deg 282deg, transparent 282deg 300deg, rgba(255,217,120,0.55) 300deg 312deg, transparent 312deg 330deg, rgba(255,200,90,0.45) 330deg 342deg, transparent 342deg 360deg)',
+    background: 'transparent',
     filter: 'blur(2px)',
     opacity: 0.85,
   },
@@ -3450,8 +3448,7 @@ const overlayStyles = {
     position: 'absolute',
     width: 360, height: 360,
     borderRadius: '50%',
-    background:
-      'radial-gradient(circle, rgba(255,235,150,0.95) 0%, rgba(255,210,90,0.55) 35%, rgba(255,210,90,0) 70%)',
+    background: 'transparent',
     mixBlendMode: 'screen',
   },
   content: {
@@ -3473,11 +3470,10 @@ const overlayStyles = {
   card: {
     position: 'relative',
     width: 140, height: 140,
-    borderRadius: 18,
+    borderRadius: 16,
     border: '1px solid var(--terminal-border)',
-    background: 'radial-gradient(circle at 50% 35%, var(--terminal-surface-subtle) 0%, var(--terminal-border-strong) 60%, var(--terminal-border-strong) 100%)',
-    boxShadow:
-      'inset 0 4px 10px rgba(0,0,0,0.2), 0 12px 26px rgba(0,0,0,0.35), 0 0 32px rgba(255,210,90,0.5)',
+    background: 'var(--terminal-surface-subtle)',
+    boxShadow: 'none',
     overflow: 'hidden',
     transformStyle: 'preserve-3d',
     willChange: 'transform',
@@ -3495,7 +3491,7 @@ const overlayStyles = {
     justifyContent: 'center',
     color: 'var(--terminal-text)',
     fontSize: 82,
-    fontWeight: 700,
+    fontWeight: 600,
     lineHeight: 1,
     textShadow: 'none',
   },
@@ -3520,8 +3516,7 @@ const overlayStyles = {
     position: 'absolute',
     top: 0, left: '-60%',
     width: '50%', height: '100%',
-    background:
-      'linear-gradient(115deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.65) 50%, rgba(255,255,255,0) 100%)',
+    background: 'transparent',
     transform: 'skewX(-18deg)',
     pointerEvents: 'none',
   },
@@ -3534,13 +3529,13 @@ const overlayStyles = {
     borderColor: 'transparent',
     borderTopColor: 'var(--terminal-text)',
     borderRightColor: 'var(--terminal-text)',
-    boxShadow: '0 0 18px rgba(92,58,33,0.35)',
+    boxShadow: 'none',
   },
   ringInner: {
     position: 'absolute',
     width: 200, height: 200,
     borderRadius: '50%',
-    border: '1px dashed rgba(92,58,33,0.35)',
+    border: '1px dashed var(--terminal-border)',
     opacity: 0.7,
   },
   copy: {
@@ -3549,15 +3544,15 @@ const overlayStyles = {
     maxWidth: 360,
   },
   titleSpinner: {
-    fontSize: 18, fontWeight: 700, color: 'var(--terminal-text)',
+    fontSize: 18, fontWeight: 600, color: 'var(--terminal-text)',
     textShadow: 'none',
     letterSpacing: 0,
   },
   titleSuccess: {
-    fontSize: 26, fontWeight: 700, color: 'var(--terminal-text)',
+    fontSize: 26, fontWeight: 600, color: 'var(--terminal-text)',
     textShadow: 'none',
-    letterSpacing: 1,
-    textTransform: 'uppercase',
+    letterSpacing: '-0.02em',
+    textTransform: 'none',
   },
   subtitle: {
     fontSize: 13, fontWeight: 600, color: 'var(--terminal-text-secondary)',
@@ -3566,18 +3561,18 @@ const overlayStyles = {
     fontSize: 13, fontWeight: 600, color: 'var(--terminal-text-secondary)',
   },
   hint: {
-    fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-muted)',
+    fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-muted)',
     marginTop: 2,
     maxWidth: 280,
   },
   txChip: {
     marginTop: 4,
     padding: '4px 10px',
-    borderRadius: 9,
+    borderRadius: 999,
     background: 'var(--terminal-surface)',
     border: '1px solid var(--terminal-border)',
     color: 'var(--terminal-text)',
-    fontSize: 11, fontWeight: 700,
+    fontSize: 11, fontWeight: 600,
     letterSpacing: 0.5,
   },
   actionRow: {
@@ -3598,8 +3593,8 @@ const MINT_ANIM_CSS = `
   .nft-mint-backdrop { animation: nft-mint-backdrop-sheen 3.4s ease-in-out infinite; }
 
   @keyframes nft-mint-card-pulse {
-    0%, 100% { transform: scale(1) rotateY(0deg); box-shadow: inset 0 4px 10px rgba(0,0,0,0.2), 0 12px 26px rgba(0,0,0,0.35), 0 0 22px rgba(255,210,90,0.45); }
-    50%      { transform: scale(1.04) rotateY(6deg); box-shadow: inset 0 4px 10px rgba(0,0,0,0.2), 0 12px 26px rgba(0,0,0,0.4), 0 0 36px rgba(255,210,90,0.7); }
+    0%, 100% { transform: scale(1) rotateY(0deg); box-shadow: none; }
+    50%      { transform: scale(1.04) rotateY(6deg); box-shadow: none; }
   }
   .nft-mint-card-pulse { animation: nft-mint-card-pulse 1.9s ease-in-out infinite; }
 
@@ -3644,9 +3639,9 @@ const MINT_ANIM_CSS = `
   .nft-shop-shimmer {
     background-image: linear-gradient(
       90deg,
-      rgba(212, 200, 176, 0.55) 0%,
-      rgba(255, 248, 223, 0.95) 50%,
-      rgba(212, 200, 176, 0.55) 100%
+      var(--terminal-surface-muted) 0%,
+      var(--terminal-surface-raised) 50%,
+      var(--terminal-surface-muted) 100%
     );
     background-size: 200% 100%;
     animation: nft-shop-shimmer 1.4s ease-in-out infinite;
@@ -3724,7 +3719,7 @@ const MINT_ANIM_CSS = `
     border-radius: 12px;
     padding: 2px;
     overflow: hidden;
-    box-shadow: 0 3px 9px rgba(0,0,0,0.16);
+    box-shadow: none;
   }
   .nft-chain-glow::before {
     content: '';
@@ -3743,33 +3738,13 @@ const MINT_ANIM_CSS = `
   /* Base brand blue, dimmed a notch so the ring sits on cream cards
      without glowing too hot. */
   .nft-chain-glow-base::before {
-    background: conic-gradient(
-      from 0deg,
-      rgba(0,48,160,0) 0deg,
-      rgba(0,48,160,0.95) 70deg,
-      rgba(40,100,210,1) 90deg,
-      rgba(0,48,160,0.95) 110deg,
-      rgba(0,48,160,0) 180deg,
-      rgba(0,48,160,0.85) 250deg,
-      rgba(40,100,210,1) 270deg,
-      rgba(0,48,160,0.85) 290deg,
-      rgba(0,48,160,0) 360deg
-    );
+    background: var(--terminal-border-strong);
   }
 
   /* Solana's brand gradient pushed darker (deeper purple → forest green)
      so the ring reads as branded rather than neon. */
   .nft-chain-glow-solana::before {
-    background: conic-gradient(
-      from 0deg,
-      rgba(108,40,200,0) 0deg,
-      rgba(108,40,200,1) 60deg,
-      rgba(20,170,110,1) 130deg,
-      rgba(108,40,200,0) 200deg,
-      rgba(108,40,200,1) 260deg,
-      rgba(20,170,110,1) 320deg,
-      rgba(108,40,200,0) 360deg
-    );
+    background: var(--terminal-border-strong);
   }
 
   /* ── Parchment scrollbar — shared with the rest of the shop UI ──
@@ -3778,7 +3753,7 @@ const MINT_ANIM_CSS = `
 
 const styles = {
   overlay: {
-    position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.62)',
+    position: 'fixed', inset: 0, background: 'var(--terminal-overlay)',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     zIndex: 250, pointerEvents: 'all',
     padding: 12,
@@ -3792,9 +3767,9 @@ const styles = {
     // panel. Capped at 92vh for short viewports.
     height: 'min(600px, 92vh)',
     background: 'var(--terminal-surface)',
-    border: '1px solid var(--terminal-border)', borderRadius: 22,
-    boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
-    overflow: 'hidden', fontFamily: '"Inter","Segoe UI",sans-serif',
+    border: '1px solid var(--terminal-border)', borderRadius: 16,
+    boxShadow: 'none',
+    overflow: 'hidden', fontFamily: 'inherit',
     display: 'flex', flexDirection: 'column',
     // Required so the absolute-positioned MintProgressOverlay covers the
     // whole panel including the header without leaking outside the rounded
@@ -3809,7 +3784,7 @@ const styles = {
   },
   headerSpacer: { width: 34, height: 34 },
   title: {
-    fontSize: 20, fontWeight: 700, color: 'var(--terminal-text)',
+    fontSize: 20, fontWeight: 600, color: 'var(--terminal-text)',
     letterSpacing: 0, textAlign: 'center',
     textShadow: 'none',
   },
@@ -3851,7 +3826,7 @@ const styles = {
   textInput: {
     minHeight: 38,
     border: '1px solid var(--terminal-border)',
-    borderRadius: 10,
+    borderRadius: 12,
     background: 'var(--terminal-surface)',
     color: 'var(--terminal-text)',
     fontSize: 13,
@@ -3868,7 +3843,7 @@ const styles = {
     marginBottom: 8,
     padding: 8,
     border: '1px solid var(--terminal-border)',
-    borderRadius: 12,
+    borderRadius: 16,
     background: 'var(--terminal-surface)',
   },
   chainSwitchBtn: {
@@ -3877,7 +3852,7 @@ const styles = {
     alignItems: 'center',
     gap: 8,
     border: '1px solid var(--terminal-border)',
-    borderRadius: 10,
+    borderRadius: 999,
     background: 'var(--terminal-surface)',
     color: 'var(--terminal-text)',
     cursor: 'pointer',
@@ -3901,11 +3876,11 @@ const styles = {
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 7,
+    borderRadius: 999,
     background: 'var(--terminal-text)',
     color: 'var(--terminal-surface)',
     fontSize: 9,
-    fontWeight: 700,
+    fontWeight: 600,
     letterSpacing: 0.4,
   },
   chainLogoBadge: {
@@ -3917,12 +3892,12 @@ const styles = {
     border: '1px solid var(--terminal-border)',
     color: 'var(--terminal-text)',
     fontSize: 9,
-    fontWeight: 700,
+    fontWeight: 600,
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
-    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.75), 0 2px 4px rgba(0,0,0,0.12)',
+    boxShadow: 'none',
   },
   chainLogoBadgeSmall: {
     flex: '0 0 auto',
@@ -3930,15 +3905,15 @@ const styles = {
     height: 22,
     borderRadius: '50%',
     background: 'var(--terminal-surface)',
-    border: '1px solid rgba(92,58,33,0.22)',
+    border: '1px solid var(--terminal-border)',
     color: 'var(--terminal-text)',
     fontSize: 8,
-    fontWeight: 700,
+    fontWeight: 600,
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
-    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.75)',
+    boxShadow: 'none',
   },
   chainLogoImg: {
     width: '82%',
@@ -3956,7 +3931,7 @@ const styles = {
   },
   chainSwitchName: {
     fontSize: 12,
-    fontWeight: 700,
+    fontWeight: 600,
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
@@ -4046,7 +4021,7 @@ const styles = {
   // though it stays visible behind the dim wash.
   comingSoonOverlay: {
     position: 'absolute', inset: 0,
-    background: 'rgba(20, 12, 4, 0.62)',
+    background: 'var(--terminal-overlay)',
     backdropFilter: 'blur(2px)',
     WebkitBackdropFilter: 'blur(2px)',
     display: 'flex', flexDirection: 'column',
@@ -4058,18 +4033,18 @@ const styles = {
   },
   comingSoonBadge: {
     padding: '5px 12px', borderRadius: 999,
-    background: 'linear-gradient(180deg, var(--terminal-brand-border) 0%, var(--terminal-brand-strong) 100%)',
+    background: 'var(--terminal-brand-border)',
     border: '1px solid var(--terminal-text)', color: 'var(--terminal-text)',
-    fontSize: 11, fontWeight: 700, letterSpacing: 1.2,
-    boxShadow: '0 4px 10px rgba(0,0,0,0.35), inset 0 1px 0 var(--terminal-chip-overlay)',
+    fontSize: 11, fontWeight: 600, letterSpacing: '0.06em',
+    boxShadow: 'none',
   },
   comingSoonTitle: {
-    color: 'var(--terminal-surface)', fontSize: 22, fontWeight: 700,
+    color: 'var(--terminal-surface)', fontSize: 22, fontWeight: 600,
     textShadow: 'none',
     lineHeight: 1.1,
   },
   comingSoonSub: {
-    color: 'rgba(255,247,223,0.85)', fontSize: 13, fontWeight: 700,
+    color: 'var(--terminal-text-secondary)', fontSize: 13, fontWeight: 600,
     maxWidth: 320, lineHeight: 1.45,
     textShadow: 'none',
   },
@@ -4080,7 +4055,7 @@ const styles = {
     display: 'flex',
     gap: 6,
     padding: 4,
-    borderRadius: 12,
+    borderRadius: 999,
     background: 'var(--terminal-surface-subtle)',
     border: '1px solid var(--terminal-border)',
     overflowX: 'auto',
@@ -4092,11 +4067,11 @@ const styles = {
     flex: '1 0 auto',
     padding: '0 9px',
     border: '1px solid transparent',
-    borderRadius: 9,
+    borderRadius: 999,
     background: 'transparent',
     color: 'var(--terminal-text-secondary)',
     fontSize: 12,
-    fontWeight: 700,
+    fontWeight: 600,
     cursor: 'pointer',
     fontFamily: 'inherit',
     whiteSpace: 'nowrap',
@@ -4114,7 +4089,7 @@ const styles = {
     color: 'var(--terminal-warning)',
     fontSize: 10,
     lineHeight: 1,
-    fontWeight: 800,
+    fontWeight: 600,
   },
   shopTabBtnActive: {
     background: 'var(--terminal-brand-soft)',
@@ -4149,9 +4124,9 @@ const styles = {
     width: 120, height: 120,
     boxSizing: 'border-box',
     borderRadius: 18,
-    background: 'radial-gradient(circle at 50% 35%, var(--terminal-surface-subtle) 0%, var(--terminal-border-strong) 60%, var(--terminal-border-strong) 100%)',
+    background: 'var(--terminal-surface-subtle)',
     border: '1px solid var(--terminal-border)',
-    boxShadow: 'inset 0 4px 10px rgba(0,0,0,0.18), 0 8px 18px rgba(0,0,0,0.28)',
+    boxShadow: 'none',
     overflow: 'hidden',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
   },
@@ -4161,11 +4136,11 @@ const styles = {
     boxSizing: 'border-box',
     borderRadius: 14,
     border: '1px solid var(--terminal-border)',
-    boxShadow: 'inset 0 3px 7px rgba(0,0,0,0.18), 0 5px 12px rgba(0,0,0,0.24)',
+    boxShadow: 'none',
   },
   heroGlow: {
     position: 'absolute', inset: -4,
-    background: 'radial-gradient(circle at 50% 40%, rgba(255,225,140,0.55) 0%, rgba(255,225,140,0) 60%)',
+    background: 'transparent',
     pointerEvents: 'none',
   },
   heroImg: {
@@ -4185,14 +4160,14 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    background: 'radial-gradient(circle at 50% 38%, var(--terminal-surface) 0%, var(--terminal-border-strong) 62%, var(--terminal-text-secondary) 100%)',
+    background: 'var(--terminal-surface)',
   },
   mysteryHeroMark: {
     position: 'relative',
     zIndex: 1,
     color: 'var(--terminal-text)',
     fontSize: 70,
-    fontWeight: 700,
+    fontWeight: 600,
     lineHeight: 1,
     textShadow: 'none',
   },
@@ -4205,7 +4180,7 @@ const styles = {
     position: 'relative',
     width: '76%', height: '76%',
     objectFit: 'contain',
-    filter: 'drop-shadow(0 4px 8px rgba(92,58,33,0.35))',
+    filter: 'drop-shadow(0 4px 8px var(--terminal-surface-muted))',
   },
   summary: {
     minWidth: 0,
@@ -4218,7 +4193,7 @@ const styles = {
     gap: 4,
   },
   heroName: {
-    fontSize: 22, fontWeight: 700, color: 'var(--terminal-text)',
+    fontSize: 22, fontWeight: 600, color: 'var(--terminal-text)',
     letterSpacing: 0,
     lineHeight: 1,
   },
@@ -4230,8 +4205,8 @@ const styles = {
     textOverflow: 'ellipsis',
   },
   editionTag: {
-    fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-secondary)',
-    textTransform: 'uppercase', letterSpacing: 0,
+    fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-secondary)',
+    textTransform: 'none', letterSpacing: 0,
   },
   marketEditionTagMobile: {
     fontSize: 10,
@@ -4263,7 +4238,7 @@ const styles = {
     borderRadius: 9,
     border: '1px solid var(--terminal-border)',
     background: 'var(--terminal-surface)',
-    boxShadow: 'inset 0 1px 0 var(--terminal-chip-overlay), 0 2px 5px rgba(92,58,33,0.12)',
+    boxShadow: 'none',
   },
   marketStatMobile: {
     minHeight: 38,
@@ -4272,9 +4247,9 @@ const styles = {
   },
   marketStatLabel: {
     fontSize: 9,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-text-muted)',
-    textTransform: 'uppercase',
+    textTransform: 'none',
     letterSpacing: 0.3,
     lineHeight: 1,
   },
@@ -4282,7 +4257,7 @@ const styles = {
     minWidth: 0,
     color: 'var(--terminal-text)',
     fontSize: 15,
-    fontWeight: 700,
+    fontWeight: 600,
     lineHeight: 1.05,
     whiteSpace: 'nowrap',
     overflow: 'hidden',
@@ -4298,14 +4273,14 @@ const styles = {
     width: 'fit-content',
     marginTop: 2,
     padding: '5px 10px',
-    borderRadius: 8,
+    borderRadius: 999,
     background: 'var(--terminal-text)',
     color: 'var(--terminal-surface)',
     border: '1px solid var(--terminal-text)',
     fontSize: 11,
-    fontWeight: 700,
+    fontWeight: 600,
     letterSpacing: 0,
-    boxShadow: '0 2px 5px rgba(0,0,0,0.25)',
+    boxShadow: 'none',
   },
   soldOutBox: {
     borderRadius: 8,
@@ -4313,7 +4288,7 @@ const styles = {
     background: 'var(--terminal-surface-subtle)',
     color: 'var(--terminal-text)',
     fontSize: 13,
-    fontWeight: 700,
+    fontWeight: 600,
     lineHeight: 1.35,
     textAlign: 'center',
     padding: '10px 12px',
@@ -4322,27 +4297,27 @@ const styles = {
     minHeight: 106,
     borderRadius: 8,
     border: '1px dashed var(--terminal-text-secondary)',
-    background: 'linear-gradient(180deg, var(--terminal-surface) 0%, var(--terminal-border) 100%)',
+    background: 'var(--terminal-surface)',
     color: 'var(--terminal-text)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.65)',
+    boxShadow: 'none',
   },
   mysteryLockedMark: {
     fontSize: 30,
-    fontWeight: 700,
+    fontWeight: 600,
     letterSpacing: 0,
   },
   contextChip: {
     alignSelf: 'flex-start',
     padding: '4px 8px',
-    borderRadius: 8,
+    borderRadius: 999,
     background: 'var(--terminal-surface-subtle)',
     border: '1px solid var(--terminal-border)',
     color: 'var(--terminal-text-secondary)',
     fontSize: 10,
-    fontWeight: 700,
+    fontWeight: 600,
   },
   // Wrapper that pairs the chain-switcher pill with a separate
   // disconnect button so each interactive zone has a single, obvious
@@ -4357,26 +4332,26 @@ const styles = {
   chainChip: {
     display: 'inline-flex', alignItems: 'center', gap: 6,
     padding: '4px 8px 4px 4px',
-    borderRadius: 9,
-    background: 'linear-gradient(180deg, var(--terminal-surface) 0%, var(--terminal-border) 100%)',
+    borderRadius: 999,
+    background: 'var(--terminal-surface)',
     border: '1px solid var(--terminal-border)',
     color: 'var(--terminal-text)',
     fontSize: 12,
-    fontWeight: 700,
+    fontWeight: 600,
     cursor: 'pointer',
-    boxShadow: 'inset 0 1px 0 var(--terminal-chip-overlay), 0 2px 4px rgba(0,0,0,0.12)',
+    boxShadow: 'none',
     transition: 'filter 0.12s',
   },
   chainChipBadge: {
     background: 'var(--terminal-text)',
     color: 'var(--terminal-surface)',
-    fontSize: 9, fontWeight: 700,
+    fontSize: 9, fontWeight: 600,
     padding: '2px 6px',
-    borderRadius: 6,
+    borderRadius: 999,
     letterSpacing: 0.5,
   },
   chainChipName: {
-    fontSize: 12, fontWeight: 700,
+    fontSize: 12, fontWeight: 600,
     letterSpacing: 0.3,
   },
   chainChipArrow: {
@@ -4388,7 +4363,7 @@ const styles = {
   chainChipDisconnect: {
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
     width: 26, padding: 0,
-    borderRadius: 9,
+    borderRadius: 999,
     background: 'var(--terminal-surface)',
     border: '1px solid var(--terminal-border)',
     color: 'var(--terminal-text)',
@@ -4411,7 +4386,7 @@ const styles = {
     justifyContent: 'center',
     gap: 1,
     border: '1px solid var(--terminal-border)',
-    borderRadius: 11,
+    borderRadius: 999,
     background: 'var(--terminal-surface)',
     color: 'var(--terminal-text-secondary)',
     cursor: 'pointer',
@@ -4426,7 +4401,7 @@ const styles = {
   },
   shopChainLabel: {
     fontSize: 13,
-    fontWeight: 700,
+    fontWeight: 600,
     letterSpacing: 0.3,
   },
   shopChainSub: {
@@ -4448,7 +4423,7 @@ const styles = {
     justifyContent: 'center',
     gap: 8,
     border: '1px solid var(--terminal-border-strong)',
-    borderRadius: 9,
+    borderRadius: 999,
     background: 'var(--terminal-surface)',
     color: 'var(--terminal-text-secondary)',
     cursor: 'pointer',
@@ -4464,7 +4439,7 @@ const styles = {
   shopPaymentLabel: {
     display: 'block',
     fontSize: 12,
-    fontWeight: 700,
+    fontWeight: 600,
     lineHeight: 1.05,
   },
   shopPaymentSub: {
@@ -4500,7 +4475,7 @@ const styles = {
     alignItems: 'center',
     justifyContent: 'center',
     fontSize: 8,
-    fontWeight: 700,
+    fontWeight: 600,
     letterSpacing: 0.2,
     flex: '0 0 auto',
   },
@@ -4515,10 +4490,10 @@ const styles = {
     alignItems: 'center',
     gap: 10,
     border: '1px solid var(--terminal-border)',
-    borderRadius: 13,
-    background: 'linear-gradient(180deg, var(--terminal-surface) 0%, var(--terminal-border) 100%)',
+    borderRadius: 16,
+    background: 'var(--terminal-surface)',
     padding: 10,
-    boxShadow: 'inset 0 2px 0 var(--terminal-chip-overlay), 0 4px 10px rgba(0,0,0,0.12)',
+    boxShadow: 'none',
   },
   // Mobile: icon + text on one row, full-width button on a row below. The
   // 3-column desktop layout collapses to 2 columns + a wrapping button so
@@ -4547,12 +4522,12 @@ const styles = {
     width: '80%',
     height: '80%',
     borderRadius: 12,
-    background: 'rgba(212, 200, 176, 0.55)',
+    background: 'var(--terminal-surface-muted)',
   },
   resourceSkeletonLine: {
     height: 12,
     borderRadius: 6,
-    background: 'rgba(212, 200, 176, 0.55)',
+    background: 'var(--terminal-surface-muted)',
     marginBottom: 4,
   },
   resourceIconImg: {
@@ -4574,7 +4549,7 @@ const styles = {
   resourceTitle: {
     color: 'var(--terminal-text)',
     fontSize: 14,
-    fontWeight: 700,
+    fontWeight: 600,
     lineHeight: 1.1,
   },
   resourceSubtitle: {
@@ -4593,7 +4568,7 @@ const styles = {
   resourcePrice: {
     color: 'var(--terminal-long-strong)',
     fontSize: 12,
-    fontWeight: 700,
+    fontWeight: 600,
   },
   resourceMeta: {
     padding: '2px 6px',
@@ -4601,7 +4576,7 @@ const styles = {
     background: 'var(--terminal-surface-subtle)',
     color: 'var(--terminal-text-secondary)',
     fontSize: 10,
-    fontWeight: 700,
+    fontWeight: 600,
   },
   quantityStepper: {
     display: 'flex',
@@ -4612,7 +4587,7 @@ const styles = {
     borderRadius: 12,
     background: 'var(--terminal-surface)',
     padding: '8px 10px',
-    boxShadow: 'inset 0 2px 0 var(--terminal-chip-overlay)',
+    boxShadow: 'none',
   },
   quantityStepperCompact: {
     display: 'flex',
@@ -4624,8 +4599,8 @@ const styles = {
   quantityLabel: {
     color: 'var(--terminal-text)',
     fontSize: 12,
-    fontWeight: 700,
-    textTransform: 'uppercase',
+    fontWeight: 600,
+    textTransform: 'none',
   },
   quantityControls: {
     display: 'inline-flex',
@@ -4640,24 +4615,24 @@ const styles = {
   quantityInput: {
     width: 52,
     height: 30,
-    borderRadius: 9,
+    borderRadius: 12,
     border: '1px solid var(--terminal-border)',
     background: 'var(--terminal-surface)',
     color: 'var(--terminal-text)',
     fontSize: 14,
-    fontWeight: 700,
+    fontWeight: 600,
     textAlign: 'center',
     fontFamily: 'inherit',
   },
   quantityInputCompact: {
     width: 42,
     height: 24,
-    borderRadius: 7,
+    borderRadius: 12,
     border: '1px solid var(--terminal-border)',
     background: 'var(--terminal-surface)',
     color: 'var(--terminal-text)',
     fontSize: 12,
-    fontWeight: 700,
+    fontWeight: 600,
     textAlign: 'center',
     fontFamily: 'inherit',
   },
@@ -4688,9 +4663,9 @@ const styles = {
   supplyBox: {
     border: '1px solid var(--terminal-border)',
     borderRadius: 13,
-    background: 'linear-gradient(180deg, var(--terminal-surface) 0%, var(--terminal-border) 100%)',
+    background: 'var(--terminal-surface)',
     padding: '10px 11px',
-    boxShadow: 'inset 0 2px 0 var(--terminal-chip-overlay), 0 4px 10px rgba(0,0,0,0.12)',
+    boxShadow: 'none',
   },
   supplyTop: {
     display: 'flex',
@@ -4703,8 +4678,8 @@ const styles = {
     minWidth: 0,
     color: 'var(--terminal-text)',
     fontSize: 13,
-    fontWeight: 700,
-    textTransform: 'uppercase',
+    fontWeight: 600,
+    textTransform: 'none',
   },
   supplyRemaining: {
     flex: '0 0 auto',
@@ -4713,7 +4688,7 @@ const styles = {
     color: 'var(--terminal-surface)',
     padding: '4px 8px',
     fontSize: 11,
-    fontWeight: 700,
+    fontWeight: 600,
   },
   progressTrack: {
     position: 'relative',
@@ -4722,13 +4697,13 @@ const styles = {
     border: '1px solid var(--terminal-text-muted)',
     background: 'var(--terminal-border-strong)',
     overflow: 'hidden',
-    boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.25)',
+    boxShadow: 'none',
   },
   progressFill: {
     height: '100%',
     borderRadius: 7,
-    background: 'linear-gradient(90deg, var(--terminal-long) 0%, var(--terminal-orange) 58%, var(--terminal-orange) 100%)',
-    boxShadow: 'inset 0 2px 0 var(--terminal-chip-overlay), 0 0 8px rgba(245,207,87,0.55)',
+    background: 'var(--terminal-long)',
+    boxShadow: 'none',
     transition: 'width 280ms ease',
   },
   supplyMeta: {
@@ -4738,7 +4713,7 @@ const styles = {
     marginTop: 7,
     color: 'var(--terminal-text-secondary)',
     fontSize: 11,
-    fontWeight: 700,
+    fontWeight: 600,
   },
   supplyOverview: {
     display: 'grid',
@@ -4747,9 +4722,9 @@ const styles = {
     gap: 8,
     border: '1px solid var(--terminal-border)',
     borderRadius: 13,
-    background: 'linear-gradient(180deg, var(--terminal-surface) 0%, var(--terminal-border) 100%)',
+    background: 'var(--terminal-surface)',
     padding: '10px 11px',
-    boxShadow: 'inset 0 2px 0 var(--terminal-chip-overlay), 0 4px 10px rgba(0,0,0,0.12)',
+    boxShadow: 'none',
   },
   chainSupplySide: {
     minWidth: 0,
@@ -4760,18 +4735,18 @@ const styles = {
   },
   chainSupplyLabel: {
     fontSize: 11,
-    fontWeight: 700,
-    textTransform: 'uppercase',
+    fontWeight: 600,
+    textTransform: 'none',
     color: 'var(--terminal-text-secondary)',
   },
   chainSupplyValue: {
     fontSize: 15,
-    fontWeight: 700,
+    fontWeight: 600,
     lineHeight: 1,
   },
   chainSupplyMeta: {
     fontSize: 10,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-text-secondary)',
   },
   totalSupply: {
@@ -4783,25 +4758,25 @@ const styles = {
     padding: '6px 8px',
     borderRadius: 12,
     background: 'var(--terminal-text)',
-    boxShadow: 'inset 0 2px 0 rgba(255,255,255,0.18), 0 3px 8px rgba(0,0,0,0.18)',
+    boxShadow: 'none',
     color: 'var(--terminal-surface)',
   },
   totalSupplyLabel: {
     fontSize: 9,
-    fontWeight: 700,
-    textTransform: 'uppercase',
+    fontWeight: 600,
+    textTransform: 'none',
     color: 'var(--terminal-orange)',
   },
   totalSupplyValue: {
     fontSize: 32,
     lineHeight: 0.95,
-    fontWeight: 700,
+    fontWeight: 600,
     letterSpacing: 0,
     textShadow: 'none',
   },
   totalSupplyMeta: {
     fontSize: 10,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-brand-soft)',
   },
   // Promotional banner highlighting the CLASH-token discount. Sits
@@ -4814,9 +4789,9 @@ const styles = {
     width: '100%',
     padding: '10px 12px',
     borderRadius: 12,
-    background: 'linear-gradient(135deg, var(--terminal-brand-soft) 0%, var(--terminal-brand-border) 50%, var(--terminal-orange) 100%)',
+    background: 'var(--terminal-brand-soft)',
     border: '1px solid var(--terminal-brand-strong)',
-    boxShadow: '0 6px 14px rgba(194,133,27,0.28), inset 0 1px 0 var(--terminal-chip-overlay)',
+    boxShadow: 'none',
     fontFamily: 'inherit',
     textAlign: 'left',
     cursor: 'pointer',
@@ -4829,7 +4804,7 @@ const styles = {
     overflow: 'hidden',
     background: 'var(--terminal-text)',
     border: '1px solid var(--terminal-brand-soft)',
-    boxShadow: '0 3px 8px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.25)',
+    boxShadow: 'none',
   },
   clashBannerLogoImg: {
     display: 'block',
@@ -4845,7 +4820,7 @@ const styles = {
   },
   clashBannerTitle: {
     fontSize: 13,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-text)',
     letterSpacing: 0.2,
     textShadow: 'none',
@@ -4856,8 +4831,8 @@ const styles = {
     color: 'var(--terminal-text)',
   },
   clashBannerSubAccent: {
-    color: '#1B5E20',
-    fontWeight: 700,
+    color: 'var(--terminal-long)',
+    fontWeight: 600,
   },
   // Small section heading used above the chain grid (and reusable for
   // any future "pick something" rows). Matches the brown medieval tone
@@ -4872,9 +4847,9 @@ const styles = {
   },
   sectionHeaderText: {
     fontSize: 13,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-text)',
-    textTransform: 'uppercase',
+    textTransform: 'none',
     letterSpacing: 0.6,
   },
   sectionHeaderHint: {
@@ -4891,7 +4866,7 @@ const styles = {
   chainBtn: {
     width: '100%',
     border: 'none',
-    borderRadius: 9,
+    borderRadius: 999,
     // Same parchment colour as the panel so the inner card visually
     // melts into the background — only the rotating gradient ring
     // remains visible. Padding is dialled down so the ring hugs the
@@ -4914,32 +4889,32 @@ const styles = {
   chainBadge: {
     justifySelf: 'start',
     padding: '5px 8px',
-    borderRadius: 9,
+    borderRadius: 999,
     background: 'var(--terminal-text)',
     color: 'var(--terminal-surface)',
     fontSize: 10,
-    fontWeight: 700,
+    fontWeight: 600,
   },
   chainTitle: {
     fontSize: 20,
-    fontWeight: 700,
+    fontWeight: 600,
     letterSpacing: 0,
     lineHeight: 1,
   },
   chainSubtitle: {
     fontSize: 11,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-text-secondary)',
     letterSpacing: 0.3,
   },
   chainReady: {
     fontSize: 11,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-long-strong)',
   },
   chainConnect: {
     fontSize: 11,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-warning)',
   },
   selectedChainBar: {
@@ -4954,15 +4929,15 @@ const styles = {
   selectedChainText: {
     color: 'var(--terminal-text)',
     fontSize: 15,
-    fontWeight: 700,
+    fontWeight: 600,
   },
   changeBtn: {
     border: '1px solid var(--terminal-text-muted)',
-    borderRadius: 9,
+    borderRadius: 999,
     background: 'var(--terminal-surface)',
     color: 'var(--terminal-text)',
     fontSize: 11,
-    fontWeight: 700,
+    fontWeight: 600,
     padding: '5px 8px',
     cursor: 'pointer',
     fontFamily: 'inherit',
@@ -4995,14 +4970,14 @@ const styles = {
   walletLabel: {
     fontSize: 10,
     color: 'var(--terminal-text-secondary)',
-    fontWeight: 700,
-    textTransform: 'uppercase',
+    fontWeight: 600,
+    textTransform: 'none',
     letterSpacing: 0.3,
   },
   walletValue: {
     fontSize: 14,
     color: 'var(--terminal-text)',
-    fontWeight: 700,
+    fontWeight: 600,
     lineHeight: 1,
   },
   walletHint: {
@@ -5019,7 +4994,7 @@ const styles = {
   optionBtn: {
     position: 'relative',
     border: '1px solid var(--terminal-border)',
-    borderRadius: 12,
+    borderRadius: 999,
     background: 'var(--terminal-surface)',
     padding: '10px',
     display: 'grid',
@@ -5053,9 +5028,9 @@ const styles = {
     background: 'transparent',
     color: 'var(--terminal-text)',
     fontSize: 10,
-    fontWeight: 700,
+    fontWeight: 600,
     textAlign: 'center',
-    textTransform: 'uppercase',
+    textTransform: 'none',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -5074,32 +5049,32 @@ const styles = {
     display: 'inline-block',
     marginLeft: 6,
     padding: '1px 6px',
-    borderRadius: 6,
+    borderRadius: 999,
     background: 'var(--terminal-long)',
     color: 'var(--terminal-surface)',
     fontSize: 9,
-    fontWeight: 700,
+    fontWeight: 600,
     letterSpacing: 0.4,
     verticalAlign: '1px',
-    boxShadow: '0 1px 2px rgba(0,0,0,0.25)',
+    boxShadow: 'none',
   },
   optionMain: {
     minWidth: 0,
     fontSize: 15,
-    fontWeight: 700,
+    fontWeight: 600,
     lineHeight: 1,
   },
   optionPrice: {
     fontSize: 12,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-long-strong)',
   },
   optionDealText: {
     minWidth: 0,
     fontSize: 10,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-warning)',
-    textTransform: 'uppercase',
+    textTransform: 'none',
     lineHeight: 1,
   },
   quoteStrip: {
@@ -5109,7 +5084,7 @@ const styles = {
     background: 'var(--terminal-surface)',
     color: 'var(--terminal-text)',
     fontSize: 12,
-    fontWeight: 700,
+    fontWeight: 600,
     padding: '8px 10px',
     display: 'flex',
     alignItems: 'center',
@@ -5124,14 +5099,14 @@ const styles = {
     flex: '0 0 auto',
     width: 42,
     height: 42,
-    borderRadius: 10,
+    borderRadius: 999,
     border: '1px solid var(--terminal-border)',
     background: 'var(--terminal-surface)',
     overflow: 'hidden',
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
-    boxShadow: '0 2px 5px rgba(0,0,0,0.16)',
+    boxShadow: 'none',
   },
   nftTokenImg: {
     width: '100%',
@@ -5143,12 +5118,12 @@ const styles = {
     position: 'absolute',
     top: 6,
     right: 7,
-    borderRadius: 8,
+    borderRadius: 999,
     background: 'var(--terminal-text)',
     color: 'var(--terminal-surface)',
     padding: '3px 6px',
     fontSize: 9,
-    fontWeight: 700,
+    fontWeight: 600,
   },
   mintBtn: {
     ...uiButton('neutral', { width: '100%', minHeight: 44, padding: 12, fontSize: 14 }),
@@ -5169,7 +5144,7 @@ const styles = {
     alignItems: 'center',
     justifyContent: 'center',
     fontSize: 13,
-    fontWeight: 700,
+    fontWeight: 600,
     overflow: 'hidden',
     padding: 0,
   },
@@ -5195,7 +5170,7 @@ const styles = {
     background: 'var(--terminal-long-soft)',
     color: 'var(--terminal-long-strong)',
     fontSize: 12,
-    fontWeight: 700,
+    fontWeight: 600,
     padding: '8px 10px',
     textAlign: 'center',
   },

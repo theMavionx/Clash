@@ -811,7 +811,7 @@ const mapHandleToBot = (
         ? `Nado: 0 quotes — floor $${NADO_MIN_ORDER_USD}/order; free ≈$${avail.toFixed(2)} needs ≥~$${need} (venue min, not quota)`
         : `Nado: 0 quotes — Trade Size ≥$${NADO_MIN_ORDER_USD} and free margin ≥~$${need} (venue floor, not quota)`;
     } else if (exchangeKey === 'katana') {
-      lastAction = 'Katana: 0 quotes — reconnect API key/secret + one-tap signer from Launch New Bot';
+      lastAction = 'Katana: 0 quotes — reconnect API key/secret + one-tap signer from Launch new bot';
     } else if (exchangeKey === 'decibel') {
       const avail = typeof bal?.available === 'number' ? bal.available : null;
       const why = normalizeOstiumErrorText(
@@ -1339,7 +1339,7 @@ function CalmPlanCard({ plan, onApply }) {
             width: '100%',
             minHeight: 40,
             fontSize: 13,
-            fontWeight: 700,
+            fontWeight: 600,
           }}
           onClick={onApply}
         >
@@ -1369,24 +1369,43 @@ function BotCard({ bot, expanded, onToggle, onStart, onStop, onDelete }) {
     <div style={{ ...S.botCard, ...(expanded ? S.botCardExpanded : {}) }}>
       <button type="button" style={S.cardMainButton} onClick={() => onToggle(bot.id)} aria-expanded={expanded}>
         <div style={S.cardTop}>
-          <ExchangeMarkStack exchangeIds={bot.exchangeKeys} size={44} framed={false} />
+          <div style={S.cardLogo}>
+            <ExchangeMarkStack exchangeIds={bot.exchangeKeys} size={38} framed={false} />
+          </div>
           <div style={S.cardTitleBlock}>
             <div style={S.cardTitleRow}>
               <strong style={S.cardTitle}>{type.name}</strong>
-              <span style={{ ...S.statusPill, ...statusStyle }}>
-                {bot.status}
-              </span>
+              <span style={S.cardChip}>{type.code}</span>
             </div>
-            <span style={S.cardSub}>{bot.market} on <strong>{bot.exchange}</strong> / {type.code}</span>
+            <span style={S.cardSub}>{bot.market} on <strong style={S.cardSubStrong}>{bot.exchange}</strong></span>
           </div>
+          <span style={S.statusInline}>
+            <span style={{ ...S.statusDot, ...statusStyle }} aria-hidden="true" />
+            <span style={S.statusLabel}>{bot.status}</span>
+          </span>
           <span style={S.expandIcon}>{expanded ? '−' : '+'}</span>
+        </div>
+        <div style={S.cardProgress}>
+          <div style={S.cardProgressTop}>
+            <span style={S.cardProgressValue}>{money(bot.tradeSize)}</span>
+            <span style={S.cardProgressMeta}>
+              {Number(bot.maxPosition) > 0 ? `of ${money(bot.maxPosition)} max position` : 'No position cap'}
+            </span>
+          </div>
+          <div style={S.progressTrack}>
+            <div style={{
+              ...S.progressFill,
+              ...(isRunning ? {} : S.progressFillIdle),
+              width: `${Number(bot.maxPosition) > 0 ? Math.max(0, Math.min(100, (Number(bot.tradeSize) / Number(bot.maxPosition)) * 100)) : 0}%`,
+            }} />
+          </div>
         </div>
         <div style={S.metricGrid}>
           <div style={S.metric}>
             <span style={S.metricLabel}>{bot.pnlLabel || 'uPnL'}</span>
             <strong style={{
               ...S.metricValue,
-              color: pnlKnown ? (pnlPositive ? colors.long : colors.short) : '#78909C',
+              color: pnlKnown ? (pnlPositive ? colors.long : colors.short) : 'var(--terminal-text-muted)',
             }}>
               {pnlKnown ? signedMoney(bot.pnl) : '—'}
             </strong>
@@ -1396,14 +1415,16 @@ function BotCard({ bot, expanded, onToggle, onStart, onStop, onDelete }) {
             <strong style={{
               ...S.metricValue,
               color: bot.balanceTone === 'error' ? colors.short
-                : bot.balanceTone === 'warn' ? '#E65100' : undefined,
+                : bot.balanceTone === 'warn' ? 'var(--terminal-warning)' : undefined,
             }}>
               {bot.balanceLabel || '—'}
             </strong>
           </div>
           <div style={S.metric}>
-            <span style={S.metricLabel}>Trade Size</span>
-            <strong style={S.metricValue}>{money(bot.tradeSize)}</strong>
+            <span style={S.metricLabel}>Fees</span>
+            <strong style={S.metricValue}>
+              {bot.sessionSummary ? money(bot.sessionSummary.feesUsd) : '—'}
+            </strong>
           </div>
         </div>
         {!expanded && isRunning && (
@@ -1412,7 +1433,7 @@ function BotCard({ bot, expanded, onToggle, onStart, onStop, onDelete }) {
             {' · '}
             Pos <strong>{bot.inventory}</strong>
             {bot.inBackoff ? (
-              <> · <strong style={{ color: '#E65100' }}>backoff</strong></>
+              <> · <strong style={{ color: 'var(--terminal-warning)' }}>backoff</strong></>
             ) : null}
           </div>
         )}
@@ -1425,7 +1446,7 @@ function BotCard({ bot, expanded, onToggle, onStart, onStop, onDelete }) {
               style={{ ...uiButton('danger'), minHeight: 32, padding: '6px 14px', fontSize: 12 }}
               onClick={(e) => { e.stopPropagation(); onStop(bot.id); }}
             >
-              Stop Bot
+              Stop bot
             </button>
           ) : (
             <>
@@ -1434,7 +1455,7 @@ function BotCard({ bot, expanded, onToggle, onStart, onStop, onDelete }) {
                 style={{ ...uiButton('primary'), minHeight: 32, padding: '6px 14px', fontSize: 12 }}
                 onClick={(e) => { e.stopPropagation(); onStart(bot.id); }}
               >
-                ▶ Start Bot
+                Start bot
               </button>
               {canDelete && onDelete ? (
                 <button
@@ -1462,7 +1483,7 @@ function BotCard({ bot, expanded, onToggle, onStart, onStop, onDelete }) {
               <div style={S.detailRows}>
                 <span>Margin <strong>{bot.balanceLabel || '—'}</strong></span>
                 {bot.balanceDetail ? (
-                  <span style={{ fontSize: 11, color: '#6b5340' }}>{bot.balanceDetail}</span>
+                  <span style={{ fontSize: 11, color: 'var(--terminal-text-muted)' }}>{bot.balanceDetail}</span>
                 ) : null}
                 <span>Max position <strong>{money(bot.maxPosition)}</strong></span>
               </div>
@@ -1582,7 +1603,7 @@ function BotCard({ bot, expanded, onToggle, onStart, onStop, onDelete }) {
                 style={{ ...uiButton('danger'), minHeight: 36, padding: '8px 16px', fontSize: 13 }}
                 onClick={(e) => { e.stopPropagation(); onStop(bot.id); }}
               >
-                Stop Bot
+                Stop bot
               </button>
             ) : (
               <>
@@ -1790,8 +1811,8 @@ function BotsPanel({ onClose }) {
       readyForLaunch: launchable && accountActive,
       setupSupported,
       status: !launchable
-        ? (syncedAccount ? 'CONNECTED' : 'UNAVAILABLE')
-        : (!setupSupported && !accountActive) ? 'UNAVAILABLE' : accountActive ? 'READY' : 'NOT CONNECTED',
+        ? (syncedAccount ? 'Connected' : 'Unavailable')
+        : (!setupSupported && !accountActive) ? 'Unavailable' : accountActive ? 'Ready' : 'Not connected',
     };
   }).sort((a, b) => {
     const rank = (option) => {
@@ -1977,21 +1998,21 @@ function BotsPanel({ onClose }) {
 
   const selectedConnectionState = useMemo(() => {
     if (gameAuthScanning || !scanCompleted) {
-      return { id: 'checking', label: 'CHECKING', hint: 'Checking browser credentials and synced account…', style: S.connectionChecking };
+      return { id: 'checking', label: 'Checking', hint: 'Checking browser credentials and synced account…', style: S.connectionChecking };
     }
     if (selectedExchangeOption?.readyForLaunch || selectedSyncedAccount?.status === 'active') {
-      return { id: 'active', label: 'ACTIVE', hint: 'Account is active. Continue when you are ready.', style: S.connectionActive };
+      return { id: 'active', label: 'Active', hint: 'Account is active. Continue when you are ready.', style: S.connectionActive };
     }
     if (selectedSyncedAccount) {
-      return { id: 'inactive', label: 'INACTIVE', hint: 'This synced account is disabled. Enable it to continue.', style: S.connectionInactive };
+      return { id: 'inactive', label: 'Inactive', hint: 'This synced account is disabled. Enable it to continue.', style: S.connectionInactive };
     }
     if (selectedGameAuthRow?.ready) {
-      return { id: 'ready', label: 'READY TO SYNC', hint: selectedGameAuthRow.hint || 'Credentials found. Connect the bot to sync them.', style: S.connectionReady };
+      return { id: 'ready', label: 'Ready to sync', hint: selectedGameAuthRow.hint || 'Credentials found. Connect the bot to sync them.', style: S.connectionReady };
     }
     if (selectedGameAuthRow?.partial) {
-      return { id: 'partial', label: 'PARTIAL', hint: selectedGameAuthRow.error || 'Complete the missing credential below.', style: S.connectionPartial };
+      return { id: 'partial', label: 'Partial', hint: selectedGameAuthRow.error || 'Complete the missing credential below.', style: S.connectionPartial };
     }
-    return { id: 'missing', label: 'MISSING', hint: selectedGameAuthRow?.error || 'No credentials found. Complete setup below.', style: S.connectionMissing };
+    return { id: 'missing', label: 'Missing', hint: selectedGameAuthRow?.error || 'No credentials found. Complete setup below.', style: S.connectionMissing };
   }, [gameAuthScanning, scanCompleted, selectedExchangeOption, selectedSyncedAccount, selectedGameAuthRow]);
 
   const handleExchangeSelect = useCallback((exchangeId) => {
@@ -3216,7 +3237,7 @@ function BotsPanel({ onClose }) {
     const parsed = parseStrategyInstanceId(id);
     const missing = parsed.exchanges.filter((ex) => !accountActiveForExchange(syncedAccounts, ex));
     if (missing.length > 0) {
-      setNotice(`Connect an active ${missing.map((e) => e.toUpperCase()).join(' + ')} account from Launch New Bot first.`);
+      setNotice(`Connect an active ${missing.map((e) => e.toUpperCase()).join(' + ')} account from Launch new bot first.`);
       return;
     }
     if (parsed.exchanges.some((ex) => ex.toLowerCase() === 'grvt')) {
@@ -3646,6 +3667,12 @@ function BotsPanel({ onClose }) {
 
   const renderDashboard = () => (
     <>
+      <div style={S.dashHeading}>
+        <div style={{ minWidth: 0 }}>
+          <h2 style={S.dashTitle}>Trading bots</h2>
+          <p style={S.dashSubtitle}>Deploy market makers and track their live performance.</p>
+        </div>
+      </div>
       {notice && (
         <button type="button" style={S.notice} onClick={() => setNotice('')}>
           {notice}
@@ -3666,8 +3693,8 @@ function BotsPanel({ onClose }) {
           </button>
         </div>
         <button type="button" style={{ ...uiButton('primary'), ...S.launchButton }} onClick={openLaunch}>
-          <RobotGlyph size={22} color="var(--terminal-surface)" />
-          Launch New Bot
+          Launch new bot
+          <span style={S.launchButtonPlus} aria-hidden="true">+</span>
         </button>
       </div>
 
@@ -3681,29 +3708,29 @@ function BotsPanel({ onClose }) {
         <>
       <div style={S.summaryGrid} aria-label="Bot summary">
         <div style={S.summaryCard}>
-          <span style={S.metricLabel}>My Bots</span>
+          <span style={S.summaryLabel}>My bots</span>
           <strong style={S.summaryValue}>{bots.length}</strong>
         </div>
         <div style={S.summaryCard}>
-          <span style={S.metricLabel}>Running</span>
+          <span style={S.summaryLabel}>Running</span>
           <strong style={S.summaryValue}>{activeCount}</strong>
         </div>
         <div style={S.summaryCard}>
-          <span style={S.metricLabel}>Open Quotes</span>
+          <span style={S.summaryLabel}>Open quotes</span>
           <strong style={S.summaryValue}>{globalActiveOrders}</strong>
         </div>
         <div style={S.summaryCard}>
-          <span style={S.metricLabel}>Vol 24h</span>
+          <span style={S.summaryLabel}>Volume 24h</span>
           <strong style={S.summaryValue}>{volume24hUsd > 0 ? formatVolumeUsd(volume24hUsd) : '—'}</strong>
         </div>
         <div style={S.summaryCard}>
-          <span style={S.metricLabel}>Cost / $1M</span>
+          <span style={S.summaryLabel}>Cost / $1M</span>
           <strong style={S.summaryValue}>
             {liveCostPer1M != null ? `~$${Math.round(liveCostPer1M)}` : '—'}
           </strong>
         </div>
         <div style={S.summaryCard}>
-          <span style={S.metricLabel}>Net PnL</span>
+          <span style={S.summaryLabel}>Net PnL</span>
           <strong style={{ ...S.summaryValue, color: mockPnl >= 0 ? colors.long : colors.short }}>
             {portfolioPnl != null ? signedMoney(mockPnl) : '—'}
           </strong>
@@ -3712,7 +3739,8 @@ function BotsPanel({ onClose }) {
 
       {bots.length > 0 ? (
         <section aria-labelledby="my-bots-heading">
-          <h3 id="my-bots-heading" style={S.myBotsTitle}>My Bots</h3>
+          <h3 id="my-bots-heading" style={S.myBotsTitle}>Active deployments</h3>
+          <p style={S.myBotsMeta}>Showing {bots.length} {bots.length === 1 ? 'bot' : 'bots'}</p>
           <div style={S.botGrid}>
             {bots.map((bot) => (
               <BotCard
@@ -3733,7 +3761,7 @@ function BotsPanel({ onClose }) {
           <h3 style={S.emptyLaunchTitle}>Launch your first market maker</h3>
           <p className="bots-empty-copy" style={S.emptyLaunchCopy}>Choose an exchange, set your limits, and your bot will appear here.</p>
           <button type="button" style={{ ...uiButton('primary'), ...S.emptyLaunchButton }} onClick={openLaunch}>
-            Launch New Bot
+            Launch new bot
           </button>
         </div>
       )}
@@ -3779,7 +3807,7 @@ function BotsPanel({ onClose }) {
         </div>
         <button type="button" style={{ ...uiButton('primary'), ...S.launchButton }} onClick={openLaunch}>
           <RobotGlyph size={22} color="var(--terminal-surface)" />
-          Launch New Bot
+          Launch new bot
         </button>
       </div>
       <p style={S.blockedHint}>
@@ -3844,7 +3872,7 @@ function BotsPanel({ onClose }) {
           </div>
           <button type="button" style={{ ...uiButton('primary'), ...S.launchButton }} onClick={openLaunch}>
             <RobotGlyph size={22} color="var(--terminal-surface)" />
-            Launch New Bot
+            Launch new bot
           </button>
         </div>
 
@@ -3872,14 +3900,14 @@ function BotsPanel({ onClose }) {
                     ? S.connectionPartial
                     : S.connectionMissing;
             const statusLabel = active
-              ? 'ACTIVE'
+              ? 'Active'
               : syncedAccount
-                ? 'INACTIVE'
+                ? 'Inactive'
                 : authRow?.ready
-                  ? 'READY'
+                  ? 'Ready'
                   : authRow?.partial
-                    ? 'NEEDS KEY'
-                    : 'MISSING';
+                    ? 'Needs key'
+                    : 'Missing';
             return (
               <div
                 key={dex.id}
@@ -4560,7 +4588,7 @@ function BotsPanel({ onClose }) {
                   }}
                   onClick={() => setSelectedType(bot.id)}
                 >
-                  <div style={{ ...S.botAvatar, background: `linear-gradient(180deg, ${bot.accent} 0%, ${bot.accentDark} 100%)` }}>
+                  <div style={{ ...S.botAvatar, background: 'var(--terminal-surface-muted)' }}>
                     <RobotGlyph size={28} color="var(--terminal-surface)" />
                   </div>
                   <div style={S.strategyText}>
@@ -4606,7 +4634,7 @@ function BotsPanel({ onClose }) {
                 Check the exchanges to hedge between. Bot verifies free margin on both, then runs funding-flat DCA on {DCA_DEFAULT_SYMBOL}.
               </p>
               {dcaVenueOptions.length < 2 ? (
-                <p style={{ ...S.stepCopy, color: '#B45309', marginTop: 0 }}>
+                <p style={{ ...S.stepCopy, color: 'var(--terminal-warning)', marginTop: 0 }}>
                   Connect at least two funding venues (Hyperliquid, Pacifica, Decibel) under Accounts / Launch.
                 </p>
               ) : (
@@ -4625,8 +4653,8 @@ function BotsPanel({ onClose }) {
                           gap: 10,
                           padding: '10px 12px',
                           borderRadius: 12,
-                          border: checked ? '2px solid #1E88E5' : '1px solid #D6C7A8',
-                          background: checked ? 'rgba(30,136,229,0.08)' : '#FFFCF5',
+                          border: checked ? '2px solid var(--terminal-orange)' : '1px solid var(--terminal-border)',
+                          background: checked ? 'var(--terminal-info-soft)' : 'var(--terminal-surface-muted)',
                           cursor: 'pointer',
                         }}
                       >
@@ -4655,7 +4683,7 @@ function BotsPanel({ onClose }) {
                 <span style={S.marketPickerHint}>Select exactly two venues.</span>
               )}
               {dcaDepositIssues.length > 0 && (
-                <p style={{ ...S.stepCopy, color: '#B45309', marginTop: 8 }}>
+                <p style={{ ...S.stepCopy, color: 'var(--terminal-warning)', marginTop: 8 }}>
                   {dcaDepositIssues.join(' · ')}
                 </p>
               )}
@@ -4834,7 +4862,7 @@ function BotsPanel({ onClose }) {
           </div>
           <div style={S.reviewCard}>
             <div style={S.cardTop}>
-              <div style={{ ...S.botAvatar, background: `linear-gradient(180deg, ${selectedBot.accent} 0%, ${selectedBot.accentDark} 100%)` }}>
+              <div style={{ ...S.botAvatar, background: 'var(--terminal-surface-muted)' }}>
                 <RobotGlyph size={30} color="var(--terminal-surface)" />
               </div>
               <div style={S.cardTitleBlock}>
@@ -4930,7 +4958,7 @@ const STYLE = `
   }
   .bots-panel button:focus-visible {
     outline: none;
-    box-shadow: 0 0 0 3px rgba(30, 136, 229, 0.32) !important;
+    box-shadow: 0 0 0 3px var(--terminal-brand-soft) !important;
   }
   .bots-range {
     width: 100%;
@@ -4938,7 +4966,7 @@ const STYLE = `
     cursor: pointer;
   }
   .bots-range::-webkit-slider-thumb {
-    box-shadow: 0 2px 0 rgba(0,0,0,0.28);
+    box-shadow: none;
   }
   .bots-market-select {
     width: 100%;
@@ -4953,7 +4981,7 @@ const STYLE = `
   }
   .bots-focusable:focus-visible {
     outline: none !important;
-    box-shadow: 0 0 0 3px rgba(30, 136, 229, 0.32) !important;
+    box-shadow: 0 0 0 3px var(--terminal-brand-soft) !important;
   }
   .bots-step-page h2:focus-visible {
     outline: 3px solid var(--terminal-info);
@@ -4988,7 +5016,7 @@ const STYLE = `
   .bots-inline-setup input:focus-visible,
   .bots-inline-setup select:focus-visible {
     outline: none !important;
-    box-shadow: 0 0 0 3px rgba(30, 136, 229, 0.32) !important;
+    box-shadow: 0 0 0 3px var(--terminal-brand-soft) !important;
   }
   .bots-spinner {
     animation: botsSpin 0.8s linear infinite;
@@ -5049,16 +5077,16 @@ const S = {
     right: 'clamp(12px, 1.25vw, 24px)',
     bottom: 118,
     width: 'min(760px, calc(100vw - 32px))',
-    background: 'var(--terminal-surface-subtle)',
+    background: 'var(--terminal-canvas)',
     border: '1px solid var(--terminal-border)',
-    borderRadius: 24,
+    borderRadius: 16,
     display: 'flex',
     flexDirection: 'column',
     pointerEvents: 'auto',
     overflow: 'hidden',
     zIndex: 101,
-    boxShadow: '0 14px 36px rgba(0,0,0,0.45)',
-    fontFamily: '"Inter","Segoe UI",sans-serif',
+    boxShadow: 'var(--terminal-shadow-card)',
+    fontFamily: 'inherit',
     boxSizing: 'border-box',
   },
   panelMobile: {
@@ -5072,9 +5100,9 @@ const S = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: '8px 12px',
-    background: 'var(--terminal-border)',
-    borderBottom: '1px solid var(--terminal-border-strong)',
+    padding: '12px 16px',
+    background: 'var(--terminal-surface)',
+    borderBottom: '1px solid var(--terminal-border)',
     flexShrink: 0,
   },
   headerBrand: {
@@ -5105,16 +5133,14 @@ const S = {
   },
   headerTitle: {
     fontSize: 18,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-text)',
     lineHeight: 1,
   },
   headerSub: {
-    fontSize: 11,
-    fontWeight: 600,
-    color: 'var(--terminal-text-secondary)',
-    textTransform: 'uppercase',
-    letterSpacing: 0.4,
+    fontSize: 12,
+    fontWeight: 500,
+    color: 'var(--terminal-text-muted)',
     marginTop: 3,
   },
   closeButton: uiIconButton('danger', 32, { fontSize: 16, lineHeight: 1 }),
@@ -5123,22 +5149,22 @@ const S = {
     minHeight: 0,
     display: 'flex',
     flexDirection: 'column',
-    gap: 10,
-    padding: 12,
+    gap: 16,
+    padding: 16,
     overflowY: 'auto',
     overflowX: 'hidden',
-    background: 'var(--terminal-surface)',
+    background: 'var(--terminal-canvas)',
   },
   notice: {
     borderWidth: 1,
     borderStyle: 'solid',
-    borderColor: 'var(--terminal-long)',
-    borderRadius: 10,
-    background: 'rgba(67,160,71,0.14)',
-    color: 'var(--terminal-long-strong)',
-    fontSize: 12,
-    fontWeight: 600,
-    padding: '8px 10px',
+    borderColor: 'var(--terminal-long-border)',
+    borderRadius: 12,
+    background: 'var(--terminal-long-soft)',
+    color: 'var(--terminal-long)',
+    fontSize: 13,
+    fontWeight: 500,
+    padding: '10px 12px',
     textAlign: 'left',
     display: 'flex',
     alignItems: 'center',
@@ -5147,34 +5173,47 @@ const S = {
     cursor: 'pointer',
   },
   noticeClose: {
-    fontWeight: 700,
+    fontWeight: 600,
     opacity: 0.7,
   },
   noticeError: {
-    borderColor: 'var(--terminal-short)',
+    borderColor: 'var(--terminal-short-border)',
     background: 'var(--terminal-short-soft)',
-    color: 'var(--terminal-short-strong)',
+    color: 'var(--terminal-short)',
   },
   summaryGrid: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))',
-    gap: 8,
+    gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+    gap: 12,
   },
   summaryCard: {
-    background: 'var(--terminal-surface-subtle)',
+    background: 'var(--terminal-surface)',
     border: '1px solid var(--terminal-border)',
-    borderRadius: 10,
-    padding: '9px 10px',
+    borderRadius: 16,
+    padding: 16,
+    minHeight: 96,
     display: 'flex',
     flexDirection: 'column',
-    gap: 2,
+    justifyContent: 'space-between',
+    gap: 8,
     minWidth: 0,
+    boxShadow: 'var(--terminal-shadow-card)',
+  },
+  summaryLabel: {
+    fontSize: 13,
+    fontWeight: 500,
+    color: 'var(--terminal-text-muted)',
   },
   summaryValue: {
     color: 'var(--terminal-text)',
-    fontSize: 22,
-    fontWeight: 700,
+    fontSize: 24,
+    fontWeight: 600,
     lineHeight: 1,
+    letterSpacing: '-0.02em',
+    fontVariantNumeric: 'tabular-nums',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
   },
   dashboardLoading: {
     flex: 1,
@@ -5195,6 +5234,26 @@ const S = {
     borderTopColor: 'var(--terminal-long)',
     marginBottom: 5,
   },
+  dashHeading: {
+    display: 'flex',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  dashTitle: {
+    margin: 0,
+    color: 'var(--terminal-text)',
+    fontSize: 28,
+    fontWeight: 600,
+    letterSpacing: '-0.02em',
+    lineHeight: 1.1,
+  },
+  dashSubtitle: {
+    margin: '6px 0 0',
+    color: 'var(--terminal-text-muted)',
+    fontSize: 14,
+    fontWeight: 500,
+  },
   toolbar: {
     display: 'flex',
     alignItems: 'center',
@@ -5204,60 +5263,80 @@ const S = {
   },
   segment: {
     display: 'flex',
-    gap: 3,
-    padding: 3,
-    background: 'var(--terminal-surface-subtle)',
+    gap: 4,
+    padding: 4,
+    background: 'var(--terminal-surface-muted)',
     border: '1px solid var(--terminal-border)',
-    borderRadius: 8,
+    borderRadius: 999,
   },
   segmentButton: {
     borderWidth: 1,
     borderStyle: 'solid',
     borderColor: 'transparent',
     background: 'transparent',
-    color: 'var(--terminal-text-secondary)',
-    fontSize: 12,
-    fontWeight: 700,
-    borderRadius: 6,
-    padding: '8px 11px',
+    color: 'var(--terminal-text-muted)',
+    fontSize: 13,
+    fontWeight: 500,
+    borderRadius: 999,
+    padding: '7px 14px',
     cursor: 'pointer',
     fontFamily: 'inherit',
   },
   segmentActive: {
-    background: 'var(--terminal-brand-soft)',
-    borderColor: 'var(--terminal-orange)',
-    color: 'var(--terminal-brand-text)',
+    background: 'var(--terminal-neutral-button)',
+    borderColor: 'var(--terminal-neutral-button)',
+    color: '#ffffff',
+    fontWeight: 600,
     boxShadow: 'none',
   },
   launchButton: {
-    minHeight: 38,
-    padding: '8px 12px',
-    borderRadius: 12,
-    fontSize: 13,
+    minHeight: 40,
+    padding: '6px 6px 6px 18px',
+    borderRadius: 999,
+    fontSize: 14,
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 7,
+    gap: 10,
+  },
+  launchButtonPlus: {
+    width: 28,
+    height: 28,
+    borderRadius: 999,
+    background: 'var(--terminal-chip-overlay)',
+    color: '#ffffff',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontSize: 18,
+    lineHeight: 1,
   },
   botGrid: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
-    gap: 10,
+    gridTemplateColumns: '1fr',
+    gap: 12,
     alignItems: 'start',
   },
   myBotsTitle: {
-    margin: '12px 0 8px',
+    margin: '4px 0 0',
     color: 'var(--terminal-text)',
-    fontSize: 17,
-    fontWeight: 700,
+    fontSize: 18,
+    fontWeight: 600,
+    letterSpacing: '-0.01em',
+  },
+  myBotsMeta: {
+    margin: '4px 0 12px',
+    color: 'var(--terminal-text-faint)',
+    fontSize: 12,
+    fontWeight: 500,
   },
   emptyLaunchState: {
     flex: 1,
     minHeight: 250,
-    padding: '32px 18px',
-    border: '1px dashed var(--terminal-border-strong)',
+    padding: '32px 20px',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 16,
-    background: 'var(--terminal-surface-subtle)',
+    background: 'var(--terminal-surface)',
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
@@ -5266,10 +5345,10 @@ const S = {
     boxSizing: 'border-box',
   },
   emptyLaunchIcon: {
-    width: 68,
-    height: 68,
-    borderRadius: 18,
-    background: 'var(--terminal-surface-subtle)',
+    width: 56,
+    height: 56,
+    borderRadius: 999,
+    background: 'var(--terminal-surface-muted)',
     border: '1px solid var(--terminal-border)',
     display: 'flex',
     alignItems: 'center',
@@ -5279,46 +5358,47 @@ const S = {
   emptyLaunchTitle: {
     margin: 0,
     color: 'var(--terminal-text)',
-    fontSize: 20,
-    fontWeight: 700,
+    fontSize: 18,
+    fontWeight: 600,
   },
   emptyLaunchCopy: {
     maxWidth: 380,
     width: '100%',
     boxSizing: 'border-box',
     margin: '7px 0 18px',
-    color: 'var(--terminal-text-secondary)',
+    color: 'var(--terminal-text-muted)',
     fontSize: 13,
-    fontWeight: 700,
+    fontWeight: 500,
     lineHeight: 1.45,
     whiteSpace: 'normal',
     overflowWrap: 'break-word',
   },
   emptyLaunchButton: {
     minHeight: 44,
-    padding: '10px 18px',
-    borderRadius: 10,
+    padding: '10px 20px',
+    borderRadius: 999,
     fontSize: 14,
   },
   botCard: {
-    background: 'var(--terminal-surface-subtle)',
+    background: 'var(--terminal-surface)',
     border: '1px solid var(--terminal-border)',
-    borderRadius: 8,
-    padding: '10px 12px',
+    borderRadius: 16,
+    padding: 16,
     display: 'flex',
     flexDirection: 'column',
-    gap: 5,
+    gap: 12,
     minWidth: 0,
+    boxShadow: 'var(--terminal-shadow-card)',
   },
   botCardExpanded: {
     gridColumn: '1 / -1',
-    background: 'var(--terminal-surface-subtle)',
+    background: 'var(--terminal-surface)',
   },
   collapsedRuntime: {
-    marginTop: 6,
+    marginTop: 10,
     fontSize: 12,
-    color: 'var(--terminal-text)',
-    opacity: 0.85,
+    fontWeight: 500,
+    color: 'var(--terminal-text-muted)',
   },
   collapsedActions: {
     display: 'flex',
@@ -5328,19 +5408,19 @@ const S = {
   },
   templateHint: {
     margin: '0 0 8px',
-    padding: '8px 10px',
+    padding: '10px 12px',
     fontSize: 12,
     lineHeight: 1.45,
-    color: 'var(--terminal-text)',
-    background: 'var(--terminal-surface)',
+    color: 'var(--terminal-text-secondary)',
+    background: 'var(--terminal-surface-muted)',
     border: '1px solid var(--terminal-border)',
-    borderRadius: 8,
+    borderRadius: 12,
   },
   blockedHint: {
     margin: '0 0 8px',
     fontSize: 12,
-    color: '#8b4513',
-    fontWeight: 700,
+    color: 'var(--terminal-text-muted)',
+    fontWeight: 600,
   },
   blockedCard: {
     opacity: 0.72,
@@ -5357,18 +5437,102 @@ const S = {
   cardTop: {
     display: 'flex',
     alignItems: 'center',
-    gap: 9,
+    gap: 12,
     minWidth: 0,
+  },
+  cardLogo: {
+    width: 54,
+    height: 54,
+    borderRadius: 16,
+    border: '1px solid var(--terminal-border)',
+    background: 'var(--terminal-surface-muted)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+    overflow: 'hidden',
+  },
+  cardChip: {
+    borderRadius: 999,
+    padding: '2px 8px',
+    background: 'var(--terminal-surface-muted)',
+    border: '1px solid var(--terminal-border)',
+    color: 'var(--terminal-text-muted)',
+    fontSize: 11,
+    fontWeight: 600,
+    letterSpacing: '0.06em',
+    textTransform: 'uppercase',
+    flexShrink: 0,
+  },
+  cardSubStrong: {
+    color: 'var(--terminal-text-secondary)',
+    fontWeight: 600,
+  },
+  statusInline: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 8,
+    flexShrink: 0,
+  },
+  statusDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 999,
+    flexShrink: 0,
+  },
+  statusLabel: {
+    fontSize: 14,
+    fontWeight: 500,
+    color: 'var(--terminal-text)',
+  },
+  cardProgress: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+    marginTop: 14,
+  },
+  cardProgressTop: {
+    display: 'flex',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  cardProgressValue: {
+    fontSize: 17,
+    fontWeight: 600,
+    color: 'var(--terminal-text)',
+    letterSpacing: '-0.01em',
+    fontVariantNumeric: 'tabular-nums',
+  },
+  cardProgressMeta: {
+    fontSize: 12,
+    fontWeight: 600,
+    color: 'var(--terminal-text-muted)',
+  },
+  progressTrack: {
+    height: 6,
+    borderRadius: 999,
+    background: 'var(--terminal-surface-muted)',
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: 999,
+    background: 'var(--terminal-long)',
+    transition: 'width 300ms ease',
+  },
+  progressFillIdle: {
+    background: 'var(--terminal-border-strong)',
   },
   botAvatar: {
     width: 44,
     height: 44,
-    borderRadius: 12,
-    border: '1px solid rgba(92,58,33,0.55)',
+    borderRadius: 14,
+    border: '1px solid var(--terminal-border)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    boxShadow: '0 3px 0 rgba(0,0,0,0.22)',
+    boxShadow: 'none',
     flexShrink: 0,
   },
   cardTitleBlock: {
@@ -5385,19 +5549,18 @@ const S = {
     minWidth: 0,
   },
   cardTitle: {
-    fontSize: 16,
-    fontWeight: 700,
+    fontSize: 18,
+    fontWeight: 600,
+    letterSpacing: '-0.01em',
     color: 'var(--terminal-text)',
     whiteSpace: 'nowrap',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
   },
   cardSub: {
-    fontSize: 11,
-    fontWeight: 600,
-    color: '#8b7655',
-    textTransform: 'uppercase',
-    letterSpacing: 0.3,
+    fontSize: 13,
+    fontWeight: 500,
+    color: 'var(--terminal-text-muted)',
     whiteSpace: 'nowrap',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
@@ -5406,29 +5569,25 @@ const S = {
     borderRadius: 999,
     padding: '3px 7px',
     fontSize: 10,
-    fontWeight: 700,
-    textTransform: 'uppercase',
+    fontWeight: 600,
+    textTransform: 'none',
     flexShrink: 0,
   },
   statusRunning: {
-    background: 'rgba(67,160,71,0.16)',
-    color: 'var(--terminal-long-strong)',
-    border: '1px solid rgba(67,160,71,0.45)',
+    background: 'var(--terminal-long)',
+    boxShadow: '0 0 0 3px var(--terminal-long-soft)',
   },
   statusPaused: {
-    background: 'rgba(232,184,48,0.22)',
-    color: '#8B6500',
-    border: '1px solid rgba(232,184,48,0.65)',
+    background: 'var(--terminal-warning)',
+    boxShadow: '0 0 0 3px var(--terminal-warning-soft)',
   },
   statusStopped: {
-    background: 'rgba(120,144,156,0.14)',
-    color: '#455A64',
-    border: '1px solid rgba(120,144,156,0.38)',
+    background: 'var(--terminal-text-faint)',
+    boxShadow: '0 0 0 3px var(--terminal-surface-muted)',
   },
   statusTemplate: {
-    background: 'rgba(120,144,156,0.18)',
-    color: '#455A64',
-    border: '1px solid rgba(120,144,156,0.45)',
+    background: 'var(--terminal-border-strong)',
+    boxShadow: '0 0 0 3px var(--terminal-surface-muted)',
   },
   sectionTitle: {
     margin: '14px 0 8px',
@@ -5438,47 +5597,47 @@ const S = {
     letterSpacing: '0.02em',
   },
   expandIcon: {
-    width: 28,
-    height: 28,
-    borderRadius: 8,
-    background: 'var(--terminal-surface)',
+    width: 32,
+    height: 32,
+    borderRadius: 999,
+    background: 'var(--terminal-surface-muted)',
     border: '1px solid var(--terminal-border)',
-    color: 'var(--terminal-text)',
+    color: 'var(--terminal-text-muted)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    fontSize: 20,
-    fontWeight: 700,
+    fontSize: 18,
+    fontWeight: 500,
     flexShrink: 0,
   },
   metricGrid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-    gap: 7,
-    marginTop: 9,
+    gap: 12,
+    marginTop: 14,
+    paddingTop: 14,
+    borderTop: '1px solid var(--terminal-border)',
   },
   metric: {
-    background: 'var(--terminal-surface)',
-    border: '1px solid var(--terminal-border)',
-    borderRadius: 10,
-    padding: '7px 8px',
+    background: 'transparent',
     display: 'flex',
     flexDirection: 'column',
-    gap: 2,
+    gap: 6,
     minWidth: 0,
   },
   metricLabel: {
-    fontSize: 10,
-    fontWeight: 700,
-    color: 'var(--terminal-text-muted)',
+    fontSize: 11,
+    fontWeight: 600,
+    color: 'var(--terminal-text-faint)',
     textTransform: 'uppercase',
-    letterSpacing: 0.4,
+    letterSpacing: '0.06em',
   },
   metricValue: {
-    fontSize: 15,
-    fontWeight: 700,
+    fontSize: 16,
+    fontWeight: 500,
     color: 'var(--terminal-text)',
     lineHeight: 1.1,
+    fontVariantNumeric: 'tabular-nums',
   },
   expandPanel: {
     display: 'flex',
@@ -5493,23 +5652,23 @@ const S = {
     gap: 8,
   },
   detailCard: {
-    background: 'var(--terminal-surface)',
+    background: 'var(--terminal-surface-muted)',
     border: '1px solid var(--terminal-border)',
-    borderRadius: 10,
-    padding: 10,
+    borderRadius: 16,
+    padding: 12,
     minWidth: 0,
   },
   detailTitle: {
     display: 'block',
     color: 'var(--terminal-text)',
     fontSize: 14,
-    fontWeight: 700,
+    fontWeight: 600,
     marginTop: 3,
   },
   detailCopy: {
     color: 'var(--terminal-text-secondary)',
     fontSize: 12,
-    fontWeight: 700,
+    fontWeight: 600,
     lineHeight: 1.35,
     margin: '6px 0 0',
   },
@@ -5522,17 +5681,17 @@ const S = {
     fontWeight: 600,
   },
   lastAction: {
-    background: 'rgba(30,136,229,0.1)',
-    border: '1px solid rgba(30,136,229,0.25)',
-    borderRadius: 10,
-    padding: '8px 10px',
+    background: 'var(--terminal-surface-muted)',
+    border: '1px solid var(--terminal-border)',
+    borderRadius: 12,
+    padding: '10px 12px',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 8,
-    color: 'var(--terminal-info)',
+    color: 'var(--terminal-text-secondary)',
     fontSize: 12,
-    fontWeight: 600,
+    fontWeight: 500,
   },
   historyList: {
     display: 'flex',
@@ -5540,7 +5699,7 @@ const S = {
     gap: 8,
   },
   historyRow: {
-    background: 'var(--terminal-surface-subtle)',
+    background: 'var(--terminal-surface)',
     border: '1px solid var(--terminal-border)',
     borderRadius: 12,
     padding: '10px 12px',
@@ -5552,8 +5711,8 @@ const S = {
   historyTime: {
     color: 'var(--terminal-text-muted)',
     fontSize: 12,
-    fontWeight: 700,
-    fontFamily: 'monospace',
+    fontWeight: 600,
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
   },
   historyMain: {
     display: 'flex',
@@ -5561,13 +5720,13 @@ const S = {
     gap: 2,
     color: 'var(--terminal-text-secondary)',
     fontSize: 12,
-    fontWeight: 700,
+    fontWeight: 600,
     minWidth: 0,
   },
   historyValue: {
     color: 'var(--terminal-text)',
     fontSize: 13,
-    fontWeight: 700,
+    fontWeight: 600,
     whiteSpace: 'nowrap',
   },
   launchShell: {
@@ -5621,13 +5780,13 @@ const S = {
     borderRadius: '50%',
     borderWidth: 1,
     borderStyle: 'solid',
-    borderColor: '#C9B896',
+    borderColor: 'var(--terminal-border)',
     background: 'var(--terminal-surface-subtle)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     fontSize: 10,
-    fontWeight: 700,
+    fontWeight: 600,
     boxSizing: 'border-box',
   },
   stepNumberActive: {
@@ -5638,8 +5797,8 @@ const S = {
   stepLabel: {
     maxWidth: '100%',
     fontSize: 9,
-    fontWeight: 700,
-    textTransform: 'uppercase',
+    fontWeight: 600,
+    textTransform: 'none',
     letterSpacing: 0.25,
     whiteSpace: 'nowrap',
     overflow: 'hidden',
@@ -5658,7 +5817,7 @@ const S = {
   },
   stepTitle: {
     fontSize: 24,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-text)',
     textAlign: 'center',
     margin: '2px 0 3px',
@@ -5666,8 +5825,8 @@ const S = {
   },
   stepCopy: {
     fontSize: 13,
-    fontWeight: 700,
-    color: '#8b7655',
+    fontWeight: 600,
+    color: 'var(--terminal-text-muted)',
     textAlign: 'center',
     margin: 0,
     lineHeight: 1.35,
@@ -5682,7 +5841,7 @@ const S = {
     borderWidth: 1,
     borderStyle: 'solid',
     borderColor: 'var(--terminal-border)',
-    borderRadius: 12,
+    borderRadius: 16,
     padding: 10,
     display: 'flex',
     alignItems: 'flex-start',
@@ -5696,7 +5855,7 @@ const S = {
   strategyCardActive: {
     borderColor: 'var(--terminal-orange)',
     background: 'var(--terminal-brand-soft)',
-    boxShadow: '0 0 0 3px var(--terminal-brand-ring)',
+    boxShadow: 'none',
   },
   strategyCardDisabled: {
     cursor: 'not-allowed',
@@ -5715,8 +5874,8 @@ const S = {
     color: 'var(--terminal-text-secondary)',
     padding: '3px 7px',
     fontSize: 9,
-    fontWeight: 700,
-    textTransform: 'uppercase',
+    fontWeight: 600,
+    textTransform: 'none',
     letterSpacing: 0.4,
   },
   strategyText: {
@@ -5728,7 +5887,7 @@ const S = {
   exchangePickerCard: {
     background: 'var(--terminal-surface-subtle)',
     border: '1px solid var(--terminal-border)',
-    borderRadius: 14,
+    borderRadius: 16,
     padding: 12,
     display: 'flex',
     flexDirection: 'column',
@@ -5780,7 +5939,7 @@ const S = {
     right: 0,
     padding: 6,
     border: '1px solid var(--terminal-border-strong)',
-    borderRadius: 12,
+    borderRadius: 16,
     background: 'var(--terminal-surface)',
     boxShadow: 'var(--terminal-shadow-card)',
     display: 'flex',
@@ -5813,7 +5972,7 @@ const S = {
     color: 'var(--terminal-text)',
     fontFamily: 'inherit',
     fontSize: 13,
-    fontWeight: 700,
+    fontWeight: 600,
   },
   exchangeListbox: {
     maxHeight: 248,
@@ -5833,7 +5992,7 @@ const S = {
   },
   exchangeOptionActive: {
     background: 'var(--terminal-brand-soft)',
-    boxShadow: 'inset 0 0 0 1px var(--terminal-orange)',
+    boxShadow: 'none',
   },
   exchangeOptionDisabled: {
     opacity: 0.58,
@@ -5867,7 +6026,7 @@ const S = {
   exchangeMarkFallback: {
     color: 'var(--terminal-text)',
     fontSize: 11,
-    fontWeight: 700,
+    fontWeight: 600,
   },
   exchangeMarkImage: {
     position: 'absolute',
@@ -5909,11 +6068,11 @@ const S = {
     background: 'var(--terminal-surface-muted)',
     color: 'var(--terminal-text-secondary)',
     fontSize: 9,
-    fontWeight: 700,
-    textTransform: 'uppercase',
+    fontWeight: 600,
+    textTransform: 'none',
   },
   exchangeOptionStatusReady: {
-    background: 'rgba(67,160,71,0.16)',
+    background: 'var(--terminal-long-soft)',
     color: 'var(--terminal-long-strong)',
   },
   exchangeEmptyState: {
@@ -5932,7 +6091,7 @@ const S = {
     gap: 7,
     color: 'var(--terminal-text-secondary)',
     fontSize: 11,
-    fontWeight: 700,
+    fontWeight: 600,
     lineHeight: 1.35,
   },
   exchangeStatusDot: {
@@ -5970,7 +6129,7 @@ const S = {
     borderRadius: 999,
     padding: '4px 7px',
     fontSize: 9,
-    fontWeight: 700,
+    fontWeight: 600,
     letterSpacing: 0.35,
   },
   connectionChecking: {
@@ -5978,7 +6137,7 @@ const S = {
     color: 'var(--terminal-text-secondary)',
   },
   connectionActive: {
-    background: 'rgba(67,160,71,0.16)',
+    background: 'var(--terminal-long-soft)',
     color: 'var(--terminal-long-strong)',
   },
   connectionInactive: {
@@ -5986,7 +6145,7 @@ const S = {
     color: 'var(--terminal-warning)',
   },
   connectionReady: {
-    background: 'rgba(30,136,229,0.14)',
+    background: 'var(--terminal-info-soft)',
     color: 'var(--terminal-info)',
   },
   connectionPartial: {
@@ -6029,7 +6188,7 @@ const S = {
     gap: 8,
     padding: '8px 10px',
     borderRadius: 10,
-    background: 'rgba(30,136,229,0.1)',
+    background: 'var(--terminal-info-soft)',
     color: 'var(--terminal-info)',
     fontSize: 11,
     fontWeight: 600,
@@ -6038,7 +6197,7 @@ const S = {
     width: 16,
     height: 16,
     borderRadius: '50%',
-    border: '1px solid rgba(30,136,229,0.25)',
+    border: '1px solid var(--terminal-info-border)',
     borderTopColor: 'var(--terminal-info)',
     flexShrink: 0,
   },
@@ -6049,7 +6208,7 @@ const S = {
   marketPickerCard: {
     background: 'var(--terminal-surface-subtle)',
     border: '1px solid var(--terminal-border)',
-    borderRadius: 12,
+    borderRadius: 16,
     padding: 12,
     display: 'flex',
     flexDirection: 'column',
@@ -6058,12 +6217,12 @@ const S = {
   marketPickerHint: {
     color: 'var(--terminal-text-secondary)',
     fontSize: 11,
-    fontWeight: 700,
+    fontWeight: 600,
   },
   sliderCard: {
     background: 'var(--terminal-surface-subtle)',
     border: '1px solid var(--terminal-border)',
-    borderRadius: 12,
+    borderRadius: 16,
     padding: 12,
     display: 'flex',
     flexDirection: 'column',
@@ -6078,14 +6237,14 @@ const S = {
   label: {
     color: 'var(--terminal-text)',
     fontSize: 11,
-    fontWeight: 700,
-    textTransform: 'uppercase',
+    fontWeight: 600,
+    textTransform: 'none',
     letterSpacing: 0.4,
   },
   sliderValue: {
     color: 'var(--terminal-text)',
     fontSize: 18,
-    fontWeight: 700,
+    fontWeight: 600,
   },
   sliderLabels: {
     display: 'flex',
@@ -6098,7 +6257,7 @@ const S = {
   presetCard: {
     background: 'var(--terminal-surface-subtle)',
     border: '1px solid var(--terminal-border)',
-    borderRadius: 12,
+    borderRadius: 999,
     padding: 12,
     display: 'flex',
     flexDirection: 'column',
@@ -6107,7 +6266,7 @@ const S = {
   aggressivePlanCard: {
     background: 'var(--terminal-surface)',
     border: '1px solid var(--terminal-border)',
-    borderRadius: 12,
+    borderRadius: 16,
     padding: 12,
     display: 'flex',
     flexDirection: 'column',
@@ -6131,13 +6290,13 @@ const S = {
     color: 'var(--terminal-text-muted)',
     fontSize: 10,
     fontWeight: 600,
-    textTransform: 'uppercase',
+    textTransform: 'none',
     letterSpacing: 0.3,
   },
   aggressivePlanVal: {
     color: 'var(--terminal-text)',
     fontSize: 13,
-    fontWeight: 700,
+    fontWeight: 600,
     lineHeight: 1.2,
     wordBreak: 'break-word',
   },
@@ -6145,7 +6304,7 @@ const S = {
     margin: 0,
     color: 'var(--terminal-text-secondary)',
     fontSize: 11,
-    fontWeight: 700,
+    fontWeight: 600,
     lineHeight: 1.35,
   },
   presetToggle: {
@@ -6158,10 +6317,10 @@ const S = {
     borderStyle: 'solid',
     borderColor: 'var(--terminal-border-strong)',
     background: 'var(--terminal-surface)',
-    borderRadius: 10,
+    borderRadius: 999,
     color: 'var(--terminal-text)',
     fontSize: 13,
-    fontWeight: 700,
+    fontWeight: 600,
     padding: '9px 10px',
     cursor: 'pointer',
     fontFamily: 'inherit',
@@ -6175,7 +6334,7 @@ const S = {
   reviewCard: {
     background: 'var(--terminal-surface-subtle)',
     border: '1px solid var(--terminal-border)',
-    borderRadius: 12,
+    borderRadius: 16,
     padding: 12,
     display: 'flex',
     flexDirection: 'column',
@@ -6192,7 +6351,7 @@ const S = {
   nextButton: {
     width: '100%',
     minHeight: 44,
-    borderRadius: 10,
+    borderRadius: 999,
     fontSize: 16,
     marginTop: 'auto',
   },
@@ -6222,25 +6381,25 @@ const S = {
     margin: 0,
     color: 'var(--terminal-text)',
     fontSize: 18,
-    fontWeight: 700,
+    fontWeight: 600,
     lineHeight: 1.1,
   },
   accountsHeroCopy: {
     margin: '4px 0 0',
     color: 'var(--terminal-text-secondary)',
     fontSize: 12,
-    fontWeight: 700,
+    fontWeight: 600,
     lineHeight: 1.35,
   },
   accountsHeroStat: {
     flexShrink: 0,
     color: 'var(--terminal-info)',
-    background: 'rgba(30,136,229,0.12)',
-    border: '1px solid rgba(30,136,229,0.25)',
+    background: 'var(--terminal-info-soft)',
+    border: '1px solid var(--terminal-info-border)',
     borderRadius: 999,
     padding: '6px 9px',
     fontSize: 12,
-    fontWeight: 700,
+    fontWeight: 600,
     whiteSpace: 'nowrap',
   },
   accountsGrid: {
@@ -6268,7 +6427,7 @@ const S = {
   },
   accountExchangeCardActive: {
     background: 'var(--terminal-surface)',
-    boxShadow: '0 0 0 2px var(--terminal-brand-ring)',
+    boxShadow: 'none',
   },
   accountExchangeMain: {
     border: 'none',
@@ -6301,13 +6460,13 @@ const S = {
   accountActionButton: {
     minHeight: 34,
     padding: '5px 7px',
-    borderRadius: 7,
+    borderRadius: 999,
     fontSize: 11,
   },
   gameAuthCard: {
     background: 'var(--terminal-surface-subtle)',
     border: '1px solid var(--terminal-border)',
-    borderRadius: 12,
+    borderRadius: 16,
     padding: 12,
     display: 'flex',
     flexDirection: 'column',
@@ -6348,7 +6507,7 @@ const S = {
   },
   gameAuthRowHint: {
     fontSize: 11,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-text-muted)',
     lineHeight: 1.35,
   },
@@ -6359,7 +6518,7 @@ const S = {
   },
   gameAuthStatusPill: {
     fontSize: 10,
-    fontWeight: 700,
+    fontWeight: 600,
     padding: '3px 8px',
     borderRadius: 999,
     border: '1px solid var(--terminal-surface)',
@@ -6392,10 +6551,10 @@ const S = {
     width: '100%',
     boxSizing: 'border-box',
     padding: '6px 10px',
-    borderRadius: 8,
+    borderRadius: 12,
     border: '1px solid var(--terminal-border)',
     fontSize: 12,
-    fontFamily: 'monospace',
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
     background: 'var(--terminal-surface)',
     color: 'var(--terminal-text)',
     lineHeight: 1.35,
@@ -6409,7 +6568,7 @@ const S = {
   accountFormCard: {
     background: 'var(--terminal-surface-subtle)',
     border: '1px solid var(--terminal-border)',
-    borderRadius: 12,
+    borderRadius: 16,
     padding: 12,
     display: 'flex',
     flexDirection: 'column',
@@ -6418,7 +6577,7 @@ const S = {
   accountsListCard: {
     background: 'var(--terminal-surface-subtle)',
     border: '1px solid var(--terminal-border)',
-    borderRadius: 12,
+    borderRadius: 16,
     padding: 12,
     display: 'flex',
     flexDirection: 'column',
@@ -6426,7 +6585,7 @@ const S = {
   },
   sectionDesc: {
     fontSize: 12,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-text-muted)',
     margin: '3px 0 10px 0',
   },
@@ -6443,7 +6602,7 @@ const S = {
   formSelect: {
     border: '1px solid var(--terminal-border-strong)',
     background: 'var(--terminal-surface)',
-    borderRadius: 10,
+    borderRadius: 12,
     color: 'var(--terminal-text)',
     fontSize: 13,
     fontWeight: 600,
@@ -6455,7 +6614,7 @@ const S = {
   formInput: {
     border: '1px solid var(--terminal-border-strong)',
     background: 'var(--terminal-surface)',
-    borderRadius: 10,
+    borderRadius: 12,
     color: 'var(--terminal-text)',
     fontSize: 13,
     fontWeight: 600,

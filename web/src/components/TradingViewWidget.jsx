@@ -449,14 +449,14 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, chartSymbol = nu
     // Fallbacks retain the shared appearance when rendered outside a terminal.
     const styles = getComputedStyle(containerRef.current);
     const color = (token, fallback) => styles.getPropertyValue(token).trim() || fallback;
-    const background = color('--terminal-surface', darkTheme ? '#111827' : '#FFFFFF');
-    const textColor = color('--terminal-text-muted', darkTheme ? '#AAB4C3' : '#6B7280');
-    const gridColor = color('--terminal-chart-grid', darkTheme ? '#202A39' : '#F3F4F6');
-    const borderColor = color('--terminal-border', darkTheme ? '#2C3748' : '#E5E7EB');
+    const background = color('--terminal-surface', darkTheme ? '#171A22' : '#FFFFFF');
+    const textColor = color('--terminal-text-muted', darkTheme ? '#A7AFBC' : '#6B7280');
+    const gridColor = color('--terminal-chart-grid', darkTheme ? 'rgba(255, 255, 255, 0.06)' : '#F3F4F6');
+    const borderColor = color('--terminal-border', darkTheme ? '#2A2F3A' : '#E5E7EB');
     const longColor = color('--terminal-long', darkTheme ? '#34D399' : '#087A55');
     const shortColor = color('--terminal-short', darkTheme ? '#F87171' : '#D14343');
     const chart = createChart(containerRef.current, {
-      layout: { background: { color: background }, textColor, fontSize: 11, fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' },
+      layout: { background: { color: background }, textColor, fontSize: 11, fontFamily: 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif' },
       grid: { vertLines: { color: gridColor }, horzLines: { color: gridColor } },
       crosshair: { mode: 0 },
       rightPriceScale: { borderColor, scaleMargins: { top: 0.1, bottom: 0.1 } },
@@ -953,14 +953,14 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, chartSymbol = nu
         if ((isTP || isSL) && positionTpslLineKeys.has(priceLineKey(triggerKind, price))) continue;
         const pending = !!(ord?._optimistic || ord?._raw?.optimistic);
         const color = pending
-          ? (darkTheme ? '#FBBF24' : '#B7791F')
+          ? (darkTheme ? '#FCD34D' : '#B45309')
           : isTP
             ? longColor
             : isSL
               ? shortColor
               : stopPrice > 0
-                ? (darkTheme ? '#F47A3C' : '#F26522')
-                : (isBid ? (darkTheme ? '#60A5FA' : '#2563EB') : (darkTheme ? '#C4B5FD' : '#7C3AED'));
+                ? '#F26522'
+                : (isBid ? longColor : shortColor);
         const label = isTP ? 'TP' : isSL ? 'SL' : stopPrice > 0 ? 'STOP' : 'LIMIT';
         const line = seriesRef.current.createPriceLine({
           price,
@@ -1016,7 +1016,7 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, chartSymbol = nu
       <div style={{ flex: '1 1 auto', minHeight: 0, position: 'relative' }}>
         <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
         {chartError && !loading && (
-          <div role="status" style={{position: 'absolute', top: 12, left: 12, right: 12, zIndex: 10, padding: 12, borderRadius: 8, background: 'var(--terminal-surface)', color: 'var(--terminal-text-muted)', border: '1px solid var(--terminal-border)', textAlign: 'center', fontSize: 12}}>
+          <div role="status" style={{position: 'absolute', top: 12, left: 12, right: 12, zIndex: 10, padding: 12, borderRadius: 12, background: 'var(--terminal-surface)', color: 'var(--terminal-text-muted)', border: '1px solid var(--terminal-border)', textAlign: 'center', fontSize: 12}}>
             <span>{chartError}</span>
             <button type="button" onClick={() => setReloadCount(value => value + 1)} style={{...S.tfBtn, display: 'block', margin: '6px auto 0', minHeight: 44, color: 'var(--terminal-brand-strong)'}}>Retry chart</button>
           </div>
@@ -1031,7 +1031,7 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, chartSymbol = nu
             anchors to the actual price-chart area, not to the outer wrapper
             that also includes the timeframe tab bar. */}
         {pendingLineBadges.map((badge) => (
-          <div key={badge.key} style={{position: 'absolute', top: badge.top, right: 8, zIndex: 9, display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 7px', borderRadius: 7, border: '1px solid var(--terminal-brand-border)', background: 'var(--terminal-brand-soft)', color: 'var(--terminal-brand-text)', fontSize: 10, fontWeight: 750, pointerEvents: 'none', boxShadow: '0 2px 6px var(--terminal-shadow-soft)'}}>
+          <div key={badge.key} style={{position: 'absolute', top: badge.top, right: 8, zIndex: 9, display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 7px', borderRadius: 999, border: '1px solid var(--terminal-warning-border)', background: 'var(--terminal-warning-soft)', color: 'var(--terminal-warning)', fontSize: 11, fontWeight: 600, pointerEvents: 'none', boxShadow: 'none'}}>
             <span style={{width: 9, height: 9, borderRadius: '50%', borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--terminal-brand-border)', borderTopColor: 'var(--terminal-orange)', animation: 'tv-pending-spin 0.75s linear infinite', flexShrink: 0}} />
             {badge.label}
           </div>
@@ -1054,12 +1054,12 @@ const S = {
   },
   tfBtn: {
     padding: '3px 8px', background: 'transparent', border: 'none',
-    fontSize: 11, fontWeight: 650, color: 'var(--terminal-text-muted)', cursor: 'pointer',
-    borderRadius: 6,
+    fontSize: 12, fontWeight: 500, color: 'var(--terminal-text-muted)', cursor: 'pointer',
+    borderRadius: 999,
   },
   tfActive: {
-    padding: '3px 8px', background: 'var(--terminal-brand-soft)', border: 'none',
-    fontSize: 11, fontWeight: 750, color: 'var(--terminal-brand-strong)', cursor: 'default',
-    borderRadius: 6,
+    padding: '3px 8px', background: 'var(--terminal-neutral-button)', border: 'none',
+    fontSize: 12, fontWeight: 600, color: '#ffffff', cursor: 'default',
+    borderRadius: 999,
   },
 };

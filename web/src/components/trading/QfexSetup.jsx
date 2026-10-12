@@ -28,7 +28,7 @@ export default function QfexSetup({ activate, loading, error, onClose, walletReg
         {evmAddress ? `Wallet: ${evmAddress.slice(0, 6)}…${evmAddress.slice(-4)}. ` : ''}
         New QFEX accounts must finish QFEX onboarding before trading. Connecting again replaces the previous Clash key for this wallet.
       </p>
-      <button type="button" onClick={wallet} disabled={loading} style={{ ...inputStyle, cursor: 'pointer', marginTop: 12, fontWeight: 700 }}>
+      <button type="button" onClick={wallet} disabled={loading} style={{ ...inputStyle, cursor: 'pointer', marginTop: 12, fontWeight: 600 }}>
         {loading ? 'Waiting for signature…' : 'Connect with wallet'}
       </button>
     </div>}

@@ -272,8 +272,11 @@ function BattleResultOverlay({ result, onClose }) {
       >
         <header className="battle-result__header">
           <div className="battle-result__glow" aria-hidden="true" />
-          <h2 id="battle-result-title" className="battle-result__title">
-            {isError ? (result.title || 'BATTLE ERROR') : isReplay ? 'REPLAY END' : isVictory ? 'VICTORY' : 'DEFEAT'}
+          <h2
+            id="battle-result-title"
+            className={`battle-result__title battle-result__title--${isError ? 'error' : isReplay ? 'replay' : isVictory ? 'victory' : 'defeat'}`}
+          >
+            {isError ? (result.title || 'Battle error') : isReplay ? 'Replay end' : isVictory ? 'Victory' : 'Defeat'}
           </h2>
           <p id="battle-result-subtitle" className="battle-result__subtitle">{subtitle}</p>
         </header>

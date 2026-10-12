@@ -203,7 +203,7 @@ const futuresPanelSource = readFileSync(new URL('./src/components/FuturesPanel.j
 assert.match(futuresPanelSource, /dex === 'avantis' \|\| dex === 'domfi'/u);
 assert.match(futuresPanelSource, /dex !== 'avantis' && dex !== 'domfi' && dex !== 'etoro' && dex !== 'gmx'/u);
 const registerPanelSource = readFileSync(new URL('./src/components/RegisterPanel.jsx', import.meta.url), 'utf8');
-assert.match(registerPanelSource, /const venue = dex === 'domfi' \? 'DOMFI'/u);
+assert.match(registerPanelSource, /const venue = dex === 'domfi' \? 'DomFi'/u);
 assert.match(hookSource, /Promise\.allSettled/u);
 assert.match(hookSource, /normalizeDomfiWalletBalanceSnapshot\(snapshot\?\.wallet_balance\)/u);
 assert.match(hookSource, /waitForDomfiMarketOrder\(fetchPrivate/u);

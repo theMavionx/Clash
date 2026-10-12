@@ -210,7 +210,7 @@ const S = {
     padding: '10px 12px 10px 36px',
     fontSize: 14, fontWeight: 600, color: colors.ink,
     background: 'var(--terminal-surface)',
-    border: `1px solid ${colors.border}`, borderRadius: 10,
+    border: `1px solid ${colors.border}`, borderRadius: 12,
     outline: 'none',
     fontFamily: 'inherit',
   },
@@ -233,7 +233,7 @@ const S = {
     background: 'var(--terminal-surface)',
     border: `1px solid ${colors.border}`, borderRadius: 12,
     cursor: 'pointer', textAlign: 'left',
-    boxShadow: '0 4px 12px rgba(17,24,39,0.06)',
+    boxShadow: 'var(--terminal-shadow-card)',
     fontFamily: 'inherit',
   },
   symbolRow: {
@@ -241,16 +241,16 @@ const S = {
     gap: 6,
   },
   symbol: {
-    fontSize: 14, fontWeight: 700, color: colors.ink, letterSpacing: '0.4px',
+    fontSize: 14, fontWeight: 600, color: colors.ink, letterSpacing: '0.4px',
     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
   },
   closedBadge: {
     fontSize: 9,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-warning)',
     background: 'var(--terminal-warning-soft)',
     border: '1px solid var(--terminal-warning)',
-    borderRadius: 5,
+    borderRadius: 999,
     padding: '1px 4px',
     flexShrink: 0,
   },
@@ -259,7 +259,7 @@ const S = {
     flexShrink: 0,
   },
   price: {
-    fontSize: 18, fontWeight: 700, color: colors.ink,
+    fontSize: 18, fontWeight: 600, color: colors.ink,
     fontVariantNumeric: 'tabular-nums',
   },
 };

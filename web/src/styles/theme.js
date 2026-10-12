@@ -14,24 +14,26 @@ export const colors = {
   shadow: 'var(--terminal-shadow)',
 };
 
+// ClashBot button system: orange primary ("Create New Bot"), solid dark
+// neutral ("Connect Wallet", "Try again"), hairline-bordered secondary.
 const UI_BUTTON_VARIANTS = {
   primary: {
     background: 'var(--terminal-orange)',
-    borderColor: 'var(--terminal-brand-strong)',
-    color: 'var(--terminal-on-accent)',
-    iconColor: 'var(--terminal-on-accent)',
+    borderColor: 'var(--terminal-orange)',
+    color: '#ffffff',
+    iconColor: '#ffffff',
   },
   secondary: {
     background: 'var(--terminal-surface)',
-    borderColor: 'var(--terminal-border-strong)',
+    borderColor: 'var(--terminal-border)',
     color: 'var(--terminal-text)',
     iconColor: 'var(--terminal-icon)',
   },
   neutral: {
-    background: 'var(--terminal-surface-muted)',
-    borderColor: 'var(--terminal-border-strong)',
-    color: 'var(--terminal-text-control)',
-    iconColor: 'var(--terminal-icon)',
+    background: 'var(--terminal-neutral-button)',
+    borderColor: 'var(--terminal-neutral-button)',
+    color: '#ffffff',
+    iconColor: '#ffffff',
   },
   success: {
     background: 'var(--terminal-long)',
@@ -67,29 +69,28 @@ const UI_BUTTON_VARIANTS = {
 
 export const uiButton = (variant = 'primary', overrides = {}) => {
   const tone = UI_BUTTON_VARIANTS[variant] || UI_BUTTON_VARIANTS.primary;
-  const depth = variant === 'ghost' ? 'none' : 'var(--terminal-shadow-control)';
   return {
     minHeight: 40,
-    padding: '9px 14px',
-    borderRadius: 10,
+    padding: '9px 16px',
+    borderRadius: 999,
     border: `1px solid ${tone.borderColor}`,
     background: tone.background,
     color: tone.color,
     '--terminal-button-icon': tone.iconColor,
     fontSize: 13,
-    fontWeight: 700,
+    fontWeight: 600,
     lineHeight: 1.15,
     cursor: 'pointer',
     textShadow: 'none',
-    boxShadow: depth,
-    letterSpacing: 0.1,
+    boxShadow: 'none',
+    letterSpacing: 0,
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
     boxSizing: 'border-box',
     gap: 8,
     userSelect: 'none',
-    transition: 'background-color 150ms ease, border-color 150ms ease, color 150ms ease, box-shadow 150ms ease, transform 150ms ease',
+    transition: 'background-color 150ms ease, border-color 150ms ease, color 150ms ease',
     ...overrides,
   };
 };
@@ -110,7 +111,6 @@ export const cartoonBtn = (bg, border) => uiButton('primary', {
   background: bg,
   border: `1px solid ${border}`,
   fontSize: 14,
-  letterSpacing: 0.2,
 });
 
 export const cartoonPanel = {

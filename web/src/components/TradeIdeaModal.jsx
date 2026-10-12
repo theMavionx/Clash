@@ -74,7 +74,7 @@ function MiniChart({ symbol, entry, tp, sl, mark }) {
   const levelsRaw = [
     { key: 'tp',    val: tp,    color: 'var(--terminal-long)', label: 'TP' },
     { key: 'mark',  val: mark,  color: 'var(--terminal-text)', label: 'Mark' },
-    { key: 'entry', val: entry, color: '#9c27b0', label: 'Entry' },
+    { key: 'entry', val: entry, color: 'var(--terminal-text-secondary)', label: 'Entry' },
     { key: 'sl',    val: sl,    color: 'var(--terminal-short)', label: 'SL' },
   ].filter(l => typeof l.val === 'number' && isFinite(l.val));
 
@@ -190,7 +190,7 @@ const miniS = {
   svg: { width: '100%', height: '100%', display: 'block' },
   loading: {
     display: 'flex', alignItems: 'center', justifyContent: 'center',
-    height: 140, fontSize: 12, color: 'var(--terminal-text-muted)', fontWeight: 650,
+    height: 140, fontSize: 12, color: 'var(--terminal-text-muted)', fontWeight: 600,
     background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)',
     borderRadius: 8, marginBottom: 12,
   },
@@ -293,7 +293,7 @@ function TradeIdeaModal({ symbol, currentPrice, onClose, onApply }) {
         {idea && !loading && (
           <>
             <div style={{...S.sideBadge, background: sideColor}}>
-              {isLong ? 'LONG' : 'SHORT'}
+              {isLong ? 'Long' : 'Short'}
             </div>
 
             <MiniChart
@@ -305,7 +305,7 @@ function TradeIdeaModal({ symbol, currentPrice, onClose, onApply }) {
             />
 
             <div style={S.levelsGrid}>
-              <LevelRow label="Entry"  value={fmt(idea.entry)} color="#9c27b0" />
+              <LevelRow label="Entry"  value={fmt(idea.entry)} color="var(--terminal-text-secondary)" />
               {mark != null && (
                 <LevelRow label="Mark" value={fmt(mark)} color="var(--terminal-text)" muted />
               )}
@@ -369,24 +369,24 @@ function MetaCard({ label, value, color }) {
 
 const S = {
   backdrop: {
-    position: 'fixed', inset: 0, background: 'rgba(17,24,39,0.48)',
+    position: 'fixed', inset: 0, background: 'var(--terminal-overlay)',
     zIndex: 10000, display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
     padding: '16px 16px', overflowY: 'auto',
   },
   modal: {
     background: 'var(--terminal-surface)',
     border: '1px solid var(--terminal-border)', borderRadius: 16, padding: 16,
-    maxWidth: 460, width: '100%', boxShadow: '0 24px 64px rgba(17,24,39,0.22)',
+    maxWidth: 460, width: '100%', boxShadow: 'var(--terminal-shadow-card)',
     maxHeight: 'calc(100dvh - 32px)', overflowY: 'auto',
   },
   header: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 },
-  title: { fontSize: 16, fontWeight: 750, color: 'var(--terminal-text)', flex: 1, margin: 0 },
+  title: { fontSize: 16, fontWeight: 600, color: 'var(--terminal-text)', flex: 1, margin: 0 },
   closeBtn: uiIconButton('secondary', 34, { fontSize: 18 }),
-  loading: { fontSize: 13, color: 'var(--terminal-text-muted)', fontWeight: 650, padding: '20px 0', textAlign: 'center' },
-  error: { fontSize: 13, color: 'var(--terminal-short)', fontWeight: 700, padding: '12px 0' },
+  loading: { fontSize: 13, color: 'var(--terminal-text-muted)', fontWeight: 600, padding: '20px 0', textAlign: 'center' },
+  error: { fontSize: 13, color: 'var(--terminal-short)', fontWeight: 600, padding: '12px 0' },
   sideBadge: {
-    display: 'inline-block', color: 'var(--terminal-on-accent)', fontSize: 13, fontWeight: 700,
-    padding: '4px 14px', borderRadius: 6, letterSpacing: '1px', marginBottom: 12,
+    display: 'inline-block', color: 'var(--terminal-on-accent)', fontSize: 13, fontWeight: 600,
+    padding: '4px 14px', borderRadius: 999, letterSpacing: 0, marginBottom: 12,
   },
   levelsGrid: { display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 12 },
   levelRow: {
@@ -395,23 +395,23 @@ const S = {
     border: '1px solid var(--terminal-border)', borderRadius: 10, gap: 8,
   },
   levelLabel: {
-    color: 'var(--terminal-on-accent)', fontSize: 11, fontWeight: 700, padding: '2px 10px',
-    borderRadius: 4, letterSpacing: '0.5px', minWidth: 52, textAlign: 'center', flexShrink: 0,
+    color: 'var(--terminal-on-accent)', fontSize: 11, fontWeight: 600, padding: '2px 10px',
+    borderRadius: 4, letterSpacing: 0, minWidth: 52, textAlign: 'center', flexShrink: 0,
   },
-  levelValue: { fontSize: 15, fontWeight: 750, color: 'var(--terminal-text)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' },
+  levelValue: { fontSize: 15, fontWeight: 600, color: 'var(--terminal-text)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' },
   metaGrid: { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6, marginBottom: 12 },
   metaCard: {
     background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)',
     borderRadius: 10, padding: '8px 4px', textAlign: 'center', minWidth: 0,
   },
-  metaLabel: { fontSize: 10, fontWeight: 700, color: 'var(--terminal-text-muted)', textTransform: 'uppercase', letterSpacing: '0.3px', whiteSpace: 'nowrap' },
-  metaValue: { fontSize: 13, fontWeight: 700, marginTop: 2, whiteSpace: 'nowrap' },
+  metaLabel: { fontSize: 10, fontWeight: 600, color: 'var(--terminal-text-muted)', textTransform: 'uppercase', letterSpacing: '0.3px', whiteSpace: 'nowrap' },
+  metaValue: { fontSize: 13, fontWeight: 600, marginTop: 2, whiteSpace: 'nowrap' },
   reason: {
     fontSize: 13, color: 'var(--terminal-text-control)', lineHeight: 1.4, fontWeight: 600,
     background: 'var(--terminal-surface-subtle)', padding: '8px 10px', borderRadius: 10,
     border: '1px solid var(--terminal-border)', marginBottom: 12,
   },
-  reasonLabel: { fontWeight: 750, color: 'var(--terminal-orange)', marginRight: 4 },
+  reasonLabel: { fontWeight: 600, color: 'var(--terminal-orange)', marginRight: 4 },
   applyBtn: uiButton('primary', { width: '100%', minHeight: 44, padding: '10px', fontSize: 14, marginBottom: 10 }),
   disclaimer: {
     fontSize: 10, color: 'var(--terminal-text-muted)', textAlign: 'center', fontWeight: 600,
@@ -419,7 +419,7 @@ const S = {
   },
   poweredBy: {
     display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-    fontSize: 10, color: 'var(--terminal-text-muted)', fontWeight: 700, letterSpacing: '0.03em', textTransform: 'uppercase',
+    fontSize: 10, color: 'var(--terminal-text-muted)', fontWeight: 600, letterSpacing: '0.03em', textTransform: 'uppercase',
   },
   poweredLogo: { height: 16, width: 'auto', objectFit: 'contain', display: 'block' },
 };

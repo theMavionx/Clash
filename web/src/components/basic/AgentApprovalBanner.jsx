@@ -93,7 +93,7 @@ const S = {
   },
   body: { minWidth: 0, overflow: 'hidden' },
   title: {
-    fontSize: 13, fontWeight: 700, color: colors.ink,
+    fontSize: 13, fontWeight: 600, color: colors.ink,
     letterSpacing: '0.3px',
   },
   text: {
@@ -102,7 +102,7 @@ const S = {
     overflowWrap: 'anywhere',
   },
   error: {
-    fontSize: 11, fontWeight: 700, color: colors.shortDark,
+    fontSize: 11, fontWeight: 600, color: colors.shortDark,
     marginTop: 4,
   },
   actions: {

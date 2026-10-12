@@ -46,8 +46,8 @@ test('Change and Back wait for reset, then open the chain-correct wallet picker'
   assert.match(callback, /setEvmModalOpen\(true\)/u);
   assert.match(callback, /await aptos\.connect\?\.\(\)/u);
   assert.match(callback, /openSolanaWallet/u);
-  assert.match(panel, /CHANGE WALLET/u);
-  assert.match(panel, /BACK TO WALLETS/u);
+  assert.match(panel, /Change wallet/u);
+  assert.match(panel, /Back to wallets/u);
   assert.match(panel, /onChangeDex=\{actions\.unpickDex\}/u);
 });
 

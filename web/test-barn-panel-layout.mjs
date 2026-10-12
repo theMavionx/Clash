@@ -53,10 +53,10 @@ test('responsive light and dark layouts cover desktop, tablet, and narrow mobile
   assert.match(styles, /@media \(min-width: 600px\) and \(max-width: 899px\)/);
   assert.match(styles, /@media \(max-width: 599px\)[\s\S]*?width:\s*100%;[\s\S]*?max-height:\s*100dvh/);
   assert.match(styles, /@media \(max-width: 359px\)[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\)/);
-  assert.match(styles, /:root\[data-ui-theme='dark'\] \.barn-unit-modal__overlay/);
-  assert.match(styles, /--bum-brand:\s*#f26522;/i);
-  assert.match(styles, /--bum-long:\s*#087a55;/i);
-  assert.match(styles, /--bum-short:\s*#d14343;/i);
+  assert.match(styles, /--bum-brand:\s*var\(--terminal-orange\);/);
+  assert.match(styles, /--bum-long:\s*var\(--terminal-long\);/);
+  assert.match(styles, /--bum-short:\s*var\(--terminal-short\);/);
+  assert.doesNotMatch(styles, /#(?!ffffff)[0-9a-f]{3,6}\b|rgba\(|gradient/i);
 });
 
 test('unit navigation and level transition avoid font-dependent glyphs', () => {

@@ -500,11 +500,11 @@ function TroopPortrait({ info, style, fallbackStyle = null }) {
         display: 'inline-flex',
         alignItems: 'center',
         justifyContent: 'center',
-        color: '#2d6f7d',
-        background: 'rgba(119, 218, 205, 0.22)',
-        border: '1px solid rgba(45, 111, 125, 0.4)',
+        color: 'var(--terminal-info)',
+        background: 'var(--terminal-info-soft)',
+        border: '1px solid var(--terminal-info-border)',
         borderRadius: 4,
-        fontWeight: 700,
+        fontWeight: 600,
         lineHeight: 1,
         ...fallbackStyle,
       }}
@@ -569,7 +569,7 @@ function ManualAttackHUD({
           alignItems: mobile ? 'flex-end' : 'center',
           gap: mobile ? 5 : 10,
         }}>
-          {battleTimer != null && <div style={{ ...hud.timerPill, ...(mobile ? hud.timerPillMobile : {}), color: battleTimer <= 30 ? 'var(--terminal-short)' : 'var(--terminal-text)', border: `1px solid ${battleTimer <= 30 ? 'var(--terminal-short-strong)' : 'var(--terminal-text-muted)'}` }}>{Math.floor(battleTimer / 60)}:{String(battleTimer % 60).padStart(2, '0')}</div>}
+          {battleTimer != null && <div style={{ ...hud.timerPill, ...(mobile ? hud.timerPillMobile : {}), color: battleTimer <= 30 ? 'var(--terminal-short)' : 'var(--terminal-text)', border: `1px solid ${battleTimer <= 30 ? 'var(--terminal-short-border)' : 'var(--terminal-border)'}` }}>{Math.floor(battleTimer / 60)}:{String(battleTimer % 60).padStart(2, '0')}</div>}
           <button style={{ ...hud.homeBtn, ...(mobile ? hud.homeBtnMobile : {}) }} onClick={onSurrender} title="Surrender" aria-label="Surrender">
             <SurrenderFlagIcon size={mobile ? 24 : 30} />
           </button>
@@ -591,7 +591,7 @@ function ManualAttackHUD({
           gap: 4,
         } : {}),
       }}>
-        {!ready && !mobile && <div style={{ ...hud.card, width: 116, height: 58, padding: '4px 8px', borderColor: '#2c83ba', color: 'var(--terminal-text)', fontSize: 11, fontWeight: 700, textAlign: 'center', flexShrink: 0 }}>MAIN SHIP<br/>APPROACHING...</div>}
+        {!ready && !mobile && <div style={{ ...hud.card, width: 116, height: 58, padding: '4px 8px', borderColor: 'var(--terminal-border-strong)', color: 'var(--terminal-text-secondary)', fontSize: 11, fontWeight: 600, textAlign: 'center', flexShrink: 0 }}>Main ship<br/>approaching...</div>}
         <div
           ref={troopScrollRef}
           className="attack-troop-scroll"
@@ -614,7 +614,7 @@ function ManualAttackHUD({
               <button
                 key={group.key || groupIdx}
                 data-troop-index={groupIdx}
-                style={{ ...hud.card, width: size, minWidth: size, height: size, padding: 2, position: 'relative', flexDirection: 'column', gap: 1, scrollSnapAlign: 'start', opacity: ready ? 1 : 0.55, borderColor: selected ? '#FFD700' : 'var(--terminal-text-muted)', boxShadow: selected ? '0 0 12px rgba(255,215,0,0.6), inset 0 0 8px rgba(255,215,0,0.15)' : 'none', cursor: ready ? 'pointer' : 'wait' }}
+                style={{ ...hud.card, width: size, minWidth: size, height: size, padding: 2, position: 'relative', flexDirection: 'column', gap: 1, scrollSnapAlign: 'start', opacity: ready ? 1 : 0.55, borderColor: selected ? 'var(--terminal-orange)' : 'var(--terminal-border)', boxShadow: selected ? '0 0 0 1px var(--terminal-orange)' : 'var(--terminal-shadow-card)', cursor: ready ? 'pointer' : 'wait' }}
                 onClick={(event) => { event.stopPropagation(); if (ready) onSelectTroop(groupIdx); }}
                 disabled={!ready}
                 title={`Deploy ${info.label || group.label || group.key}`}
@@ -626,8 +626,8 @@ function ManualAttackHUD({
                   style={{ width: '76%', height: '67%', objectFit: 'contain' }}
                   fallbackStyle={{ fontSize: mobile ? 13 : 16 }}
                 />
-                <span style={{ maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: mobile ? 8 : 9, fontWeight: 700, color: 'var(--terminal-text)', textTransform: 'uppercase', lineHeight: 1 }}>{displayLabel}</span>
-                <span style={{ position: 'absolute', top: -4, right: -4, background: 'var(--terminal-text)', color: 'var(--terminal-surface)', fontSize: 9, fontWeight: 700, borderRadius: 6, padding: '1px 5px', border: '1px solid #3d1f00' }}>x{group.count || 0}</span>
+                <span style={{ maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: mobile ? 8 : 9, fontWeight: 600, color: 'var(--terminal-text)', lineHeight: 1 }}>{displayLabel}</span>
+                <span style={{ position: 'absolute', top: -4, right: -4, background: 'var(--terminal-neutral-button)', color: '#ffffff', fontSize: 9, fontWeight: 600, borderRadius: 999, padding: '1px 5px', border: '1px solid var(--terminal-border-strong)', fontVariantNumeric: 'tabular-nums' }}>x{group.count || 0}</span>
               </button>
             );
           })}
@@ -735,7 +735,7 @@ function AttackHUD({
             <div style={{
               ...hud.timerPill,
               color: battleTimer <= 30 ? 'var(--terminal-short)' : 'var(--terminal-text)',
-              border: `1px solid ${battleTimer <= 30 ? 'var(--terminal-short-strong)' : 'var(--terminal-text-muted)'}`,
+              border: `1px solid ${battleTimer <= 30 ? 'var(--terminal-short-border)' : 'var(--terminal-border)'}`,
             }}>
               {Math.floor(battleTimer / 60)}:{String(battleTimer % 60).padStart(2, '0')}
             </div>
@@ -774,10 +774,10 @@ function AttackHUD({
       >
         {/* Fleet info button */}
         <button
-          style={{ ...hud.card, width: mobile ? 28 : 34, height: mobile ? 28 : 34, padding: 0, borderColor: 'rgba(255,215,0,0.6)', cursor: 'pointer', flexDirection: 'column', gap: 0 }}
+          style={{ ...hud.card, width: mobile ? 28 : 34, height: mobile ? 28 : 34, padding: 0, borderColor: 'var(--terminal-border-strong)', cursor: 'pointer', flexDirection: 'column', gap: 0 }}
           onClick={(e) => { e.stopPropagation(); setExpandedShip(expandedShip !== null ? null : 0); }}
         >
-          <span style={{ fontSize: mobile ? 10 : 12, fontWeight: 700, color: '#FFD700' }}>?</span>
+          <span style={{ fontSize: mobile ? 10 : 12, fontWeight: 600, color: 'var(--terminal-text)' }}>?</span>
         </button>
         {ships.map((ship, shipIdx) => {
           const isPlaced = !!ship.placed;
@@ -796,8 +796,8 @@ function AttackHUD({
                 ...hud.card,
                 width: sz, height: sz,
                 opacity: isPlaced ? 0.5 : 1,
-                borderColor: isSelected ? '#FFD700' : isPlaced ? 'rgba(159,135,89,0.4)' : 'var(--terminal-text-muted)',
-                boxShadow: isSelected ? '0 0 12px rgba(255,215,0,0.6), inset 0 0 8px rgba(255,215,0,0.15)' : 'none',
+                borderColor: isSelected ? 'var(--terminal-orange)' : 'var(--terminal-border)',
+                boxShadow: isSelected ? '0 0 0 1px var(--terminal-orange)' : 'var(--terminal-shadow-card)',
                 cursor: isPlaced ? 'default' : 'pointer',
                 flexDirection: 'column', gap: 0, padding: 2, position: 'relative',
               }}
@@ -807,25 +807,25 @@ function AttackHUD({
               }}
             >
               <img src={shipImg} alt="" style={{ width: '80%', height: '55%', objectFit: 'contain', filter: isPlaced ? 'grayscale(0.7) brightness(0.7)' : 'none' }} />
-              <div style={{ fontSize: 7, fontWeight: 600, color: 'var(--terminal-text-secondary)', textTransform: 'uppercase', lineHeight: 1 }}>
-                {isPlaced ? 'DEPLOYED' : `Lv.${ship.level}`}
+              <div style={{ fontSize: 7, fontWeight: 600, color: 'var(--terminal-text-secondary)', lineHeight: 1 }}>
+                {isPlaced ? 'Deployed' : `Lv.${ship.level}`}
               </div>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 2, height: mobile ? 13 : 15, marginTop: 1 }}>
                 {previewTroops.map((troop, index) => {
                   const info = TROOP_IMG_MAP[normalizeTroopKey(troop)] || {};
                   return (
-                    <span key={`${troop}-${index}`} style={{ width: mobile ? 11 : 13, height: mobile ? 11 : 13, borderRadius: 3, overflow: 'hidden', border: '1px solid rgba(92,58,33,0.45)', background: 'var(--terminal-surface)' }}>
+                    <span key={`${troop}-${index}`} style={{ width: mobile ? 11 : 13, height: mobile ? 11 : 13, borderRadius: 3, overflow: 'hidden', border: '1px solid var(--terminal-border)', background: 'var(--terminal-surface-muted)' }}>
                       <TroopPortrait info={info} style={{ width: '100%', height: '100%', objectFit: 'cover' }} fallbackStyle={{ fontSize: 6, border: 'none', borderRadius: 0 }} />
                     </span>
                   );
                 })}
-                {remainingTroops > 0 && <span style={{ fontSize: mobile ? 7 : 8, fontWeight: 700, color: 'var(--terminal-text)' }}>+{remainingTroops}</span>}
+                {remainingTroops > 0 && <span style={{ fontSize: mobile ? 7 : 8, fontWeight: 600, color: 'var(--terminal-text)' }}>+{remainingTroops}</span>}
               </div>
-              <div style={{ position: 'absolute', top: -4, left: -4, background: '#2c83ba', color: 'var(--terminal-surface)', fontSize: mobile ? 9 : 10, fontWeight: 700, borderRadius: 6, padding: '1px 5px', border: '1px solid #15567f', boxShadow: '0 2px 3px rgba(0,0,0,0.25)' }}>
+              <div style={{ position: 'absolute', top: -4, left: -4, background: 'var(--terminal-surface-raised)', color: 'var(--terminal-text)', fontSize: mobile ? 9 : 10, fontWeight: 600, borderRadius: 999, padding: '1px 5px', border: '1px solid var(--terminal-border-strong)' }}>
                 P{portNumber}
               </div>
               {/* Troop count badge */}
-              <div style={{ position: 'absolute', top: -4, right: -4, background: 'var(--terminal-text)', color: 'var(--terminal-surface)', fontSize: 9, fontWeight: 700, borderRadius: 6, padding: '1px 5px', border: '1px solid #3d1f00' }}>
+              <div style={{ position: 'absolute', top: -4, right: -4, background: 'var(--terminal-neutral-button)', color: '#ffffff', fontSize: 9, fontWeight: 600, borderRadius: 999, padding: '1px 5px', border: '1px solid var(--terminal-border-strong)', fontVariantNumeric: 'tabular-nums' }}>
                 x{realTroops.length}
               </div>
             </button>
@@ -837,8 +837,8 @@ function AttackHUD({
       {expandedShip !== null && (
         <div style={hud.shipModal} onClick={() => setExpandedShip(null)}>
           <div style={hud.shipModalPanel} onClick={e => e.stopPropagation()}>
-            <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--terminal-text)', textAlign: 'center', marginBottom: 10, letterSpacing: 0.3 }}>
-              Fleet — {ships.length} Ships
+            <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--terminal-text)', textAlign: 'center', marginBottom: 12 }}>
+              Fleet — {ships.length} ships
             </div>
             {ships.map((ship, si) => {
               const troops = ship.troops || [];
@@ -850,18 +850,18 @@ function AttackHUD({
                 groups[key] = (groups[key] || 0) + 1;
               }
               return (
-                <div key={si} style={{ width: '100%', marginBottom: 8, padding: '8px 10px', background: 'var(--terminal-surface)', borderRadius: 10, border: '1px solid var(--terminal-border)' }}>
-                  <div style={{ display: 'inline-flex', alignItems: 'center', marginBottom: 4, padding: '2px 7px', borderRadius: 7, background: '#2c83ba', color: 'var(--terminal-surface)', border: '1px solid #15567f', fontSize: 11, fontWeight: 700 }}>
+                <div key={si} style={{ width: '100%', marginBottom: 8, padding: '8px 10px', background: 'var(--terminal-surface-muted)', borderRadius: 12, border: '1px solid var(--terminal-border)' }}>
+                  <div style={{ display: 'inline-flex', alignItems: 'center', marginBottom: 4, padding: '2px 8px', borderRadius: 999, background: 'var(--terminal-surface-raised)', color: 'var(--terminal-text-secondary)', border: '1px solid var(--terminal-border)', fontSize: 11, fontWeight: 600 }}>
                     Port P{portNumber}
                   </div>
-                  <div style={{ fontSize: 11, fontWeight: 600, color: ship.placed ? 'var(--terminal-text-muted)' : 'var(--terminal-text)', marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.4 }}>
-                    Ship {si + 1} (Lv.{ship.level}) — {ship.placed ? 'DEPLOYED' : `${troops.length} troops`}
+                  <div style={{ fontSize: 11, fontWeight: 600, color: ship.placed ? 'var(--terminal-text-muted)' : 'var(--terminal-text)', marginBottom: 4 }}>
+                    Ship {si + 1} (Lv.{ship.level}) — {ship.placed ? 'Deployed' : `${troops.length} troops`}
                   </div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                     {Object.entries(groups).map(([key, count]) => {
                       const info = TROOP_IMG_MAP[key] || {};
                       return (
-                        <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 3, background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 6, padding: '2px 6px' }}>
+                        <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 3, background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 999, padding: '2px 8px 2px 3px' }}>
                           <div style={{ width: 22, height: 22, borderRadius: 3, overflow: 'hidden' }}>
                             <TroopPortrait info={info} style={{ width: '100%', height: '100%', objectFit: 'cover' }} fallbackStyle={{ fontSize: 7, border: 'none' }} />
                           </div>
@@ -873,7 +873,7 @@ function AttackHUD({
                 </div>
               );
             })}
-            <button style={{ marginTop: 6, padding: '8px 20px', background: 'var(--terminal-surface)', border: '1px solid var(--terminal-text-muted)', borderRadius: 10, color: 'var(--terminal-text)', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }} onClick={() => setExpandedShip(null)}>Close</button>
+            <button style={uiButton('secondary', { marginTop: 6, padding: '9px 20px', fontFamily: 'inherit' })} onClick={() => setExpandedShip(null)}>Close</button>
           </div>
         </div>
       )}
@@ -926,7 +926,7 @@ const formatReplayTime = (seconds) => {
   return `${mins}:${String(secs).padStart(2, '0')}`;
 };
 
-function ReplayHUD({ onReturnHome, battleTimer, replayDuration = 0, replayLabel = 'REPLAY', liveAgentBattle = false }) {
+function ReplayHUD({ onReturnHome, battleTimer, replayDuration = 0, replayLabel = 'Replay', liveAgentBattle = false }) {
   const { sendToGodot } = useSend();
   const { isMobile: mobile } = useLayout();
   const [speedIdx, setSpeedIdx] = useState(0);
@@ -991,7 +991,7 @@ function ReplayHUD({ onReturnHome, battleTimer, replayDuration = 0, replayLabel 
   const replayCountdownStyle = mobile ? { ...hud.replayCountdownWrap, ...hud.replayCountdownMobile } : hud.replayCountdownWrap;
   const replayCountdownLabelStyle = mobile ? { ...hud.replayCountdownLabel, fontSize: 8, marginBottom: 2 } : hud.replayCountdownLabel;
   const replayCountdownTimeStyle = mobile ? { ...hud.replayCountdownTime, fontSize: 24 } : hud.replayCountdownTime;
-  const badgeLabel = isLiveAgentBattle ? 'AI ONLINE' : replayLabel;
+  const badgeLabel = isLiveAgentBattle ? 'AI online' : replayLabel;
 
   return (
     <>
@@ -1002,7 +1002,7 @@ function ReplayHUD({ onReturnHome, battleTimer, replayDuration = 0, replayLabel 
           surrender flag, so we drop it. */}
       {!isLiveAgentBattle && remaining != null && (
         <div style={replayCountdownStyle} aria-live="polite">
-          <div style={replayCountdownLabelStyle}>REPLAY ENDS IN</div>
+          <div style={replayCountdownLabelStyle}>Replay ends in</div>
           <div style={replayCountdownTimeStyle}>{formatReplayTime(remaining)}</div>
         </div>
       )}
@@ -1390,7 +1390,7 @@ function ActionButtons({ onOpenBattleLog, onOpenBots }) {
         aria-hidden="true"
         style={{ ...styles.botIconImg, ...(mobile ? styles.botIconImgMobile : {}) }}
       />
-      <span style={{ ...styles.btnLabel, bottom: mobile ? 16 : 22, fontSize: mobile ? 9 : 11 }}>BOT</span>
+      <span style={{ ...styles.btnLabel, bottom: mobile ? 16 : 22, fontSize: mobile ? 9 : 11 }}>Bot</span>
     </CustomBtn>
   );
 
@@ -1410,7 +1410,7 @@ function ActionButtons({ onOpenBattleLog, onOpenBots }) {
               <img src={goldIcon} alt="" style={styles.attackCostIcon} />
               <span>{attackCost}</span>
             </div>
-            <span style={styles.btnLabel}>ATTACK</span>
+            <span style={styles.btnLabel}>Attack</span>
           </CustomBtn>
         </div>
         {shopButton}
@@ -1449,13 +1449,13 @@ function ActionButtons({ onOpenBattleLog, onOpenBots }) {
             }} width={btnSmall} height={btnSmall}>
               <div style={styles.notificationBadgeSmall}>!</div>
               <svg width={mobile ? 44 : 56} height={mobile ? 44 : 56} viewBox="0 0 64 64" fill="none">
-                <path d="M32 8L40 20H24L32 8Z" fill="#e8b830" stroke="var(--terminal-text)" strokeWidth="2"/>
-                <rect x="28" y="20" width="8" height="28" rx="2" fill="#e8b830" stroke="var(--terminal-text)" strokeWidth="2"/>
-                <rect x="20" y="28" width="24" height="8" rx="2" fill="#e8b830" stroke="var(--terminal-text)" strokeWidth="2"/>
+                <path d="M32 8L40 20H24L32 8Z" fill="var(--terminal-surface-raised)" stroke="var(--terminal-text)" strokeWidth="2"/>
+                <rect x="28" y="20" width="8" height="28" rx="2" fill="var(--terminal-surface-raised)" stroke="var(--terminal-text)" strokeWidth="2"/>
+                <rect x="20" y="28" width="24" height="8" rx="2" fill="var(--terminal-surface-raised)" stroke="var(--terminal-text)" strokeWidth="2"/>
                 <circle cx="32" cy="52" r="6" fill="var(--terminal-long)" stroke="var(--terminal-long-strong)" strokeWidth="2"/>
                 <path d="M29 52L31 54L35 50" stroke="var(--terminal-surface)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
               </svg>
-              <span style={{...styles.btnLabel, bottom: mobile ? 16 : 22, fontSize: mobile ? 9 : 11}}>REINFORCE</span>
+              <span style={{...styles.btnLabel, bottom: mobile ? 16 : 22, fontSize: mobile ? 9 : 11}}>Reinforce</span>
             </CustomBtn>
           )}
           {/* NFT mint stays in the right-side stack on desktop; mobile uses
@@ -1474,7 +1474,7 @@ function ActionButtons({ onOpenBattleLog, onOpenBots }) {
           <CustomBtn onClick={handleOpenTrade} width={btnSize} height={btnSize} data-tutorial="trade-btn">
             {(window._openPositionsCount || 0) > 0 && <div style={styles.notificationBadge}>!</div>}
             <img src={chartIcon} alt="trade" style={{ ...styles.chartIconImg, ...(mobile ? { width: 90, height: 90 } : {}) }} />
-            <span style={styles.btnLabel}>TRADE</span>
+            <span style={styles.btnLabel}>Trade</span>
           </CustomBtn>
         </div>
       </div>
@@ -1583,7 +1583,7 @@ function ReinforceModal({ casualties, cost: serverCost, onConfirm, onClose }) {
                   {UNIT_IMG_MAP[name]
                     ? <img src={UNIT_IMG_MAP[name]} alt={name} style={rf.img} />
                     : normalizeTroopKey(name) === 'windmage'
-                    ? <span aria-hidden="true" style={{ ...rf.img, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: '#2d6f7d', background: 'rgba(119, 218, 205, 0.22)', border: '1px solid rgba(45, 111, 125, 0.4)', borderRadius: 4, fontSize: 12, fontWeight: 700 }}>WM</span>
+                    ? <span aria-hidden="true" style={{ ...rf.img, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: 'var(--terminal-info)', background: 'var(--terminal-info-soft)', border: '1px solid var(--terminal-info-border)', borderRadius: 4, fontSize: 12, fontWeight: 600 }}>WM</span>
                     : null}
                   <div style={rf.countBadge}>x{count}</div>
                 </div>
@@ -1597,7 +1597,7 @@ function ReinforceModal({ casualties, cost: serverCost, onConfirm, onClose }) {
             <span style={rf.costLabel}>{total} troops to restore</span>
             <span style={rf.costVal}>{cost} gold</span>
           </div>
-          <button style={rf.confirmBtn} onClick={onConfirm}>REINFORCE ALL</button>
+          <button style={rf.confirmBtn} onClick={onConfirm}>Reinforce all</button>
         </div>
       </div>
     </div>
@@ -1606,43 +1606,43 @@ function ReinforceModal({ casualties, cost: serverCost, onConfirm, onClose }) {
 
 const rf = {
   overlay: {
-    position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
+    position: 'fixed', inset: 0, background: 'var(--terminal-overlay)',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     zIndex: 200, pointerEvents: 'all',
   },
   panel: {
     width: 400, maxWidth: '95vw', background: 'var(--terminal-surface)',
-    border: '1px solid var(--terminal-border)', borderRadius: 24,
-    boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
-    overflow: 'hidden', fontFamily: '"Inter","Segoe UI",sans-serif',
+    border: '1px solid var(--terminal-border)', borderRadius: 16,
+    boxShadow: 'var(--terminal-shadow-card)',
+    overflow: 'hidden', fontFamily: 'inherit',
   },
   header: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-    padding: '14px 16px', background: 'var(--terminal-border)', borderBottom: '1px solid var(--terminal-border-strong)',
+    padding: '12px 12px 12px 20px', background: 'transparent', borderBottom: '1px solid var(--terminal-border)',
   },
-  title: { fontSize: 20, fontWeight: 700, color: 'var(--terminal-text)' },
-  closeBtn: uiIconButton('danger', 30),
+  title: { fontSize: 18, fontWeight: 600, color: 'var(--terminal-text)' },
+  closeBtn: uiIconButton('ghost', 40),
   body: { padding: 20, display: 'flex', flexDirection: 'column', gap: 16, alignItems: 'center' },
   grid: { display: 'flex', flexWrap: 'wrap', gap: 14, justifyContent: 'center' },
   card: { width: 90, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 },
   imgWrap: {
-    width: 80, height: 80, borderRadius: 14, background: 'var(--terminal-surface-subtle)',
+    width: 80, height: 80, borderRadius: 14, background: 'var(--terminal-surface-muted)',
     border: '1px solid var(--terminal-border)', position: 'relative', overflow: 'hidden',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
   },
-  img: { width: '100%', height: '100%', objectFit: 'cover', filter: 'drop-shadow(0 3px 5px rgba(0,0,0,0.4)) sepia(0.2)' },
+  img: { width: '100%', height: '100%', objectFit: 'cover', filter: 'drop-shadow(0 3px 5px rgba(0,0,0,0.4))' },
   countBadge: {
     position: 'absolute', bottom: 2, right: 2,
-    background: 'var(--terminal-short)', color: 'var(--terminal-on-accent)', fontSize: 12, fontWeight: 700,
-    padding: '1px 7px', borderRadius: 8, boxShadow: '0 2px 4px rgba(0,0,0,0.4)',
+    background: 'var(--terminal-short-soft)', color: 'var(--terminal-short)', fontSize: 11, fontWeight: 600,
+    padding: '1px 7px', borderRadius: 999, border: '1px solid var(--terminal-short-border)',
   },
-  name: { fontSize: 12, fontWeight: 700, color: 'var(--terminal-text)' },
+  name: { fontSize: 12, fontWeight: 600, color: 'var(--terminal-text)' },
   costRow: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-    width: '100%', padding: '10px 0', borderTop: '1px solid var(--terminal-surface-subtle)',
+    width: '100%', padding: '10px 0', borderTop: '1px solid var(--terminal-border)',
   },
-  costLabel: { fontSize: 14, fontWeight: 600, color: 'var(--terminal-text-secondary)' },
-  costVal: { fontSize: 18, fontWeight: 700, color: '#e8b830' },
+  costLabel: { fontSize: 14, fontWeight: 500, color: 'var(--terminal-text-secondary)' },
+  costVal: { fontSize: 18, fontWeight: 600, color: 'var(--terminal-text)', fontVariantNumeric: 'tabular-nums' },
   confirmBtn: uiButton('primary', { width: '100%', minHeight: 48, padding: '14px', fontSize: 16 }),
 };
 
@@ -1680,54 +1680,49 @@ const hud = {
   },
   timerPill: {
     padding: '8px 16px',
-    background: 'linear-gradient(180deg, var(--terminal-surface) 0%, var(--terminal-border) 100%)',
-    border: '1px solid var(--terminal-text-muted)',
-    borderRadius: 10,
+    background: 'rgba(17,20,27,0.95)',
+    border: '1px solid var(--terminal-border)',
+    borderRadius: 999,
     fontSize: 20, fontWeight: 700,
-    letterSpacing: 0,
     color: 'var(--terminal-text)',
-    textShadow: 'none',
-    boxShadow: '0 4px 10px rgba(0,0,0,0.18), inset 0 1px 0 var(--terminal-chip-overlay)',
+    boxShadow: 'var(--terminal-shadow-card)',
     fontVariantNumeric: 'tabular-nums',
   },
   timerPillMobile: {
-    padding: '5px 9px',
-    borderRadius: 8,
+    padding: '5px 10px',
+    borderRadius: 999,
     fontSize: 15,
   },
   homeBtn: {
     width: 56, height: 56,
     padding: 0,
-    background: 'linear-gradient(180deg, var(--terminal-short) 0%, var(--terminal-short-strong) 100%)',
+    background: 'var(--terminal-short)',
     border: '1px solid var(--terminal-short-strong)',
-    borderRadius: 14,
+    borderRadius: 999,
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     cursor: 'pointer', flexShrink: 0, overflow: 'hidden',
     transition: 'filter 0.15s',
     outline: 'none',
     color: 'var(--terminal-on-accent)',
-    boxShadow: '0 4px 10px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.25)',
+    boxShadow: 'var(--terminal-shadow-card)',
   },
   homeBtnMobile: {
     width: 44,
     height: 44,
-    borderRadius: 11,
+    borderRadius: 999,
   },
   replayBadge: {
     padding: '8px 16px',
-    background: 'linear-gradient(180deg, var(--terminal-brand-border) 0%, var(--terminal-brand-strong) 100%)',
-    border: '1px solid var(--terminal-text)',
-    borderRadius: 10,
-    color: 'var(--terminal-text)', fontSize: 14, fontWeight: 700,
-    letterSpacing: '1px',
-    textShadow: 'none',
-    boxShadow: '0 4px 10px rgba(0,0,0,0.25), inset 0 1px 0 var(--terminal-chip-overlay)',
+    background: 'rgba(17,20,27,0.95)',
+    border: '1px solid var(--terminal-brand-border)',
+    borderRadius: 999,
+    color: 'var(--terminal-brand-text)', fontSize: 14, fontWeight: 600,
+    boxShadow: 'var(--terminal-shadow-card)',
   },
   replayBadgeMobile: {
-    padding: '7px 9px',
-    borderRadius: 9,
-    fontSize: 10,
-    letterSpacing: 0,
+    padding: '7px 10px',
+    borderRadius: 999,
+    fontSize: 11,
     maxWidth: 112,
     textAlign: 'center',
     whiteSpace: 'normal',
@@ -1742,13 +1737,13 @@ const hud = {
     pointerEvents: 'none',
     minWidth: 128,
     padding: '8px 16px 10px',
-    background: 'linear-gradient(180deg, var(--terminal-surface) 0%, var(--terminal-border) 100%)',
-    border: '1px solid var(--terminal-text-muted)',
-    borderRadius: 12,
-    boxShadow: '0 8px 24px rgba(0,0,0,0.28), inset 0 1px 0 var(--terminal-chip-overlay)',
+    background: 'rgba(17,20,27,0.95)',
+    border: '1px solid var(--terminal-border)',
+    borderRadius: 16,
+    boxShadow: 'var(--terminal-shadow-card)',
     color: 'var(--terminal-text)',
     textAlign: 'center',
-    fontFamily: '"Inter","Segoe UI",sans-serif',
+    fontFamily: 'inherit',
   },
   replayCountdownMobile: {
     top: 'calc(env(safe-area-inset-top, 0px) + 66px)',
@@ -1757,14 +1752,14 @@ const hud = {
     transform: 'none',
     minWidth: 92,
     padding: '5px 10px 7px',
-    borderRadius: 10,
+    borderRadius: 12,
     zIndex: 101,
   },
   replayCountdownLabel: {
-    color: 'var(--terminal-text-secondary)',
+    color: 'var(--terminal-text-faint)',
     fontSize: 10,
-    fontWeight: 700,
-    letterSpacing: 0.5,
+    fontWeight: 600,
+    letterSpacing: '0.06em',
     lineHeight: 1.1,
     marginBottom: 4,
     textTransform: 'uppercase',
@@ -1774,32 +1769,31 @@ const hud = {
     fontSize: 30,
     fontWeight: 700,
     lineHeight: 1,
-    textShadow: 'none',
     fontVariantNumeric: 'tabular-nums',
   },
   speedBtn: {
     width: 56, height: 56,
-    background: 'linear-gradient(180deg, var(--terminal-surface) 0%, var(--terminal-border) 100%)',
-    border: '1px solid var(--terminal-text-muted)',
-    borderRadius: 14,
+    background: 'rgba(17,20,27,0.95)',
+    border: '1px solid var(--terminal-border)',
+    borderRadius: 999,
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     cursor: 'pointer', flexShrink: 0,
     transition: 'filter 0.15s',
     outline: 'none',
-    boxShadow: '0 4px 10px rgba(0,0,0,0.18), inset 0 1px 0 var(--terminal-chip-overlay)',
+    boxShadow: 'var(--terminal-shadow-card)',
   },
   replayControlMobile: {
     width: 48,
     height: 48,
-    borderRadius: 12,
+    borderRadius: 999,
   },
   speedText: {
-    color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700,
-    textShadow: 'none',
+    color: 'var(--terminal-text)', fontSize: 18, fontWeight: 600,
+    fontVariantNumeric: 'tabular-nums',
   },
   sep: {
-    width: 2, height: 68,
-    background: 'linear-gradient(180deg, transparent, var(--terminal-text-muted), transparent)',
+    width: 1, height: 68,
+    background: 'var(--terminal-border)',
     borderRadius: 1, flexShrink: 0,
   },
   troopRow: {
@@ -1823,10 +1817,10 @@ const hud = {
   card: {
     position: 'relative',
     width: 74, height: 88,
-    background: 'linear-gradient(180deg, var(--terminal-surface) 0%, var(--terminal-border) 100%)',
+    background: 'rgba(17,20,27,0.95)',
     borderWidth: 1,
     borderStyle: 'solid',
-    borderColor: 'var(--terminal-text-muted)',
+    borderColor: 'var(--terminal-border)',
     borderRadius: 14,
     display: 'flex', flexDirection: 'column',
     alignItems: 'center', justifyContent: 'flex-start',
@@ -1834,7 +1828,7 @@ const hud = {
     overflow: 'hidden',
     transition: 'opacity 0.25s, border-color 0.2s, box-shadow 0.2s',
     outline: 'none',
-    boxShadow: '0 4px 10px rgba(0,0,0,0.15), inset 0 1px 0 rgba(255,255,255,0.45)',
+    boxShadow: 'var(--terminal-shadow-card)',
   },
   cardImgWrap: {
     width: 64, height: 62,
@@ -1844,94 +1838,86 @@ const hud = {
   },
   countBadge: {
     position: 'absolute', bottom: 19, right: 3,
-    background: 'var(--terminal-text)',
-    border: '1px solid #3d1f00',
-    borderRadius: 6, padding: '1px 5px',
+    background: 'var(--terminal-neutral-button)',
+    border: '1px solid var(--terminal-border-strong)',
+    borderRadius: 999, padding: '1px 5px',
   },
   countText: {
-    color: 'var(--terminal-surface)', fontSize: 12, fontWeight: 700,
+    color: '#ffffff', fontSize: 12, fontWeight: 600,
     lineHeight: 1.2,
   },
   selArrow: {
     position: 'absolute', bottom: 19, left: 4,
-    color: 'var(--terminal-brand-strong)', fontSize: 9, lineHeight: 1,
-    textShadow: 'none',
+    color: 'var(--terminal-orange)', fontSize: 9, lineHeight: 1,
   },
   shipModal: {
-    position: 'fixed', inset: 0, background: 'rgba(20,12,4,0.6)',
+    position: 'fixed', inset: 0, background: 'var(--terminal-overlay)',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     zIndex: 200, pointerEvents: 'all',
   },
   shipModalPanel: {
     background: 'var(--terminal-surface)',
-    border: '1px solid var(--terminal-border)', borderRadius: 18,
+    border: '1px solid var(--terminal-border)', borderRadius: 16,
     padding: '16px 20px', maxWidth: 320, width: 'calc(100% - 32px)',
     display: 'flex', flexDirection: 'column', alignItems: 'center',
-    boxShadow: '0 12px 40px rgba(0,0,0,0.5)',
+    boxShadow: 'var(--terminal-shadow-card)',
     color: 'var(--terminal-text)',
   },
   cardLabel: {
-    fontSize: 9, fontWeight: 700,
-    textTransform: 'uppercase', letterSpacing: '0.3px',
+    fontSize: 9, fontWeight: 600,
     marginTop: 2, lineHeight: 1,
     pointerEvents: 'none',
   },
   cannonBtn: {
     width: 82, height: 82,
     position: 'relative',
-    background: 'linear-gradient(180deg, var(--terminal-surface) 0%, var(--terminal-border) 100%)',
+    background: 'rgba(17,20,27,0.95)',
     borderWidth: 1,
     borderStyle: 'solid',
-    borderColor: 'var(--terminal-text-muted)',
+    borderColor: 'var(--terminal-border)',
     borderRadius: 18,
     display: 'flex', flexDirection: 'column',
     alignItems: 'center', justifyContent: 'center', gap: 4,
     cursor: 'pointer', flexShrink: 0,
     transition: 'border-color 0.2s, box-shadow 0.2s, filter 0.2s',
     outline: 'none',
-    boxShadow: '0 4px 12px rgba(0,0,0,0.22), inset 0 1px 0 var(--terminal-chip-overlay)',
+    boxShadow: 'var(--terminal-shadow-card)',
   },
   cannonActive: {
     borderWidth: 1,
     borderStyle: 'solid',
-    borderColor: 'rgba(255,155,0,0.88)',
-    boxShadow: '0 0 22px rgba(255,155,0,0.5), inset 0 0 10px rgba(255,155,0,0.12)',
-    filter: 'brightness(1.18)',
+    borderColor: 'var(--terminal-orange)',
+    boxShadow: '0 0 0 1px var(--terminal-orange)',
   },
   rallyActive: {
     borderWidth: 1,
     borderStyle: 'solid',
-    borderColor: 'rgba(255,55,40,0.95)',
-    boxShadow: '0 0 22px rgba(255,55,40,0.55), inset 0 0 10px rgba(255,55,40,0.18)',
-    filter: 'brightness(1.18)',
+    borderColor: 'var(--terminal-orange)',
+    boxShadow: '0 0 0 1px var(--terminal-orange)',
   },
   medkitActive: {
     borderWidth: 1,
     borderStyle: 'solid',
-    borderColor: 'rgba(32,184,101,0.95)',
-    boxShadow: '0 0 22px rgba(32,184,101,0.55), inset 0 0 10px rgba(32,184,101,0.18)',
-    filter: 'brightness(1.12)',
+    borderColor: 'var(--terminal-orange)',
+    boxShadow: '0 0 0 1px var(--terminal-orange)',
   },
   freezeActive: {
     borderWidth: 1,
     borderStyle: 'solid',
-    borderColor: 'rgba(70,203,255,0.95)',
-    boxShadow: '0 0 22px rgba(70,203,255,0.55), inset 0 0 10px rgba(70,203,255,0.18)',
-    filter: 'brightness(1.14)',
+    borderColor: 'var(--terminal-orange)',
+    boxShadow: '0 0 0 1px var(--terminal-orange)',
   },
   rageActive: {
     borderWidth: 1,
     borderStyle: 'solid',
-    borderColor: 'rgba(197,65,222,0.95)',
-    boxShadow: '0 0 22px rgba(197,65,222,0.55), inset 0 0 10px rgba(197,65,222,0.18)',
-    filter: 'brightness(1.14)',
+    borderColor: 'var(--terminal-orange)',
+    boxShadow: '0 0 0 1px var(--terminal-orange)',
   },
   skeletonBarrelActive: {
     borderWidth: 1,
     borderStyle: 'solid',
-    borderColor: 'rgba(223,139,45,0.95)',
-    boxShadow: '0 0 22px rgba(223,139,45,0.55), inset 0 0 10px rgba(223,139,45,0.18)',
-    filter: 'brightness(1.14)',
+    borderColor: 'var(--terminal-orange)',
+    boxShadow: '0 0 0 1px var(--terminal-orange)',
   },
   abilityRail: {
     display: 'flex',
@@ -1975,8 +1961,8 @@ const hud = {
     WebkitTapHighlightColor: 'transparent',
   },
   mobileEnergyToggleActive: {
-    borderColor: '#d64817',
-    boxShadow: '0 0 14px rgba(214,72,23,0.42), inset 0 1px 0 var(--terminal-chip-overlay)',
+    borderColor: 'var(--terminal-orange)',
+    boxShadow: '0 0 0 1px var(--terminal-orange)',
   },
   mobileAbilityChevron: {
     width: 7,
@@ -1996,10 +1982,10 @@ const hud = {
     right: 0,
     bottom: 'calc(100% + 8px)',
     padding: 6,
-    background: 'linear-gradient(180deg, rgba(255,246,220,0.98) 0%, rgba(234,217,178,0.98) 100%)',
-    border: '1px solid var(--terminal-text-muted)',
-    borderRadius: 14,
-    boxShadow: '0 10px 28px rgba(0,0,0,0.34), inset 0 1px 0 var(--terminal-chip-overlay)',
+    background: 'rgba(17,20,27,0.95)',
+    border: '1px solid var(--terminal-border)',
+    borderRadius: 16,
+    boxShadow: 'var(--terminal-shadow-card)',
     boxSizing: 'border-box',
   },
   mobileAbilityGrid: {
@@ -2016,9 +2002,8 @@ const hud = {
     cursor: 'default',
   },
   cannonLabel: {
-    color: 'var(--terminal-text)', fontSize: 10, fontWeight: 700,
-    textTransform: 'uppercase', letterSpacing: '0.5px', lineHeight: 1,
-    textShadow: 'none',
+    color: 'var(--terminal-text)', fontSize: 10, fontWeight: 600,
+    lineHeight: 1,
   },
   cannonCostBadge: {
     position: 'absolute',
@@ -2029,8 +2014,8 @@ const hud = {
     gap: 2,
     color: 'var(--terminal-text)',
     fontSize: 14,
-    fontWeight: 700,
-    textShadow: 'none',
+    fontWeight: 600,
+    fontVariantNumeric: 'tabular-nums',
   },
   cannonCostBadgeMobile: {
     bottom: 1,
@@ -2038,38 +2023,36 @@ const hud = {
     fontSize: 11,
   },
   cannonCostIcon: {
-    background: '#d64817',
+    background: 'var(--terminal-orange)',
     borderRadius: '50%',
     width: 12, height: 12,
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     fontSize: 8,
-    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.3)',
-    color: 'var(--terminal-on-accent)',
+    color: '#ffffff',
   },
   cannonGroup: {
     display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8,
   },
   energyPill: {
-    background: 'linear-gradient(180deg, var(--terminal-surface) 0%, var(--terminal-border) 100%)',
-    border: '1px solid var(--terminal-text-muted)',
-    borderRadius: 10,
+    background: 'rgba(17,20,27,0.95)',
+    border: '1px solid var(--terminal-border)',
+    borderRadius: 999,
     padding: '6px 12px',
     display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8,
-    boxShadow: '0 4px 10px rgba(0,0,0,0.2), inset 0 1px 0 var(--terminal-chip-overlay)',
+    boxShadow: 'var(--terminal-shadow-card)',
   },
   energyPillMobile: {
-    borderRadius: 8,
+    borderRadius: 999,
     padding: '3px 7px',
     gap: 4,
   },
   energyIcon: {
     fontSize: 16, lineHeight: 1,
-    background: '#d64817',
+    background: 'var(--terminal-orange)',
     borderRadius: '50%',
     width: 24, height: 24,
     display: 'flex', alignItems: 'center', justifyContent: 'center',
-    boxShadow: 'inset 0 2px 0 rgba(255,255,255,0.3)',
-    color: 'var(--terminal-on-accent)',
+    color: '#ffffff',
   },
   energyIconMobile: {
     width: 18,
@@ -2077,7 +2060,7 @@ const hud = {
   },
   energyValue: {
     fontSize: 22, fontWeight: 700, color: 'var(--terminal-text)',
-    textShadow: 'none',
+    fontVariantNumeric: 'tabular-nums',
   },
   energyValueMobile: {
     fontSize: 16,
@@ -2128,17 +2111,17 @@ const styles = {
     height: 26,
     padding: '0 8px 0 5px',
     borderRadius: 13,
-    background: 'linear-gradient(180deg, #fff2a8 0%, #d79d15 100%)',
-    border: '1px solid var(--terminal-text)',
-    boxShadow: '0 3px 6px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.65)',
+    background: 'rgba(17,20,27,0.95)',
+    border: '1px solid var(--terminal-border-strong)',
+    boxShadow: 'var(--terminal-shadow-card)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 3,
     color: 'var(--terminal-text)',
     fontSize: 14,
-    fontWeight: 700,
-    textShadow: 'none',
+    fontWeight: 600,
+    fontVariantNumeric: 'tabular-nums',
     zIndex: 12,
   },
   attackCostBadgeMobile: {
@@ -2149,9 +2132,9 @@ const styles = {
     fontSize: 13,
   },
   attackCostBadgeLocked: {
-    background: 'linear-gradient(180deg, #ffd1d1 0%, #d94a3b 100%)',
-    color: 'var(--terminal-on-accent)',
-    textShadow: 'none',
+    background: 'rgba(17,20,27,0.95)',
+    borderColor: 'var(--terminal-short-border)',
+    color: 'var(--terminal-short)',
   },
   attackCostIcon: {
     width: 15,
@@ -2193,22 +2176,21 @@ const styles = {
   },
   btnLabel: {
     position: 'absolute', bottom: 28, left: 0, right: 0,
-    color: 'var(--terminal-on-accent)', fontSize: 14, fontWeight: 700,
-    textShadow: 'none',
-    textTransform: 'uppercase', letterSpacing: '0.5px', textAlign: 'center', zIndex: 10,
+    color: 'var(--terminal-on-accent)', fontSize: 14, fontWeight: 600,
+    textAlign: 'center', zIndex: 10,
   },
   notificationBadge: {
     position: 'absolute', top: 6, right: 6,
-    background: '#E63946', color: 'var(--terminal-on-accent)', borderRadius: '50%',
+    background: 'var(--terminal-short)', color: 'var(--terminal-on-accent)', borderRadius: '50%',
     width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center',
-    fontSize: 16, fontWeight: 700, border: '1px solid var(--terminal-surface)',
-    boxShadow: '0 4px 8px rgba(0,0,0,0.5)', zIndex: 5,
+    fontSize: 16, fontWeight: 600, border: '1px solid var(--terminal-surface)',
+    zIndex: 5,
   },
   notificationBadgeSmall: {
     position: 'absolute', top: 4, right: 4,
-    background: '#E63946', color: 'var(--terminal-on-accent)', borderRadius: '50%',
+    background: 'var(--terminal-short)', color: 'var(--terminal-on-accent)', borderRadius: '50%',
     width: 24, height: 24, display: 'flex', alignItems: 'center', justifyContent: 'center',
-    fontSize: 12, fontWeight: 700, border: '1px solid var(--terminal-surface)',
-    boxShadow: '0 4px 8px rgba(0,0,0,0.5)', zIndex: 5,
+    fontSize: 12, fontWeight: 600, border: '1px solid var(--terminal-surface)',
+    zIndex: 5,
   },
 };

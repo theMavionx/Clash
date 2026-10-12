@@ -74,6 +74,7 @@ function scriptHarness() {
   const scripts = [];
   const context = {
     window: {}, GODOT_FILES: '/godot', CACHE_BUST: '?v=fixture',
+    withGodotCacheBust: src => `${src}?v=fixture`,
     reportGodotAssetError: () => {},
     document: {
       querySelector: () => scripts.find(script => !script.removed) || null,
@@ -117,7 +118,7 @@ test('second script failure rejects and clears stale DOM/promise for a later ret
 test('startup failure renders a readable alert and a real retry button, not false progress', () => {
   const view = render({ error: failedStartup('godot.start_error').messages[0] });
   assert.match(view.markup, /role="alert"/);
-  assert.match(view.markup, /UNABLE TO LOAD GAME/);
+  assert.match(view.markup, /Unable to load the game/);
   assert.doesNotMatch(view.markup, /49%/);
   const button = descendants(view.tree).find(node => node.type === 'button');
   assert.equal(button.props.children, 'Retry loading game');

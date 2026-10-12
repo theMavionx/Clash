@@ -88,24 +88,24 @@ function LeaderboardPanel({ onClose }) {
 export default memo(LeaderboardPanel);
 
 const S = {
-  backdrop: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 200, pointerEvents: 'auto' },
+  backdrop: { position: 'fixed', inset: 0, background: 'var(--terminal-overlay)', zIndex: 200, pointerEvents: 'auto' },
   modal: {
     position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-    width: 360, maxHeight: '85vh', background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 24,
-    boxShadow: '0 20px 60px rgba(0,0,0,0.5)', display: 'flex', flexDirection: 'column',
-    zIndex: 201, pointerEvents: 'auto', overflow: 'hidden', fontFamily: '"Inter","Segoe UI",sans-serif',
+    width: 360, maxHeight: '85vh', background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 16,
+    boxShadow: 'var(--terminal-shadow-card)', display: 'flex', flexDirection: 'column',
+    zIndex: 201, pointerEvents: 'auto', overflow: 'hidden', fontFamily: 'inherit',
   },
   header: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    padding: '14px 16px', background: 'var(--terminal-border)', borderBottom: '1px solid var(--terminal-border-strong)',
+    padding: '14px 16px', background: 'var(--terminal-surface)', borderBottom: '1px solid var(--terminal-border)',
   },
-  headerTitle: { fontSize: 18, fontWeight: 700, color: 'var(--terminal-text)' },
-  closeBtn: uiIconButton('danger', 30),
+  headerTitle: { fontSize: 18, fontWeight: 600, color: 'var(--terminal-text)' },
+  closeBtn: uiIconButton('ghost', 30),
   body: {
     flex: 1, padding: 12, display: 'flex', flexDirection: 'column', gap: 6,
     overflowY: 'auto',
   },
-  empty: { textAlign: 'center', padding: 40, color: 'var(--terminal-text-muted)', fontWeight: 700, fontSize: 14 },
+  empty: { textAlign: 'center', padding: 40, color: 'var(--terminal-text-muted)', fontWeight: 600, fontSize: 14 },
   row: {
     display: 'flex', alignItems: 'center', gap: 10,
     padding: '8px 12px', borderRadius: 12,
@@ -113,15 +113,15 @@ const S = {
   rank: {
     width: 28, height: 28, borderRadius: '50%',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
-    fontSize: 13, fontWeight: 700, flexShrink: 0,
+    fontSize: 13, fontWeight: 600, flexShrink: 0,
   },
   info: { flex: 1, display: 'flex', flexDirection: 'column', gap: 1 },
-  name: { fontSize: 14, fontWeight: 700 },
-  level: { fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-muted)' },
+  name: { fontSize: 14, fontWeight: 600 },
+  level: { fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-muted)' },
   trophyWrap: { display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 },
   trophyIcon: {
     width: 18, height: 18, objectFit: 'contain',
     filter: 'invert(60%) sepia(90%) saturate(500%) hue-rotate(10deg)',
   },
-  trophyNum: { fontSize: 16, fontWeight: 700, color: 'var(--terminal-warning)' },
+  trophyNum: { fontSize: 16, fontWeight: 600, color: 'var(--terminal-warning)' },
 };

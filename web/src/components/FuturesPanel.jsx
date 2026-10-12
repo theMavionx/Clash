@@ -1161,7 +1161,7 @@ function PositionPnlReadout({ pnlDisplay, pnlColor, pnlFees, isDust, compact = f
     >
       <span style={{
         fontSize: compact ? 18 : 14,
-        fontWeight: 700,
+        fontWeight: 600,
         color: pnlColor,
         fontVariantNumeric: 'tabular-nums',
         whiteSpace: 'nowrap',
@@ -1353,14 +1353,14 @@ function orderTriggerPrice(order) {
 
 function orderDisplayType(order, positions = []) {
   const kind = orderTpslKind(order);
-  if (kind === 'tp') return 'TAKE PROFIT';
-  if (kind === 'sl') return 'STOP LOSS';
+  if (kind === 'tp') return 'Take profit';
+  if (kind === 'sl') return 'Stop loss';
   const stopPrice = orderTriggerPrice(order);
   if (stopPrice > 0 && Array.isArray(positions)) {
     const pos = positions.find(p => orderMatchesPosition(order, p));
     const inferred = pos ? inferTpslKindFromPosition(order, pos, stopPrice) : '';
-    if (inferred === 'tp') return 'TAKE PROFIT';
-    if (inferred === 'sl') return 'STOP LOSS';
+    if (inferred === 'tp') return 'Take profit';
+    if (inferred === 'sl') return 'Stop loss';
   }
   const rawType = order?.order_type ?? order?.orderType ?? order?.ot ?? order?.type;
   // Several SDKs expose enum ordinals (Phoenix currently returns `1`) rather
@@ -1619,7 +1619,7 @@ function validateTpslBeforeSubmit({ dex, pos, tpPrice, slPrice, setLocalAlert })
   const tp = Number(tpPrice);
   const sl = Number(slPrice);
   const isLong = String(pos?.side || '').toLowerCase() !== 'ask';
-  const sideLabel = isLong ? 'LONG' : 'SHORT';
+  const sideLabel = isLong ? 'Long' : 'Short';
   if (Number.isFinite(reference) && reference > 0) {
     if (Number.isFinite(tp) && tp > 0) {
       const badTp = isLong ? tp <= reference : tp >= reference;
@@ -1875,7 +1875,7 @@ function TpslEditor({
       <div className="position-tpsl__context">
         <dl><div><dt>Entry price</dt><dd>{entry > 0 ? `$${fmtPrice(entry)}` : '—'}</dd></div>
           <div><dt>Mark price</dt><dd>{mark > 0 ? `$${fmtPrice(mark)}` : '—'}</dd></div></dl>
-        <span className="position-tpsl__side" data-side={isLong ? 'long' : 'short'}>{isLong ? 'LONG' : 'SHORT'}</span>
+        <span className="position-tpsl__side" data-side={isLong ? 'long' : 'short'}>{isLong ? 'Long' : 'Short'}</span>
       </div>
       <div className="position-tpsl__mode-row">
         <span>Set targets by</span>
@@ -2063,7 +2063,7 @@ function orderSideLabel(order) {
   const direction = String(order?.order_direction || order?.orderDirection || '').trim();
   if (direction) return direction;
   const side = orderPositionSide(order);
-  return side === 'bid' ? 'BUY' : 'SELL';
+  return side === 'bid' ? 'Buy' : 'Sell';
 }
 
 function positionOpenSide(pos) {
@@ -2485,7 +2485,7 @@ function AttachedTpslSummary({ order, compact = false }) {
   const renderLeg = (kind, label) => {
     const row = byKind[kind];
     const price = row ? orderDisplayPrice(row) : 0;
-    const color = kind === 'tp' ? '#118a3b' : '#b92727';
+    const color = kind === 'tp' ? 'var(--terminal-long)' : 'var(--terminal-short)';
     return (
       <span style={compact ? {...S.attachedTpslLegCompact, color} : {...S.attachedTpslLeg, color}}>
         {label}: {price > 0 ? formatOrderPrice(price) : 'None'}
@@ -2723,7 +2723,7 @@ const flashFundingModalStyles = {
     alignItems: 'center',
     justifyContent: 'center',
     padding: 14,
-    background: 'rgba(12, 8, 4, 0.45)',
+    background: 'var(--terminal-overlay)',
     fontFamily: '"Inter","Segoe UI",sans-serif',
   },
   panel: {
@@ -2733,7 +2733,7 @@ const flashFundingModalStyles = {
     background: 'var(--terminal-surface)',
     border: '1px solid var(--terminal-border)',
     borderRadius: 16,
-    boxShadow: '0 18px 44px rgba(0,0,0,0.36)',
+    boxShadow: 'var(--terminal-shadow-card)',
     padding: 16,
     display: 'flex',
     flexDirection: 'column',
@@ -2796,7 +2796,7 @@ const SymbolPicker = memo(function SymbolPicker({ markets, prices, symbol, onSel
         value={search}
         onChange={e => setSearch(e.target.value)}
         autoFocus
-        style={{padding: '6px 10px', border: '1px solid var(--terminal-border)', borderRadius: 8, background: 'var(--terminal-surface)', fontSize: 13, fontWeight: 700, color: 'var(--terminal-text)', outline: 'none'}}
+        style={{padding: '6px 10px', border: '1px solid var(--terminal-border)', borderRadius: 8, background: 'var(--terminal-surface)', fontSize: 13, fontWeight: 600, color: 'var(--terminal-text)', outline: 'none'}}
       />
       <div className="grad-scrollbar" style={{overflowY: 'auto', overflowX: 'hidden', flex: 1}}>
         <table style={{width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse', fontSize: 12, fontFamily: '"Inter","Segoe UI",sans-serif'}}>
@@ -2818,10 +2818,10 @@ const SymbolPicker = memo(function SymbolPicker({ markets, prices, symbol, onSel
               <td style={SP.td}>
                 <div style={{display: 'flex', alignItems: 'center', gap: 5}}>
                   <TokenIcon sym={r.iconSym} size={18} />
-                  <span style={{fontWeight: 700, color: 'var(--terminal-text)'}}>{r.label}</span>
+                  <span style={{fontWeight: 600, color: 'var(--terminal-text)'}}>{r.label}</span>
                   <span style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-muted)'}}>{r.maxLev}x</span>
                   {r.marketClosed && (
-                    <span style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-warning)', background: 'var(--terminal-warning-soft)', border: '1px solid var(--terminal-warning)', borderRadius: 5, padding: '1px 4px'}}>
+                    <span style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-warning)', background: 'var(--terminal-warning-border)', border: '1px solid var(--terminal-warning)', borderRadius: 5, padding: '1px 4px'}}>
                       Closed
                     </span>
                   )}
@@ -2854,7 +2854,7 @@ const SymbolPicker = memo(function SymbolPicker({ markets, prices, symbol, onSel
               >
                 {r.activity?.label || '—'}
               </td>
-              <td style={{...SP.td, textAlign: 'right', fontWeight: 700, fontFamily: 'monospace', color: 'var(--terminal-text)', fontSize: 11, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'clip'}}>
+              <td style={{...SP.td, textAlign: 'right', fontWeight: 600, fontFamily: 'monospace', color: 'var(--terminal-text)', fontSize: 11, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'clip'}}>
                 {r.mark > 0 ? fmtPrice(r.mark) : '—'}
               </td>
               <td style={{...SP.td, textAlign: 'right', fontWeight: 600, fontFamily: 'monospace', color: r.change >= 0 ? 'var(--terminal-long)' : 'var(--terminal-short)', fontSize: 11, whiteSpace: 'nowrap', overflow: 'hidden'}}>
@@ -2925,7 +2925,7 @@ const OrdersList = memo(function OrdersList({ orders, cancelOrder, positions = [
         <div style={{opacity: 0.3, color: 'var(--terminal-text)'}}>
           <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
         </div>
-        <div style={{color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700}}>No Orders</div>
+        <div style={{color: 'var(--terminal-text)', fontSize: 18, fontWeight: 600}}>No Orders</div>
       </div>
     );
   }
@@ -2949,10 +2949,10 @@ const OrdersList = memo(function OrdersList({ orders, cancelOrder, positions = [
         return (
           <div key={orderStableKey(o, i)} style={S.posCard}>
             <div style={S.row}>
-              <span style={{fontSize: 16, fontWeight: 700}}>{sym}</span>
+              <span style={{fontSize: 16, fontWeight: 600}}>{sym}</span>
               <span style={{fontSize: 11, fontWeight: 600, color: typeColor, background: 'var(--terminal-surface)', padding: '2px 6px', borderRadius: 5, border: '1px solid var(--terminal-border)'}}>{type}</span>
               {pending ? <OrderPendingBadge /> : null}
-              <span style={{fontSize: 13, fontWeight: 700, color: isBid ? 'var(--terminal-long)' : 'var(--terminal-short)'}}>
+              <span style={{fontSize: 13, fontWeight: 600, color: isBid ? 'var(--terminal-long)' : 'var(--terminal-short)'}}>
                 {sideLabel}
               </span>
               {pending ? (
@@ -2998,7 +2998,7 @@ const PositionsList = memo(function PositionsList({
         <div style={{opacity: 0.3, color: 'var(--terminal-text)'}}>
           <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect width="20" height="14" x="2" y="7" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
         </div>
-        <div style={{color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700}}>{dataReady ? 'No Positions' : 'Loading...'}</div>
+        <div style={{color: 'var(--terminal-text)', fontSize: 18, fontWeight: 600}}>{dataReady ? 'No Positions' : 'Loading...'}</div>
       </div>
     );
   }
@@ -3038,19 +3038,19 @@ const PositionsList = memo(function PositionsList({
         return (
           <div key={positionStableKey(pos) || i} style={S.posCard}>
             <div style={S.row}>
-              <span style={{fontSize: 16, fontWeight: 700}}>{pos.symbol}</span>
+              <span style={{fontSize: 16, fontWeight: 600}}>{pos.symbol}</span>
               <div style={{display: 'flex', alignItems: 'center', gap: 6}}>
                 {(() => {
                   const isIso = pos.is_isolated ?? marginModes?.[pos.symbol];
                   return (
                     <span style={{fontSize: 11, fontWeight: 600, padding: '2px 6px', borderRadius: 5, borderWidth: 1, borderStyle: 'solid', borderColor: isIso ? 'var(--terminal-warning)' : 'var(--terminal-long)', color: isIso ? 'var(--terminal-warning)' : 'var(--terminal-long)', background: 'var(--terminal-chip-overlay)'}}>
-                      {isIso ? 'ISO' : 'CROSS'}
+                      {isIso ? 'Iso' : 'Cross'}
                     </span>
                   );
                 })()}
                 <span style={{fontSize: 11, fontWeight: 600, color: isDust ? 'var(--terminal-warning)' : 'var(--terminal-text-muted)', background: 'var(--terminal-surface)', padding: '2px 6px', borderRadius: 5, border: '1px solid var(--terminal-border)'}}>{isDust ? 'DUST' : formatPositionLeverageBadge(setLev)}</span>
-                <span style={{fontSize: 13, fontWeight: 700, color: pos.side === 'bid' ? 'var(--terminal-long)' : 'var(--terminal-short)'}}>
-                  {pos.side === 'bid' ? 'LONG' : 'SHORT'}
+                <span style={{fontSize: 13, fontWeight: 600, color: pos.side === 'bid' ? 'var(--terminal-long)' : 'var(--terminal-short)'}}>
+                  {pos.side === 'bid' ? 'Long' : 'Short'}
                 </span>
               </div>
             </div>
@@ -3112,8 +3112,8 @@ const PositionsList = memo(function PositionsList({
             {expanded === 'close' && (
               <PositionActionDialog title={`Close ${pos.symbol}`} onClose={() => setExpandedPos(null)} feedback={localAlert || error}>
                 <div style={S.row}>
-                  <span style={{fontSize: 13, fontWeight: 700, color: 'var(--terminal-text)'}}>{isDust ? 'Clean up Flash dust' : `Close ${closePct}%`}</span>
-                  <span style={{fontSize: 11, color: 'var(--terminal-text-muted)', fontWeight: 700}}>
+                  <span style={{fontSize: 13, fontWeight: 600, color: 'var(--terminal-text)'}}>{isDust ? 'Clean up Flash dust' : `Close ${closePct}%`}</span>
+                  <span style={{fontSize: 11, color: 'var(--terminal-text-muted)', fontWeight: 600}}>
                     {formatCloseAmountLabel(pos, closePct, posValueUsd, isDust, dustUsd)}
                   </span>
                 </div>
@@ -3359,29 +3359,29 @@ const BottomPanel = memo(function BottomPanel({
                   <Fragment key={rowKey}>
                   <tr style={S.tr}>
                     <td style={S.td}>{p.symbol}</td>
-                    <td style={{...S.td, color: p.side === 'bid' ? 'var(--terminal-long)' : 'var(--terminal-short)', fontWeight: 750}}>{p.side === 'bid' ? 'LONG' : 'SHORT'}</td>
+                    <td style={{...S.td, color: p.side === 'bid' ? 'var(--terminal-long)' : 'var(--terminal-short)', fontWeight: 600}}>{p.side === 'bid' ? 'Long' : 'Short'}</td>
                     <td style={S.td}>{isDust ? 'Dust' : fmtAmount(p.amount)} <span style={{color: 'var(--terminal-text-muted)', fontSize: 11}}>(${(isDust ? dustUsd : tblPosValue).toFixed(2)})</span></td>
                     <td style={S.td}>${formatPositionPrice(entryPrice, dex)}</td>
                     <td style={S.td} title={p.live_mark_basis === 'index' ? 'Index estimate — execution-venue quote is unavailable or stale' : undefined}>
                       {markPrice ? `$${formatPositionPrice(markPrice, dex)}` : '—'}
                       {p.live_mark_basis === 'index' && <div style={{fontSize: 10, color: 'var(--terminal-text-muted)'}}>Index · est.</div>}
                     </td>
-                    <td style={{...S.td, color: pnlColor, fontWeight: 700}} title={positionPnlFeeTitle(pnlFees)}>
+                    <td style={{...S.td, color: pnlColor, fontWeight: 600}} title={positionPnlFeeTitle(pnlFees)}>
                       <div>{pnlDisplay.primaryLabel} {formatSignedPnlUsd(pnlDisplay.primaryPnlUsd)}</div>
                       {pnlDisplay.secondaryNetPnlUsd != null && (
                         <div style={{fontSize: 11, color: 'var(--terminal-warning)'}}>{pnlDisplay.secondaryLabel} {formatSignedPnlUsd(pnlDisplay.secondaryNetPnlUsd)}</div>
                       )}
                     </td>
-                    <td style={{...S.td, color: pnlColor, fontWeight: 700}} title={positionPnlFeeTitle(pnlFees)}>
+                    <td style={{...S.td, color: pnlColor, fontWeight: 600}} title={positionPnlFeeTitle(pnlFees)}>
                       <div>{isDust ? '-' : `${pnlDisplay.primaryPnlPct >= 0 ? '+' : ''}${pnlDisplay.primaryPnlPct.toFixed(2)}%`}</div>
                       {!isDust && pnlDisplay.secondaryNetPnlPct != null && (
                         <div style={{fontSize: 11, color: 'var(--terminal-warning)'}}>{pnlDisplay.secondaryNetPnlPct >= 0 ? '+' : ''}{pnlDisplay.secondaryNetPnlPct.toFixed(2)}%</div>
                       )}
                     </td>
                     <td style={S.td}>
-                      <span style={{color: tp ? 'var(--terminal-long)' : 'var(--terminal-text-faint)', fontWeight: 750}}>TP {tp ? `$${fmtPrice(tp)}` : '-'}</span>
+                      <span style={{color: tp ? 'var(--terminal-long)' : 'var(--terminal-text-faint)', fontWeight: 600}}>TP {tp ? `$${fmtPrice(tp)}` : '-'}</span>
                       <span style={{color: 'var(--terminal-text-muted)'}}> / </span>
-                      <span style={{color: sl ? 'var(--terminal-short)' : 'var(--terminal-text-faint)', fontWeight: 750}}>SL {sl ? `$${fmtPrice(sl)}` : '-'}</span>
+                      <span style={{color: sl ? 'var(--terminal-short)' : 'var(--terminal-text-faint)', fontWeight: 600}}>SL {sl ? `$${fmtPrice(sl)}` : '-'}</span>
                     </td>
                     <td style={S.td}>{isDust ? 'Dust' : formatPositionLeverageBadge(lev)}</td>
                     <td style={{...S.td, whiteSpace: 'nowrap'}}>
@@ -3567,8 +3567,8 @@ const BottomPanel = memo(function BottomPanel({
                 return (
                   <tr key={orderStableKey(o, i)} style={S.tr}>
                     <td style={S.td}>{sym}</td>
-                    <td style={{...S.td, color: positionSide === 'bid' ? 'var(--terminal-long)' : 'var(--terminal-short)', fontWeight: 750}}>{sideLabel}</td>
-                    <td style={{...S.td, color: typeColor, fontWeight: 700}}>
+                    <td style={{...S.td, color: positionSide === 'bid' ? 'var(--terminal-long)' : 'var(--terminal-short)', fontWeight: 600}}>{sideLabel}</td>
+                    <td style={{...S.td, color: typeColor, fontWeight: 600}}>
                       <span style={{display: 'inline-flex', alignItems: 'center', gap: 6}}>
                         {type}
                         {pending ? <OrderPendingBadge /> : null}
@@ -3896,7 +3896,7 @@ function FuturesPanel() {
         style={{...terminalButton(color, dark), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
         onClick={loginWithPrivyEmail}
       >
-        <span>{privyAuthed ? 'CONTINUE WITH EMAIL' : 'SIGN IN WITH EMAIL'}</span>
+        <span>{privyAuthed ? 'Continue with email' : 'Sign in with email'}</span>
       </button>
     );
   }, [privyEnabled, privyAuthed, loginWithPrivyEmail]);
@@ -5495,7 +5495,7 @@ function FuturesPanel() {
           <span style={{display: 'inline-flex', flexShrink: 0}}>
             <TokenIcon sym={baseSymbolForIcon(currentMarket, symbol)} size={20} />
           </span>
-          <span style={{fontSize: 15, fontWeight: 700, flexShrink: 0}}>{symbol}</span>
+          <span style={{fontSize: 15, fontWeight: 600, flexShrink: 0}}>{symbol}</span>
           {(() => {
             const loaded = elfaSignals && Object.keys(elfaSignals).length > 0;
             if (!loaded) return null;
@@ -5509,7 +5509,7 @@ function FuturesPanel() {
               </span>
             );
           })()}
-          {!isMobile && !fullscreen && currentPrice && <span style={{...S.symbolPriceCompact, fontSize: 13, color: 'var(--terminal-text)', fontWeight: 700}}>${fmtPrice(parseFloat(currentPrice))}</span>}
+          {!isMobile && !fullscreen && currentPrice && <span style={{...S.symbolPriceCompact, fontSize: 13, color: 'var(--terminal-text)', fontWeight: 600}}>${fmtPrice(parseFloat(currentPrice))}</span>}
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" style={{flexShrink: 0}}><polyline points="6 9 12 15 18 9"/></svg>
         </button>
         {fullscreen && !isMobile && (
@@ -5563,7 +5563,7 @@ function FuturesPanel() {
                 ? 'Bulk cross margin and leverage are managed by your signed account settings'
                 : 'Avantis uses isolated margin per trade (no cross mode)'}
             >
-              <span style={{color: ((dex === 'decibel' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'hibachi' || dex === 'katana' || isLighterDex || dex === 'bulk') ? 'var(--terminal-text-control)' : 'var(--terminal-warning)'), fontWeight: 750}}>
+              <span style={{color: ((dex === 'decibel' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'hibachi' || dex === 'katana' || isLighterDex || dex === 'bulk') ? 'var(--terminal-text-control)' : 'var(--terminal-warning)'), fontWeight: 600}}>
                 {dex === 'gmtrade'
                   ? 'Isolated'
                   : dex === 'etoro'
@@ -5594,7 +5594,7 @@ function FuturesPanel() {
                 ? 'Close this symbol position and cancel its open orders before changing margin mode'
                 : (marginModes[symbol] ? 'Isolated margin' : 'Cross margin')}
             >
-              <span style={{color: marginModes[symbol] ? 'var(--terminal-warning)' : 'var(--terminal-text-control)', fontWeight: 750}}>
+              <span style={{color: marginModes[symbol] ? 'var(--terminal-warning)' : 'var(--terminal-text-control)', fontWeight: 600}}>
                 {marginModes[symbol] ? 'Isolated' : 'Cross'}
               </span>
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" style={{flexShrink: 0}}>
@@ -5643,8 +5643,8 @@ function FuturesPanel() {
         </div>
       </div>
       {showSymbolPicker && (
-        <div style={{position: 'fixed', inset: 0, zIndex: 400, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', paddingTop: 60}} onClick={() => setShowSymbolPicker(false)}>
-          <div style={{width: fullscreen ? 480 : '90%', maxWidth: 600, maxHeight: '80vh', background: 'var(--terminal-dropdown, var(--terminal-surface))', border: '1px solid var(--terminal-border)', borderRadius: 16, padding: 12, boxShadow: '0 15px 40px rgba(0,0,0,0.4)', display: 'flex', flexDirection: 'column'}} onClick={e => e.stopPropagation()}>
+        <div style={{position: 'fixed', inset: 0, zIndex: 400, background: 'var(--terminal-overlay)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', paddingTop: 60}} onClick={() => setShowSymbolPicker(false)}>
+          <div style={{width: fullscreen ? 480 : '90%', maxWidth: 600, maxHeight: '80vh', background: 'var(--terminal-dropdown, var(--terminal-surface))', border: '1px solid var(--terminal-border)', borderRadius: 16, padding: 12, boxShadow: 'var(--terminal-shadow-card)', display: 'flex', flexDirection: 'column'}} onClick={e => e.stopPropagation()}>
             <SymbolPicker markets={markets} prices={prices} symbol={symbol} onSelect={(s) => { setSymbol(s); setShowSymbolPicker(false); }} fullscreen={fullscreen} signals={elfaSignals} />
           </div>
         </div>
@@ -5813,14 +5813,14 @@ function FuturesPanel() {
             alignItems: 'center',
             justifyContent: 'space-between',
             gap: 8,
-            background: oneTapTrading?.enabled ? 'rgba(22,163,74,0.10)' : 'rgba(17,24,39,0.06)',
-            border: `1px solid ${oneTapTrading?.enabled ? 'rgba(22,163,74,0.35)' : 'rgba(17,24,39,0.18)'}`,
+            background: oneTapTrading?.enabled ? 'var(--terminal-long-soft)' : 'var(--terminal-surface-muted)',
+            border: `1px solid ${oneTapTrading?.enabled ? 'var(--terminal-long-border)' : 'var(--terminal-border-strong)'}`,
             borderRadius: 8,
             padding: '6px 8px',
           }}>
             <span style={{
               fontSize: 11,
-              fontWeight: 700,
+              fontWeight: 600,
               color: oneTapTrading?.enabled ? 'var(--terminal-long-strong)' : 'var(--terminal-text)',
             }}>
               {dex === 'flash' ? 'Flash one tap' : 'One tap'}{oneTapTrading?.enabled && oneTapTrading?.approved === false ? ' pending' : ''}
@@ -5841,7 +5841,7 @@ function FuturesPanel() {
                 opacity: (referralLinking || loading) ? 0.7 : 1,
               }}
             >
-              {referralLinking ? '...' : oneTapTrading?.enabled ? 'ON' : 'ENABLE'}
+              {referralLinking ? '...' : oneTapTrading?.enabled ? 'On' : 'Enable'}
             </button>
           </div>
         )}
@@ -5885,10 +5885,10 @@ function FuturesPanel() {
 
         <div style={{display: 'flex', flexDirection: 'column', gap: 4}}>
           <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
-            <span style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-muted)'}}>
+            <span style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-muted)'}}>
               {sizePct}% of ${sizePctMarginBase.toFixed(2)} {(dex === 'phoenix' || dex === 'pacifica' || dex === 'hotstuff' || dex === 'ostium') ? 'usable' : dex === 'flash' ? 'free' : 'balance'}
             </span>
-            <span style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)'}}>
+            <span style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-text)'}}>
               buying power ${maxUsdc.toFixed(0)}
             </span>
           </div>
@@ -5913,20 +5913,20 @@ function FuturesPanel() {
               alignItems: 'center',
               justifyContent: 'space-between',
               gap: 8,
-              background: enabled ? 'rgba(22,163,74,0.10)' : 'rgba(249,115,22,0.08)',
+              background: enabled ? 'var(--terminal-long-soft)' : 'var(--terminal-brand-soft)',
               borderWidth: 1,
               borderStyle: 'solid',
-              borderColor: enabled ? 'rgba(22,163,74,0.35)' : 'rgba(249,115,22,0.30)',
+              borderColor: enabled ? 'var(--terminal-long-border)' : 'var(--terminal-brand-border)',
               borderRadius: 8,
               padding: '7px 9px',
             }}>
               <div style={{display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0}}>
-                <span style={{fontSize: 11, fontWeight: 700, color: enabled ? 'var(--terminal-long-strong)' : 'var(--terminal-warning)'}}>
+                <span style={{fontSize: 11, fontWeight: 600, color: enabled ? 'var(--terminal-long-strong)' : 'var(--terminal-warning)'}}>
                   Pacifica one tap trading
                 </span>
                 <span style={{
                   fontSize: 11,
-                  fontWeight: 700,
+                  fontWeight: 600,
                   color: bindAgentError && !enabled ? 'var(--terminal-short-strong)' : 'var(--terminal-text-muted)',
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
@@ -5952,7 +5952,7 @@ function FuturesPanel() {
                   opacity: (busy || loading) ? 0.7 : 1,
                 }}
               >
-                {busy ? '...' : enabled ? 'ON' : 'ENABLE'}
+                {busy ? '...' : enabled ? 'On' : 'Enable'}
               </button>
             </div>
           );
@@ -5980,20 +5980,20 @@ function FuturesPanel() {
               alignItems: 'center',
               justifyContent: 'space-between',
               gap: 8,
-              background: enabled ? 'rgba(22,163,74,0.10)' : 'rgba(249,115,22,0.08)',
+              background: enabled ? 'var(--terminal-long-soft)' : 'var(--terminal-brand-soft)',
               borderWidth: 1,
               borderStyle: 'solid',
-              borderColor: enabled ? 'rgba(22,163,74,0.35)' : 'rgba(249,115,22,0.30)',
+              borderColor: enabled ? 'var(--terminal-long-border)' : 'var(--terminal-brand-border)',
               borderRadius: 8,
               padding: '7px 9px',
             }}>
               <div style={{display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0}}>
-                <span style={{fontSize: 11, fontWeight: 700, color: enabled ? 'var(--terminal-long-strong)' : 'var(--terminal-warning)'}}>
+                <span style={{fontSize: 11, fontWeight: 600, color: enabled ? 'var(--terminal-long-strong)' : 'var(--terminal-warning)'}}>
                   Ostium one tap trading
                 </span>
                 <span style={{
                   fontSize: 11,
-                  fontWeight: 700,
+                  fontWeight: 600,
                   color: 'var(--terminal-text-muted)',
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
@@ -6019,7 +6019,7 @@ function FuturesPanel() {
                   opacity: busy ? 0.7 : 1,
                 }}
               >
-                {busy ? '...' : enabled ? 'ON' : 'ENABLE'}
+                {busy ? '...' : enabled ? 'On' : 'Enable'}
               </button>
             </div>
           );
@@ -6053,17 +6053,17 @@ function FuturesPanel() {
               } : {}),
             }}>
               <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
-                <span style={{fontSize: isMobile ? 14 : 16, fontWeight: 700, color: 'var(--terminal-text)'}}>Adjust Leverage</span>
+                <span style={{fontSize: isMobile ? 14 : 16, fontWeight: 600, color: 'var(--terminal-text)'}}>Adjust Leverage</span>
                 <button style={S.levCloseBtn} onClick={() => setShowLeverage(false)}>
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                 </button>
               </div>
-              <div style={{fontSize: isMobile ? 34 : 48, fontWeight: 700, color: 'var(--terminal-text)', textAlign: 'center', padding: isMobile ? '2px 0' : '10px 0'}}>{leverage}x</div>
+              <div style={{fontSize: isMobile ? 34 : 48, fontWeight: 600, color: 'var(--terminal-text)', textAlign: 'center', padding: isMobile ? '2px 0' : '10px 0'}}>{leverage}x</div>
               <input type="range" min="1" max={maxLev} value={leverage} className="grad-slider" onChange={e => handleLeverageChange(e.target.value)} style={{...S.slider, '--val': `${maxLev > 1 ? ((leverage - 1) / (maxLev - 1)) * 100 : 0}%`}} />
               <div style={S.sliderLabels}><span>1x</span><span>{Math.floor(maxLev/4)}x</span><span>{Math.floor(maxLev/2)}x</span><span>{Math.floor(maxLev*3/4)}x</span><span>{maxLev}x</span></div>
               <button type="button" style={S.typeActive} onClick={() => setShowLeverage(false)}>Done</button>
               {leverage > maxLev * 0.5 && (
-                <div style={{fontSize: 11, color: 'var(--terminal-short)', fontWeight: 700, textAlign: 'center', marginTop: 4}}>
+                <div style={{fontSize: 11, color: 'var(--terminal-short)', fontWeight: 600, textAlign: 'center', marginTop: 4}}>
                   High leverage increases liquidation risk
                 </div>
               )}
@@ -6172,7 +6172,7 @@ function FuturesPanel() {
   // ==================== SOLANA WALLET RESTORE ====================
   if (checkingSolanaWallet) {
     const venueLabel = dex === 'phoenix' ? 'Phoenix' : 'Pacifica';
-    const venueColor = dex === 'phoenix' ? 'var(--terminal-orange)' : '#9945FF';
+    const venueColor = dex === 'phoenix' ? 'var(--terminal-orange)' : 'var(--terminal-orange)';
     return (
       <>
         <style>{animCSS}</style>
@@ -6197,21 +6197,21 @@ function FuturesPanel() {
               borderStyle: 'solid',
               borderColor: 'var(--terminal-warning-border)',
               borderTopColor: venueColor,
-              boxShadow: '0 0 0 4px rgba(242,101,34,0.12)',
+              boxShadow: '0 0 0 3px var(--terminal-brand-ring)',
               animation: 'wallet-spin 0.85s linear infinite',
             }} />
             <div style={{
               color: 'var(--terminal-text)',
               fontSize: 18,
-              fontWeight: 700,
-              letterSpacing: '0.5px',
+              fontWeight: 600,
+              letterSpacing: 0,
             }}>
               Loading {venueLabel}
             </div>
             <div style={{
               color: 'var(--terminal-text-muted)',
               fontSize: 12,
-              fontWeight: 700,
+              fontWeight: 600,
               maxWidth: 280,
               lineHeight: 1.45,
             }}>
@@ -6247,19 +6247,19 @@ function FuturesPanel() {
               background: 'var(--terminal-warning)', color: 'var(--terminal-on-accent)',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               fontSize: 36, fontWeight: 700,
-              boxShadow: '0 8px 24px rgba(17,24,39,0.10)',
+              boxShadow: 'var(--terminal-shadow-card)',
             }}>!</div>
-            <div style={{color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700}}>
+            <div style={{color: 'var(--terminal-text)', fontSize: 18, fontWeight: 600}}>
               Wrong {dex === 'gmx' || dex === 'hyperliquid' || dex === 'ostium' ? 'Arbitrum' : dex === 'hotstuff' || dex === 'ondo' ? 'Ethereum' : dex === 'aster' ? 'Aster/EVM' : dex === 'grvt' ? 'GRVT Exchange' : dex === 'katana' ? 'Katana' : dex === 'monad' || dex === 'leverup' ? 'Monad' : dex === 'risex' ? 'RISE' : dex === 'nado' ? 'Ink' : dex === 'hibachi' ? 'EVM' : (dex === 'phoenix' || dex === 'gmtrade' || dex === 'flash') ? 'Solana' : 'Base'} wallet
             </div>
-            <div style={{color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 700, maxWidth: 340, lineHeight: 1.45}}>
+            <div style={{color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600, maxWidth: 340, lineHeight: 1.45}}>
               This game account is linked to {registeredEvmWallet?.slice(0, 6)}...{registeredEvmWallet?.slice(-4)}, but the connected wallet is {walletAddr?.slice(0, 6)}...{walletAddr?.slice(-4)}.
             </div>
             <button
-              style={{...terminalButton('#0EA5E9', 'var(--terminal-info)'), padding: '14px 28px'}}
+              style={{...terminalButton('var(--terminal-info)', 'var(--terminal-info)'), padding: '14px 28px'}}
               onClick={() => (dex === 'phoenix' || dex === 'gmtrade' || dex === 'flash') ? openWalletModal(true) : setEvmModalOpen(true)}
             >
-              SWITCH WALLET
+              Switch wallet
             </button>
           </div>
         </div>
@@ -6293,31 +6293,31 @@ function FuturesPanel() {
           <div style={{...S.body, alignItems: 'center', justifyContent: 'center', gap: 20}}>
             {dex === 'bulk' ? (
               <>
-                <div style={{color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700, textAlign: 'center'}}>
+                <div style={{color: 'var(--terminal-text)', fontSize: 18, fontWeight: 600, textAlign: 'center'}}>
                   Connect your Solana wallet
                 </div>
                 <div style={{color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600, textAlign: 'center', maxWidth: 310, lineHeight: 1.45}}>
                   Bulk runs on mainnet. Connect the wallet you funded on Bulk; Clash asks the wallet to sign every action locally and never receives your private key.
                 </div>
-                {renderPrivyEmailButton('#383832', '#11110F')}
+                {renderPrivyEmailButton('var(--terminal-text)', 'var(--terminal-text)')}
                 <button
-                  style={{...terminalButton('#383832', '#11110F'), padding: '14px 32px'}}
+                  style={{...terminalButton('var(--terminal-text)', 'var(--terminal-text)'), padding: '14px 32px'}}
                   onClick={openSolanaConnect}
                 >
-                  CONNECT SOLANA WALLET
+                  Connect Solana wallet
                 </button>
                 <button
                   style={{...terminalButton('var(--terminal-warning)', 'var(--terminal-warning-border)'), padding: '11px 24px'}}
                   onClick={() => window.open('https://early.bulk.trade/deposit?ref=clashofperps', '_blank', 'noopener,noreferrer')}
                 >
-                  JOIN BULK WITH CLASH REFERRAL
+                  Join Bulk with Clash referral
                 </button>
               </>
             ) : dex === 'gmtrade' ? (
               <>
                 <div style={{
-                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700,
-                  textAlign: 'center', letterSpacing: '0.5px',
+                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 600,
+                  textAlign: 'center', letterSpacing: 0,
                 }}>Connect your Solana wallet</div>
                 <div style={{
                   color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600,
@@ -6327,26 +6327,26 @@ function FuturesPanel() {
                   Please accept our referral code in Clash to receive a GMTrade fee discount.
                   Clash confirms the code on-chain before trading rewards unlock.
                 </div>
-                {renderPrivyEmailButton('#14B8A6', 'var(--terminal-long)')}
+                {renderPrivyEmailButton('var(--terminal-long)', 'var(--terminal-long)')}
                 <button
-                  style={{...terminalButton('#14B8A6', 'var(--terminal-long)'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  style={{...terminalButton('var(--terminal-long)', 'var(--terminal-long)'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
                   onClick={() => openWalletModal(true)}
                 >
-                  <span>CONNECT SOLANA WALLET</span>
+                  <span>Connect Solana wallet</span>
                 </button>
                 <div style={{
                   display: 'flex', alignItems: 'center', gap: 4,
                   color: 'var(--terminal-long)', fontSize: 11, fontWeight: 600,
-                  letterSpacing: '0.5px', marginTop: 4,
+                  letterSpacing: 0, marginTop: 4,
                 }}>
-                  <span>GMTRADE - SOLANA</span>
+                  <span>GMTrade - Solana</span>
                 </div>
               </>
             ) : dex === 'katana' ? (
               <>
                 <div style={{
-                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700,
-                  textAlign: 'center', letterSpacing: '0.5px',
+                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 600,
+                  textAlign: 'center', letterSpacing: 0,
                 }}>Connect your Katana wallet</div>
                 <div style={{
                   color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600,
@@ -6354,26 +6354,26 @@ function FuturesPanel() {
                 }}>
                   Katana Perps runs on Katana. Connect the same EVM wallet you use for this game account.
                 </div>
-                {renderPrivyEmailButton('#F04438', 'var(--terminal-short-strong)')}
+                {renderPrivyEmailButton('var(--terminal-short)', 'var(--terminal-short-strong)')}
                 <button
-                  style={{...terminalButton('#F04438', 'var(--terminal-short-strong)'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  style={{...terminalButton('var(--terminal-short)', 'var(--terminal-short-strong)'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
                   onClick={() => setEvmModalOpen(true)}
                 >
-                  <span>CONNECT KATANA WALLET</span>
+                  <span>Connect Katana wallet</span>
                 </button>
                 <div style={{
                   display: 'flex', alignItems: 'center', gap: 4,
                   color: 'var(--terminal-short-strong)', fontSize: 11, fontWeight: 600,
-                  letterSpacing: '0.5px', marginTop: 4,
+                  letterSpacing: 0, marginTop: 4,
                 }}>
-                  <span>KATANA PERPS - KATANA</span>
+                  <span>Katana Perps - Katana</span>
                 </div>
               </>
             ) : dex === 'etoro' ? (
               <>
                 <div style={{
-                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700,
-                  textAlign: 'center', letterSpacing: '0.5px',
+                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 600,
+                  textAlign: 'center', letterSpacing: 0,
                 }}>Connect your Clash login</div>
                 <div style={{
                   color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600,
@@ -6381,22 +6381,22 @@ function FuturesPanel() {
                 }}>
                   Your EVM login identifies the Clash player. On the next screen you connect a separate eToro Real API account.
                 </div>
-                {renderPrivyEmailButton('#6FCF17', '#4A9E12')}
+                {renderPrivyEmailButton('var(--terminal-long)', 'var(--terminal-long)')}
                 <button
-                  style={{...terminalButton(privyEnabled ? 'var(--terminal-text-muted)' : '#6FCF17', privyEnabled ? 'var(--terminal-text-secondary)' : '#4A9E12'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  style={{...terminalButton(privyEnabled ? 'var(--terminal-text-muted)' : 'var(--terminal-long)', privyEnabled ? 'var(--terminal-text-secondary)' : 'var(--terminal-long)'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
                   onClick={() => setEvmModalOpen(true)}
                 >
-                  <span>CONNECT EVM LOGIN WALLET</span>
+                  <span>Connect EVM login wallet</span>
                 </button>
-                <div style={{display: 'flex', alignItems: 'center', gap: 4, color: '#4A9E12', fontSize: 11, fontWeight: 600, letterSpacing: '0.5px', marginTop: 4}}>
-                  <span>ETORO API ACCOUNT · REAL MONEY</span>
+                <div style={{display: 'flex', alignItems: 'center', gap: 4, color: 'var(--terminal-long)', fontSize: 11, fontWeight: 600, letterSpacing: 0, marginTop: 4}}>
+                  <span>eToro API account · real money</span>
                 </div>
               </>
             ) : dex === 'hibachi' ? (
               <>
                 <div style={{
-                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700,
-                  textAlign: 'center', letterSpacing: '0.5px',
+                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 600,
+                  textAlign: 'center', letterSpacing: 0,
                 }}>Connect your EVM wallet</div>
                 <div style={{
                   color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600,
@@ -6409,14 +6409,14 @@ function FuturesPanel() {
                   style={{...terminalButton('var(--terminal-short)', 'var(--terminal-short-strong)'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
                   onClick={() => setEvmModalOpen(true)}
                 >
-                  <span>CONNECT EVM WALLET</span>
+                  <span>Connect EVM wallet</span>
                 </button>
                 <div style={{
                   display: 'flex', alignItems: 'center', gap: 4,
                   color: 'var(--terminal-short-strong)', fontSize: 11, fontWeight: 600,
-                  letterSpacing: '0.5px', marginTop: 4,
+                  letterSpacing: 0, marginTop: 4,
                 }}>
-                  <span>HIBACHI - EVM</span>
+                  <span>Hibachi - EVM</span>
                 </div>
               </>
             ) : dex === 'decibel' ? (
@@ -6425,8 +6425,8 @@ function FuturesPanel() {
               // AptosWalletContext directly instead of EvmWalletModal.
               <>
                 <div style={{
-                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700,
-                  textAlign: 'center', letterSpacing: '0.5px',
+                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 600,
+                  textAlign: 'center', letterSpacing: 0,
                 }}>Connect your Aptos wallet</div>
                 <div style={{
                   color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600,
@@ -6440,18 +6440,18 @@ function FuturesPanel() {
                   onClick={() => aptosWallet.connect()}
                   disabled={aptosWallet.isConnecting}
                 >
-                  <span>{aptosWallet.isConnecting ? 'CONNECTING…' : aptosWallet.hasProvider ? 'CONNECT PETRA' : 'INSTALL PETRA'}</span>
+                  <span>{aptosWallet.isConnecting ? 'Connecting…' : aptosWallet.hasProvider ? 'Connect Petra' : 'Install Petra'}</span>
                 </button>
                 <div style={{
                   display: 'flex', alignItems: 'center', gap: 4,
                   color: 'var(--terminal-warning)', fontSize: 11, fontWeight: 600,
-                  letterSpacing: '0.5px', marginTop: 4,
+                  letterSpacing: 0, marginTop: 4,
                 }}>
-                  <span>DECIBEL · APTOS MAINNET</span>
+                  <span>Decibel · Aptos mainnet</span>
                 </div>
                 {aptosWallet.error && (
                   <div style={{
-                    color: 'var(--terminal-short-strong)', fontSize: 11, fontWeight: 700,
+                    color: 'var(--terminal-short-strong)', fontSize: 11, fontWeight: 600,
                     textAlign: 'center', maxWidth: 280,
                   }}>{aptosWallet.error}</div>
                 )}
@@ -6464,20 +6464,20 @@ function FuturesPanel() {
               // old fake "provisioning custodial wallet" spinner.
               <>
                 <div style={{
-                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700,
-                  textAlign: 'center', letterSpacing: '0.5px',
+                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 600,
+                  textAlign: 'center', letterSpacing: 0,
                 }}>Connect your Base wallet</div>
                 <div style={{
                   color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600,
                   textAlign: 'center', maxWidth: 280, lineHeight: 1.4,
                 }}>
                   {dex === 'domfi'
-                    ? <>DomFi is non-custodial — your own wallet signs each trade. Unbound wallets receive the <b>CLASHOFPERPS</b> referral on the first open; existing referrals stay unchanged.</>
+                    ? <>DomFi is non-custodial — your own wallet signs each trade. Unbound wallets receive the <b>ClashOfPerps</b> referral on the first open; existing referrals stay unchanged.</>
                     : <>Avantis is non-custodial — your own wallet signs each trade.<br />Nothing held on our side.</>}
                 </div>
-                {renderPrivyEmailButton(dex === 'domfi' ? '#149676' : '#0EA5E9', dex === 'domfi' ? '#0B6B55' : 'var(--terminal-info)')}
+                {renderPrivyEmailButton(dex === 'domfi' ? 'var(--terminal-long)' : 'var(--terminal-info)', dex === 'domfi' ? 'var(--terminal-long)' : 'var(--terminal-info)')}
                 <button
-                  style={{...terminalButton(privyEnabled ? 'var(--terminal-text-muted)' : (dex === 'domfi' ? '#149676' : '#0EA5E9'), privyEnabled ? 'var(--terminal-text-secondary)' : (dex === 'domfi' ? '#0B6B55' : 'var(--terminal-info)')), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  style={{...terminalButton(privyEnabled ? 'var(--terminal-text-muted)' : (dex === 'domfi' ? 'var(--terminal-long)' : 'var(--terminal-info)'), privyEnabled ? 'var(--terminal-text-secondary)' : (dex === 'domfi' ? 'var(--terminal-long)' : 'var(--terminal-info)')), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
                   onClick={() => setEvmModalOpen(true)}
                 >
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -6485,21 +6485,21 @@ function FuturesPanel() {
                     <path d="M16 14h.01"/>
                     <path d="M2 10h20"/>
                   </svg>
-                  <span>CONNECT WALLET</span>
+                  <span>Connect wallet</span>
                 </button>
                 <div style={{
                   display: 'flex', alignItems: 'center', gap: 4,
-                  color: dex === 'domfi' ? '#0B6B55' : '#0369A1', fontSize: 11, fontWeight: 600,
-                  letterSpacing: '0.5px', marginTop: 4,
+                  color: dex === 'domfi' ? 'var(--terminal-long)' : 'var(--terminal-info)', fontSize: 11, fontWeight: 600,
+                  letterSpacing: 0, marginTop: 4,
                 }}>
-                  <span>{dex === 'domfi' ? 'DOMFI · BASE MAINNET · REF CLASHOFPERPS' : 'AVANTIS · BASE MAINNET'}</span>
+                  <span>{dex === 'domfi' ? 'DomFi · Base mainnet · ref ClashOfPerps' : 'Avantis · Base mainnet'}</span>
                 </div>
               </>
             ) : dex === 'ostium' ? (
               <>
                 <div style={{
-                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700,
-                  textAlign: 'center', letterSpacing: '0.5px',
+                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 600,
+                  textAlign: 'center', letterSpacing: 0,
                 }}>Connect your Arbitrum wallet</div>
                 <div style={{
                   color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600,
@@ -6517,14 +6517,14 @@ function FuturesPanel() {
                     <path d="M16 14h.01"/>
                     <path d="M2 10h20"/>
                   </svg>
-                  <span>CONNECT WALLET</span>
+                  <span>Connect wallet</span>
                 </button>
                 <div style={{
                   display: 'flex', alignItems: 'center', gap: 4,
                   color: 'var(--terminal-warning)', fontSize: 11, fontWeight: 600,
-                  letterSpacing: '0.5px', marginTop: 4,
+                  letterSpacing: 0, marginTop: 4,
                 }}>
-                  <span>OSTIUM · ARBITRUM MAINNET</span>
+                  <span>Ostium · Arbitrum mainnet</span>
                 </div>
               </>
             ) : dex === 'gmx' ? (
@@ -6533,8 +6533,8 @@ function FuturesPanel() {
               // explicit "Phase 1: read-only" hint until writes ship.
               <>
                 <div style={{
-                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700,
-                  textAlign: 'center', letterSpacing: '0.5px',
+                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 600,
+                  textAlign: 'center', letterSpacing: 0,
                 }}>Connect your Arbitrum wallet</div>
                 <div style={{
                   color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600,
@@ -6543,9 +6543,9 @@ function FuturesPanel() {
                   GMX is non-custodial — your own wallet signs each trade.<br />
                   Read-only preview while we finish trade integration.
                 </div>
-                {renderPrivyEmailButton('#4F46E5', '#3730A3')}
+                {renderPrivyEmailButton('var(--terminal-info)', 'var(--terminal-info)')}
                 <button
-                  style={{...terminalButton(privyEnabled ? 'var(--terminal-text-muted)' : '#4F46E5', privyEnabled ? 'var(--terminal-text-secondary)' : '#3730A3'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  style={{...terminalButton(privyEnabled ? 'var(--terminal-text-muted)' : 'var(--terminal-info)', privyEnabled ? 'var(--terminal-text-secondary)' : 'var(--terminal-info)'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
                   onClick={() => setEvmModalOpen(true)}
                 >
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -6553,21 +6553,21 @@ function FuturesPanel() {
                     <path d="M16 14h.01"/>
                     <path d="M2 10h20"/>
                   </svg>
-                  <span>CONNECT WALLET</span>
+                  <span>Connect wallet</span>
                 </button>
                 <div style={{
                   display: 'flex', alignItems: 'center', gap: 4,
-                  color: '#3730A3', fontSize: 11, fontWeight: 600,
-                  letterSpacing: '0.5px', marginTop: 4,
+                  color: 'var(--terminal-info)', fontSize: 11, fontWeight: 600,
+                  letterSpacing: 0, marginTop: 4,
                 }}>
-                  <span>GMX · ARBITRUM MAINNET</span>
+                  <span>GMX · Arbitrum mainnet</span>
                 </div>
               </>
             ) : dex === 'monad' ? (
               <>
                 <div style={{
-                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700,
-                  textAlign: 'center', letterSpacing: '0.5px',
+                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 600,
+                  textAlign: 'center', letterSpacing: 0,
                 }}>Connect your Monad wallet</div>
                 <div style={{
                   color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600,
@@ -6575,9 +6575,9 @@ function FuturesPanel() {
                 }}>
                   Perpl trades on Monad. You need MON for gas and AUSD for collateral.
                 </div>
-                {renderPrivyEmailButton('#6F5CFF', '#4530E0')}
+                {renderPrivyEmailButton('var(--terminal-orange)', 'var(--terminal-info)')}
                 <button
-                  style={{...terminalButton(privyEnabled ? 'var(--terminal-text-muted)' : '#6F5CFF', privyEnabled ? 'var(--terminal-text-secondary)' : '#4530E0'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  style={{...terminalButton(privyEnabled ? 'var(--terminal-text-muted)' : 'var(--terminal-orange)', privyEnabled ? 'var(--terminal-text-secondary)' : 'var(--terminal-info)'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
                   onClick={() => setEvmModalOpen(true)}
                 >
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -6585,21 +6585,21 @@ function FuturesPanel() {
                     <path d="M16 14h.01"/>
                     <path d="M2 10h20"/>
                   </svg>
-                  <span>CONNECT WALLET</span>
+                  <span>Connect wallet</span>
                 </button>
                 <div style={{
                   display: 'flex', alignItems: 'center', gap: 4,
-                  color: '#4530E0', fontSize: 11, fontWeight: 600,
-                  letterSpacing: '0.5px', marginTop: 4,
+                  color: 'var(--terminal-info)', fontSize: 11, fontWeight: 600,
+                  letterSpacing: 0, marginTop: 4,
                 }}>
-                  <span>PERPL · MONAD MAINNET</span>
+                  <span>Perpl · Monad mainnet</span>
                 </div>
               </>
             ) : dex === 'hyperliquid' ? (
               <>
                 <div style={{
-                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700,
-                  textAlign: 'center', letterSpacing: '0.5px',
+                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 600,
+                  textAlign: 'center', letterSpacing: 0,
                 }}>Connect your EVM wallet</div>
                 <div style={{
                   color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600,
@@ -6617,21 +6617,21 @@ function FuturesPanel() {
                     <path d="M16 14h.01"/>
                     <path d="M2 10h20"/>
                   </svg>
-                  <span>CONNECT WALLET</span>
+                  <span>Connect wallet</span>
                 </button>
                 <div style={{
                   display: 'flex', alignItems: 'center', gap: 4,
                   color: 'var(--terminal-long)', fontSize: 11, fontWeight: 600,
-                  letterSpacing: '0.5px', marginTop: 4,
+                  letterSpacing: 0, marginTop: 4,
                 }}>
-                  <span>HYPERLIQUID</span>
+                  <span>Hyperliquid</span>
                 </div>
               </>
             ) : dex === 'risex' ? (
               <>
                 <div style={{
-                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700,
-                  textAlign: 'center', letterSpacing: '0.5px',
+                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 600,
+                  textAlign: 'center', letterSpacing: 0,
                 }}>Connect your RISE wallet</div>
                 <div style={{
                   color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600,
@@ -6639,9 +6639,9 @@ function FuturesPanel() {
                 }}>
                   RISEx trades are signed by your EVM wallet on RISE. Add the RISE network if your wallet asks.
                 </div>
-                {renderPrivyEmailButton('#04DF83', '#009C5D')}
+                {renderPrivyEmailButton('var(--terminal-long)', 'var(--terminal-long)')}
                 <button
-                  style={{...terminalButton(privyEnabled ? 'var(--terminal-text-muted)' : '#04DF83', privyEnabled ? 'var(--terminal-text-secondary)' : '#009C5D'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  style={{...terminalButton(privyEnabled ? 'var(--terminal-text-muted)' : 'var(--terminal-long)', privyEnabled ? 'var(--terminal-text-secondary)' : 'var(--terminal-long)'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
                   onClick={() => setEvmModalOpen(true)}
                 >
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -6649,19 +6649,19 @@ function FuturesPanel() {
                     <path d="M16 14h.01"/>
                     <path d="M2 10h20"/>
                   </svg>
-                  <span>CONNECT RISE WALLET</span>
+                  <span>Connect Rise wallet</span>
                 </button>
                 <div style={{
                   display: 'flex', alignItems: 'center', gap: 4,
-                  color: '#007A49', fontSize: 11, fontWeight: 600,
-                  letterSpacing: '0.5px', marginTop: 4,
+                  color: 'var(--terminal-long)', fontSize: 11, fontWeight: 600,
+                  letterSpacing: 0, marginTop: 4,
                 }}>
-                  <span>RISEX - RISE MAINNET</span>
+                  <span>RiseX - Rise mainnet</span>
                 </div>
               </>
             ) : isLighterDex ? (
               <>
-                <div style={{color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700, textAlign: 'center'}}>
+                <div style={{color: 'var(--terminal-text)', fontSize: 18, fontWeight: 600, textAlign: 'center'}}>
                   Connect your EVM wallet
                 </div>
                 <div style={{color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600, textAlign: 'center', maxWidth: 310, lineHeight: 1.45}}>
@@ -6672,17 +6672,17 @@ function FuturesPanel() {
                   style={{...terminalButton(privyEnabled ? 'var(--terminal-text-faint)' : 'var(--terminal-orange)', privyEnabled ? 'var(--terminal-text-muted)' : 'var(--terminal-brand-strong)'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
                   onClick={() => setEvmModalOpen(true)}
                 >
-                  <span>CONNECT EVM WALLET</span>
+                  <span>Connect EVM wallet</span>
                 </button>
-                <div style={{color: 'var(--terminal-text-muted)', fontSize: 11, fontWeight: 600, letterSpacing: '0.5px'}}>
-                  LIGHTER · EVM ACCOUNT
+                <div style={{color: 'var(--terminal-text-muted)', fontSize: 11, fontWeight: 600, letterSpacing: 0}}>
+                  Lighter · EVM account
                 </div>
               </>
             ) : dex === 'leverup' ? (
               <>
                 <div style={{
-                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700,
-                  textAlign: 'center', letterSpacing: '0.5px',
+                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 600,
+                  textAlign: 'center', letterSpacing: 0,
                 }}>Connect your Monad wallet</div>
                 <div style={{
                   color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600,
@@ -6690,25 +6690,25 @@ function FuturesPanel() {
                 }}>
                   LeverUp V2 uses a one-time onchain agent authorization, then signs gasless trade intents locally in this browser.
                 </div>
-                {renderPrivyEmailButton('#9BC400', '#506600')}
+                {renderPrivyEmailButton('var(--terminal-long)', 'var(--terminal-long)')}
                 <button
-                  style={{...terminalButton(privyEnabled ? 'var(--terminal-text-muted)' : '#506600', privyEnabled ? 'var(--terminal-text-secondary)' : '#405200'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  style={{...terminalButton(privyEnabled ? 'var(--terminal-text-muted)' : 'var(--terminal-long)', privyEnabled ? 'var(--terminal-text-secondary)' : 'var(--terminal-long)'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
                   onClick={() => setEvmModalOpen(true)}
                 >
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
                     <rect x="2" y="6" width="20" height="14" rx="3"/><path d="M16 14h.01"/><path d="M2 10h20"/>
                   </svg>
-                  <span>CONNECT MONAD WALLET</span>
+                  <span>Connect Monad wallet</span>
                 </button>
-                <div style={{display: 'flex', alignItems: 'center', gap: 4, color: '#506600', fontSize: 11, fontWeight: 600, letterSpacing: '0.5px', marginTop: 4}}>
-                  <span>LEVERUP V2 - MONAD MAINNET</span>
+                <div style={{display: 'flex', alignItems: 'center', gap: 4, color: 'var(--terminal-long)', fontSize: 11, fontWeight: 600, letterSpacing: 0, marginTop: 4}}>
+                  <span>LeverUp V2 - Monad mainnet</span>
                 </div>
               </>
             ) : dex === 'aster' ? (
               <>
                 <div style={{
-                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700,
-                  textAlign: 'center', letterSpacing: '0.5px',
+                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 600,
+                  textAlign: 'center', letterSpacing: 0,
                 }}>Connect your Aster wallet</div>
                 <div style={{
                   color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600,
@@ -6716,25 +6716,25 @@ function FuturesPanel() {
                 }}>
                   Connect the EVM wallet that owns your Aster account. Setup creates a V3 Agent with trading permission and no withdrawal permission. Its key is encrypted on this device, with encrypted server sync after wallet verification.
                 </div>
-                {renderPrivyEmailButton('#D98A43', '#9A4F1D')}
+                {renderPrivyEmailButton('var(--terminal-orange)', 'var(--terminal-short)')}
                 <button
-                  style={{...terminalButton(privyEnabled ? 'var(--terminal-text-muted)' : '#D98A43', privyEnabled ? 'var(--terminal-text-secondary)' : '#9A4F1D'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  style={{...terminalButton(privyEnabled ? 'var(--terminal-text-muted)' : 'var(--terminal-orange)', privyEnabled ? 'var(--terminal-text-secondary)' : 'var(--terminal-short)'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
                   onClick={() => setEvmModalOpen(true)}
                 >
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
                     <rect x="2" y="6" width="20" height="14" rx="3"/><path d="M16 14h.01"/><path d="M2 10h20"/>
                   </svg>
-                  <span>CONNECT EVM WALLET</span>
+                  <span>Connect EVM wallet</span>
                 </button>
-                <div style={{display: 'flex', alignItems: 'center', gap: 4, color: '#9A4F1D', fontSize: 11, fontWeight: 600, letterSpacing: '0.5px', marginTop: 4}}>
+                <div style={{display: 'flex', alignItems: 'center', gap: 4, color: 'var(--terminal-short)', fontSize: 11, fontWeight: 600, letterSpacing: 0, marginTop: 4}}>
                   <span>ASTER FUTURES API V3</span>
                 </div>
               </>
             ) : dex === 'ondo' ? (
               <>
                 <div style={{
-                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700,
-                  textAlign: 'center', letterSpacing: '0.5px',
+                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 600,
+                  textAlign: 'center', letterSpacing: 0,
                 }}>Connect your Ethereum wallet</div>
                 <div style={{
                   color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600,
@@ -6742,25 +6742,25 @@ function FuturesPanel() {
                 }}>
                   Ondo Perps uses Ethereum SIWE for account access. After one signature, market and limit orders are one tap through your short-lived Ondo session.
                 </div>
-                {renderPrivyEmailButton('var(--terminal-text)', '#000000')}
+                {renderPrivyEmailButton('var(--terminal-text)', 'var(--terminal-text)')}
                 <button
-                  style={{...terminalButton(privyEnabled ? 'var(--terminal-text-muted)' : 'var(--terminal-text)', privyEnabled ? 'var(--terminal-text-secondary)' : '#000000'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  style={{...terminalButton(privyEnabled ? 'var(--terminal-text-muted)' : 'var(--terminal-text)', privyEnabled ? 'var(--terminal-text-secondary)' : 'var(--terminal-text)'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
                   onClick={() => setEvmModalOpen(true)}
                 >
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
                     <rect x="2" y="6" width="20" height="14" rx="3"/><path d="M16 14h.01"/><path d="M2 10h20"/>
                   </svg>
-                  <span>CONNECT ETHEREUM WALLET</span>
+                  <span>Connect Ethereum wallet</span>
                 </button>
-                <div style={{display: 'flex', alignItems: 'center', gap: 4, color: 'var(--terminal-text)', fontSize: 11, fontWeight: 600, letterSpacing: '0.5px', marginTop: 4}}>
-                  <span>ONDO PERPS - ETHEREUM LOGIN</span>
+                <div style={{display: 'flex', alignItems: 'center', gap: 4, color: 'var(--terminal-text)', fontSize: 11, fontWeight: 600, letterSpacing: 0, marginTop: 4}}>
+                  <span>Ondo Perps - Ethereum login</span>
                 </div>
               </>
             ) : dex === 'nado' ? (
               <>
                 <div style={{
-                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700,
-                  textAlign: 'center', letterSpacing: '0.5px',
+                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 600,
+                  textAlign: 'center', letterSpacing: 0,
                 }}>Connect your Ink wallet</div>
                 <div style={{
                   color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600,
@@ -6768,9 +6768,9 @@ function FuturesPanel() {
                 }}>
                   Nado trades are signed by your EVM wallet on Ink. You need USDt0 collateral and a little ETH on Ink for gas.
                 </div>
-                {renderPrivyEmailButton('#00B8D9', 'var(--terminal-info)')}
+                {renderPrivyEmailButton('var(--terminal-info)', 'var(--terminal-info)')}
                 <button
-                  style={{...terminalButton(privyEnabled ? 'var(--terminal-text-muted)' : '#00B8D9', privyEnabled ? 'var(--terminal-text-secondary)' : 'var(--terminal-info)'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  style={{...terminalButton(privyEnabled ? 'var(--terminal-text-muted)' : 'var(--terminal-info)', privyEnabled ? 'var(--terminal-text-secondary)' : 'var(--terminal-info)'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
                   onClick={() => setEvmModalOpen(true)}
                 >
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -6778,21 +6778,21 @@ function FuturesPanel() {
                     <path d="M16 14h.01"/>
                     <path d="M2 10h20"/>
                   </svg>
-                  <span>CONNECT INK WALLET</span>
+                  <span>Connect Ink wallet</span>
                 </button>
                 <div style={{
                   display: 'flex', alignItems: 'center', gap: 4,
                   color: 'var(--terminal-info)', fontSize: 11, fontWeight: 600,
-                  letterSpacing: '0.5px', marginTop: 4,
+                  letterSpacing: 0, marginTop: 4,
                 }}>
-                  <span>NADO - INK MAINNET</span>
+                  <span>Nado - Ink mainnet</span>
                 </div>
               </>
             ) : dex === 'hotstuff' ? (
               <>
                 <div style={{
-                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700,
-                  textAlign: 'center', letterSpacing: '0.5px',
+                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 600,
+                  textAlign: 'center', letterSpacing: 0,
                 }}>Connect your Hotstuff wallet</div>
                 <div style={{
                   color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600,
@@ -6812,12 +6812,12 @@ function FuturesPanel() {
                       <path d="M7 17 17 7"/>
                       <path d="M8 7h9v9"/>
                     </svg>
-                    <span>JOIN WITH CLASH REFERRAL</span>
+                    <span>Join with Clash referral</span>
                   </button>
                 )}
-                {renderPrivyEmailButton('#FF5A5F', 'var(--terminal-short-strong)')}
+                {renderPrivyEmailButton('var(--terminal-orange)', 'var(--terminal-short-strong)')}
                 <button
-                  style={{...terminalButton(privyEnabled ? 'var(--terminal-text-muted)' : '#FF5A5F', privyEnabled ? 'var(--terminal-text-secondary)' : 'var(--terminal-short-strong)'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  style={{...terminalButton(privyEnabled ? 'var(--terminal-text-muted)' : 'var(--terminal-orange)', privyEnabled ? 'var(--terminal-text-secondary)' : 'var(--terminal-short-strong)'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
                   onClick={() => setEvmModalOpen(true)}
                 >
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -6825,12 +6825,12 @@ function FuturesPanel() {
                     <path d="M16 14h.01"/>
                     <path d="M2 10h20"/>
                   </svg>
-                  <span>CONNECT ETHEREUM WALLET</span>
+                  <span>Connect Ethereum wallet</span>
                 </button>
                 <div style={{
                   display: 'flex', alignItems: 'center', gap: 4,
                   color: 'var(--terminal-short-strong)', fontSize: 11, fontWeight: 600,
-                  letterSpacing: '0.5px', marginTop: 4,
+                  letterSpacing: 0, marginTop: 4,
                 }}>
                   <span>HOTSTUFF - ETHEREUM MAINNET{referralCode ? ` - REF ${referralCode}` : ''}</span>
                 </div>
@@ -6838,8 +6838,8 @@ function FuturesPanel() {
             ) : dex === 'grvt' ? (
               <>
                 <div style={{
-                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700,
-                  textAlign: 'center', letterSpacing: '0.5px',
+                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 600,
+                  textAlign: 'center', letterSpacing: 0,
                 }}>Connect your GRVT wallet</div>
                 <div style={{
                   color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600,
@@ -6857,21 +6857,21 @@ function FuturesPanel() {
                     <path d="M16 14h.01"/>
                     <path d="M2 10h20"/>
                   </svg>
-                  <span>CONNECT GRVT WALLET</span>
+                  <span>Connect GRVT wallet</span>
                 </button>
                 <div style={{
                   display: 'flex', alignItems: 'center', gap: 4,
                   color: 'var(--terminal-text)', fontSize: 11, fontWeight: 600,
-                  letterSpacing: '0.5px', marginTop: 4,
+                  letterSpacing: 0, marginTop: 4,
                 }}>
-                  <span>GRVT - EXCHANGE CHAIN</span>
+                  <span>GRVT - exchange chain</span>
                 </div>
               </>
             ) : dex === 'phoenix' ? (
               <>
                 <div style={{
-                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700,
-                  textAlign: 'center', letterSpacing: '0.5px',
+                  color: 'var(--terminal-text)', fontSize: 18, fontWeight: 600,
+                  textAlign: 'center', letterSpacing: 0,
                 }}>{restoringPrivySolana ? 'Restoring email wallet' : 'Connect your Solana wallet'}</div>
                 <div style={{
                   color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 600,
@@ -6886,26 +6886,26 @@ function FuturesPanel() {
                     style={{...terminalButton('var(--terminal-orange)', 'var(--terminal-brand-text)'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
                     onClick={loginWithPrivyEmail}
                   >
-                    <span>{privyAuthed ? 'CONTINUE WITH EMAIL' : 'SIGN IN WITH EMAIL'}</span>
+                    <span>{privyAuthed ? 'Continue with email' : 'Sign in with email'}</span>
                   </button>
                 )}
                 <button
                   style={{...terminalButton(privyEnabled ? 'var(--terminal-text-muted)' : 'var(--terminal-orange)', privyEnabled ? 'var(--terminal-text-secondary)' : 'var(--terminal-brand-text)'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
                   onClick={openSolanaConnect}
                 >
-                  <span>CONNECT SOLANA WALLET</span>
+                  <span>Connect Solana wallet</span>
                 </button>
                 <div style={{
                   display: 'flex', alignItems: 'center', gap: 4,
                   color: 'var(--terminal-brand-text)', fontSize: 11, fontWeight: 600,
-                  letterSpacing: '0.5px', marginTop: 4,
+                  letterSpacing: 0, marginTop: 4,
                 }}>
-                  <span>PHOENIX · SOLANA MAINNET</span>
+                  <span>Phoenix · Solana mainnet</span>
                 </div>
               </>
             ) : (
               <>
-                <div style={{color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700, textAlign: 'center'}}>
+                <div style={{color: 'var(--terminal-text)', fontSize: 18, fontWeight: 600, textAlign: 'center'}}>
                   {restoringPrivySolana ? 'Restoring email wallet' : 'Connect Wallet to Trade'}
                 </div>
                 {restoringPrivySolana && (
@@ -6918,17 +6918,17 @@ function FuturesPanel() {
                 )}
                 {privyEnabled && (
                   <button
-                    style={{...terminalButton('#9945FF', '#7B36CC'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                    style={{...terminalButton('var(--terminal-orange)', 'var(--terminal-orange)'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
                     onClick={loginWithPrivyEmail}
                   >
-                    <span>{privyAuthed ? 'CONTINUE WITH EMAIL' : 'SIGN IN WITH EMAIL'}</span>
+                    <span>{privyAuthed ? 'Continue with email' : 'Sign in with email'}</span>
                   </button>
                 )}
                 <button
-                  style={{...terminalButton(privyEnabled ? 'var(--terminal-text-muted)' : '#9945FF', privyEnabled ? 'var(--terminal-text-secondary)' : '#7B36CC'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  style={{...terminalButton(privyEnabled ? 'var(--terminal-text-muted)' : 'var(--terminal-orange)', privyEnabled ? 'var(--terminal-text-secondary)' : 'var(--terminal-orange)'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
                   onClick={openSolanaConnect}
                 >
-                  <span>CONNECT SOLANA WALLET</span>
+                  <span>Connect Solana wallet</span>
                 </button>
               </>
             )}
@@ -6983,7 +6983,7 @@ function FuturesPanel() {
             <div style={hlGateStyles.frame}>
               <div style={hlGateStyles.titleBlock}>
                 <div style={hlGateStyles.kicker}>
-                  {nadoReferralChecking ? 'LOADING SAVED STATUS' : nadoReferralUnavailable ? 'VERIFICATION REQUIRED' : 'REQUIRED BEFORE TRADING'}
+                  {nadoReferralChecking ? 'Loading saved status' : nadoReferralUnavailable ? 'Verification required' : 'Required before trading'}
                 </div>
                 <div style={hlGateStyles.title}>
                   {nadoReferralChecking ? 'Checking this browser' : 'Accept the Clash referral'}
@@ -7042,9 +7042,9 @@ function FuturesPanel() {
                 onClick={handleLinkReferrer}
               >
                 {nadoReferralBusy
-                  ? 'CHECKING...'
+                  ? 'Checking...'
                   : nadoReferralUnavailable
-                    ? 'RETRY ACCEPT & VERIFY'
+                    ? 'Retry accept & verify'
                     : `ACCEPT ${referralCode || '13z8hnl'} & CONTINUE`}
               </button>
               <div style={hlGateStyles.footnote}>
@@ -7126,7 +7126,7 @@ function FuturesPanel() {
               )}
               error={leverupError ? humanizeTradeError(leverupError, dex) : ''}
               primaryAction={{
-                label: leverupRunning ? 'PLEASE APPROVE IN YOUR WALLET...' : 'ENABLE LEVERUP V2 ONE-CLICK',
+                label: leverupRunning ? 'Please approve in your wallet...' : 'Enable LeverUp V2 one-click',
                 disabled: leverupRunning,
                 onClick: async () => {
                   setLocalAlert('');
@@ -7135,7 +7135,7 @@ function FuturesPanel() {
                 },
               }}
               secondaryAction={{
-                label: 'OPEN LEVERUP',
+                label: 'Open LeverUp',
                 variant: 'secondary',
                 onClick: () => window.open('https://app.leverup.xyz', '_blank', 'noopener,noreferrer'),
               }}
@@ -7217,12 +7217,12 @@ function FuturesPanel() {
               error={asterError ? humanizeTradeError(asterError, dex) : ''}
               primaryAction={{
                 label: asterRunning
-                  ? 'PLEASE APPROVE IN YOUR WALLET...'
+                  ? 'Please approve in your wallet...'
                   : agentApproved && !builderConfigured
-                    ? 'BUILDER ADDRESS PENDING'
+                    ? 'Builder address pending'
                     : agentApproved
-                      ? 'APPROVE BUILDER & CONTINUE'
-                      : 'ENABLE ASTER V3 AGENT',
+                      ? 'Approve builder & continue'
+                      : 'Enable Aster V3 agent',
                 disabled: primaryDisabled,
                 onClick: async () => {
                   setLocalAlert('');
@@ -7231,7 +7231,7 @@ function FuturesPanel() {
                 },
               }}
               secondaryAction={{
-                label: 'OPEN ASTER',
+                label: 'Open Aster',
                 variant: 'secondary',
                 onClick: () => window.open('https://www.asterdex.com/en/futures', '_blank', 'noopener,noreferrer'),
               }}
@@ -7284,7 +7284,7 @@ function FuturesPanel() {
           </div>
           <div style={{...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: 'var(--terminal-surface)'}}>
             <TradingSetupGate
-              kicker={builderAccepted ? 'FINISH ONDO SETUP' : 'BUILDER CODE REQUIRED'}
+              kicker={builderAccepted ? 'Finish Ondo setup' : 'Builder code required'}
               title={builderAccepted ? 'Sign in to Ondo Perps' : 'Accept the Clash builder code'}
               subtitle="One clear setup flow enables secure one-tap Ondo trading while keeping every order attributed to Clash."
               logo={DEX_CONFIG.ondo.logo}
@@ -7303,10 +7303,10 @@ function FuturesPanel() {
               error={ondoError ? humanizeTradeError(ondoError, dex) : ''}
               primaryAction={{
                 label: ondoRunning
-                  ? 'PLEASE APPROVE IN YOUR WALLET...'
+                  ? 'Please approve in your wallet...'
                   : builderAccepted
-                    ? 'SIGN IN TO ONDO PERPS'
-                    : 'ACCEPT BUILDER CODE & SIGN IN',
+                    ? 'Sign in to Ondo Perps'
+                    : 'Accept builder code & sign in',
                 disabled: ondoRunning,
                 onClick: async () => {
                   setLocalAlert('');
@@ -7315,7 +7315,7 @@ function FuturesPanel() {
                 },
               }}
               secondaryAction={{
-                label: 'OPEN ONDO PERPS',
+                label: 'Open Ondo Perps',
                 variant: 'secondary',
                 onClick: () => window.open('https://app.ondoperps.xyz', '_blank', 'noopener,noreferrer'),
               }}
@@ -7367,10 +7367,10 @@ function FuturesPanel() {
               )}
               error={error ? humanizeTradeError(error, dex) : ''}
               primaryAction={{
-                label: isRunning ? 'CONNECTING...' : 'SIGN & CONNECT', disabled: isRunning,
+                label: isRunning ? 'Connecting...' : 'Sign & connect', disabled: isRunning,
                 onClick: async () => { const result = await activate?.(); if (result?.error) setLocalAlert(result.error); },
               }}
-              secondaryAction={{ label: 'OPEN IMPERIAL', variant: 'secondary', onClick: () => openReferralJoin?.() }}
+              secondaryAction={{ label: 'Open Imperial', variant: 'secondary', onClick: () => openReferralJoin?.() }}
               footnote="Your wallet keeps custody. Boost borrowing adds liquidation and financing risk; review the quoted route before trading."
             />
           </div>
@@ -7419,7 +7419,7 @@ function FuturesPanel() {
           </div>
           <div style={{...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: 'var(--terminal-surface)'}}>
             <TradingSetupGate
-              kicker={bulkUnavailable ? 'CLOSED BETA' : isChecking ? 'VERIFYING ACCOUNT' : 'BUILDER APPROVAL REQUIRED'}
+              kicker={bulkUnavailable ? 'Closed beta' : isChecking ? 'Verifying account' : 'Builder approval required'}
               title={bulkUnavailable ? 'Bulk trading is not open yet' : isChecking ? 'Checking your Bulk account' : 'Approve Clash builder routing'}
               subtitle={bulkUnavailable
                 ? (serviceAvailability?.message || 'Bulk mainnet is temporarily unavailable. You can still open Bulk through the Clash referral.')
@@ -7438,7 +7438,7 @@ function FuturesPanel() {
               )}
               error={!isChecking && error ? humanizeTradeError(error, dex) : ''}
               primaryAction={{
-                label: bulkUnavailable ? 'TRADING OPENS AFTER BETA' : isChecking ? 'CHECKING...' : isRunning ? 'PLEASE APPROVE IN YOUR WALLET...' : 'APPROVE BUILDER & CONTINUE',
+                label: bulkUnavailable ? 'Trading opens after beta' : isChecking ? 'Checking...' : isRunning ? 'Please approve in your wallet...' : 'Approve builder & continue',
                 disabled: bulkUnavailable || isChecking || isRunning,
                 onClick: async () => {
                   const result = await registerBuilderCode?.();
@@ -7446,7 +7446,7 @@ function FuturesPanel() {
                 },
               }}
               secondaryAction={{
-                label: 'DEPOSIT WITH CLASH REFERRAL',
+                label: 'Deposit with Clash referral',
                 variant: 'secondary',
                 onClick: () => openReferralJoin?.(),
               }}
@@ -7487,7 +7487,7 @@ function FuturesPanel() {
           <div style={{...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: 'var(--terminal-surface)'}}>
             <div style={hlGateStyles.frame}>
               <div style={hlGateStyles.titleBlock}>
-                <span style={hlGateStyles.kicker}>{isRunning ? 'VERIFYING ETORO' : 'API ACCESS REQUIRED'}</span>
+                <span style={hlGateStyles.kicker}>{isRunning ? 'Verifying eToro' : 'API access required'}</span>
                 <span style={hlGateStyles.title}>Connect your eToro account</span>
                 <span style={hlGateStyles.subtitle}>
                   Create a Real user key with Write permission in eToro, then connect using your application API key and user key. Trading uses real funds.
@@ -7524,11 +7524,11 @@ function FuturesPanel() {
 
               <div style={{display: 'flex', flexDirection: 'column', gap: 10, background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 12, padding: 12}}>
                 <div style={{display: 'flex', flexDirection: 'column', gap: 5}}>
-                  <span style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)', textTransform: 'uppercase'}}>Environment</span>
+                  <span style={{fontSize: 12, fontWeight: 500, color: 'var(--terminal-text-muted)'}}>Environment</span>
                   <div style={{...S.input, padding: '10px 12px', fontSize: 14}}>Real — real funds</div>
                 </div>
                 <label style={{display: 'flex', flexDirection: 'column', gap: 5}}>
-                  <span style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)', textTransform: 'uppercase'}}>eToro API key</span>
+                  <span style={{fontSize: 12, fontWeight: 500, color: 'var(--terminal-text-muted)'}}>eToro API key</span>
                   <input
                     type="password"
                     value={etoroApiKeyInput}
@@ -7540,7 +7540,7 @@ function FuturesPanel() {
                   />
                 </label>
                 <label style={{display: 'flex', flexDirection: 'column', gap: 5}}>
-                  <span style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)', textTransform: 'uppercase'}}>eToro user key</span>
+                  <span style={{fontSize: 12, fontWeight: 500, color: 'var(--terminal-text-muted)'}}>eToro user key</span>
                   <input
                     type="password"
                     value={etoroUserKeyInput}
@@ -7581,14 +7581,14 @@ function FuturesPanel() {
                   }
                 }}
               >
-                {isRunning ? 'VERIFYING ETORO...' : 'CONNECT REAL ACCOUNT'}
+                {isRunning ? 'Verifying eToro...' : 'Connect real account'}
               </button>
               <button
                 type="button"
                 style={hlGateStyles.secondaryBtn}
                 onClick={() => window.open(ETORO_TRADING_SETTINGS_URL, '_blank', 'noopener,noreferrer')}
               >
-                OPEN ETORO TRADING SETTINGS
+                Open eToro trading settings
               </button>
 
               {(error || localAlert) && <div style={hlGateStyles.errorBox}>{humanizeTradeError(error || localAlert, dex)}</div>}
@@ -7659,7 +7659,7 @@ function FuturesPanel() {
           <div style={{...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: 'var(--terminal-surface)'}}>
             <div style={hlGateStyles.frame}>
               <div style={hlGateStyles.titleBlock}>
-                <span style={hlGateStyles.kicker}>{isRunning ? 'CONNECTING' : 'ACTION REQUIRED'}</span>
+                <span style={hlGateStyles.kicker}>{isRunning ? 'Connecting' : 'Action required'}</span>
                 <span style={hlGateStyles.title}>{lighterGateTitle}</span>
                 <span style={hlGateStyles.subtitle}>
                   {lighterGateSubtitle}
@@ -7730,13 +7730,13 @@ function FuturesPanel() {
               {showLighterCredentialForm && (
               <div style={{display: 'flex', flexDirection: 'column', gap: 10, background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 12, padding: 12}}>
                 <label style={{display: 'flex', flexDirection: 'column', gap: 5}}>
-                  <span style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)', textTransform: 'uppercase'}}>Your {lighterVenueLabel || 'Lighter'} account index</span>
+                  <span style={{fontSize: 12, fontWeight: 500, color: 'var(--terminal-text-muted)'}}>Your {lighterVenueLabel || 'Lighter'} account index</span>
                   <input type="number" value={lighterAccountIndexInput} onChange={(e) => {
                     setLighterAccountDetectStatus('');
                     setLighterAccountIndexInput(e.target.value);
                   }} placeholder={lighterAccountDetectStatus === 'checking' ? 'Detecting from wallet...' : 'Auto-detected or enter manually'} disabled={isRunning} style={{...S.input, padding: '10px 12px', fontSize: 14}} />
                   {lighterAccountDetectStatus && (
-                    <span style={{fontSize: 11, fontWeight: 600, color: lighterAccountDetectStatus === 'found' ? '#2f9e44' : 'var(--terminal-text-faint)'}}>
+                    <span style={{fontSize: 11, fontWeight: 600, color: lighterAccountDetectStatus === 'found' ? 'var(--terminal-long)' : 'var(--terminal-text-faint)'}}>
                       {lighterAccountDetectStatus === 'checking'
                         ? `Checking your ${lighterVenueLabel || 'Lighter'} account from the connected EVM wallet...`
                         : lighterAccountDetectStatus === 'found'
@@ -7748,11 +7748,11 @@ function FuturesPanel() {
                   )}
                 </label>
                 <label style={{display: 'flex', flexDirection: 'column', gap: 5}}>
-                  <span style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)', textTransform: 'uppercase'}}>API key index</span>
+                  <span style={{fontSize: 12, fontWeight: 500, color: 'var(--terminal-text-muted)'}}>API key index</span>
                   <input type="number" value={lighterApiKeyIndexInput} onChange={(e) => setLighterApiKeyIndexInput(e.target.value)} placeholder="Use index > 3" disabled={isRunning} style={{...S.input, padding: '10px 12px', fontSize: 14}} />
                 </label>
                 <label style={{display: 'flex', flexDirection: 'column', gap: 5}}>
-                  <span style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)', textTransform: 'uppercase'}}>API private key</span>
+                  <span style={{fontSize: 12, fontWeight: 500, color: 'var(--terminal-text-muted)'}}>API private key</span>
                   <input
                     type="password"
                     value={lighterApiPrivateKeyInput}
@@ -7766,7 +7766,7 @@ function FuturesPanel() {
                     style={{...S.input, padding: '10px 12px', fontSize: 14}}
                   />
                 </label>
-                <div style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-faint)', lineHeight: 1.35}}>
+                <div style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-faint)', lineHeight: 1.35}}>
                   The API key is encrypted on this device. Encrypted server sync requires wallet verification and does not enable automated trading.
                 </div>
               </div>
@@ -7783,7 +7783,7 @@ function FuturesPanel() {
                 </div>
               )}
               {lighterReferralRequired !== false && hasLighterCredentials && lighterNeedsReferral && (
-                <div style={{fontSize: 12, fontWeight: 600, color: 'var(--terminal-text)', lineHeight: 1.35, border: '1px solid var(--terminal-warning-border)', background: 'var(--terminal-warning-soft)', borderRadius: 12, padding: 12, display: 'flex', flexDirection: 'column', gap: 10}}>
+                <div style={{fontSize: 12, fontWeight: 600, color: 'var(--terminal-text)', lineHeight: 1.35, border: '1px solid var(--terminal-warning-border)', background: 'var(--terminal-warning-border)', borderRadius: 12, padding: 12, display: 'flex', flexDirection: 'column', gap: 10}}>
                   <span>No Lighter referral is attached to this wallet. Confirm <strong>{referralCode}</strong> before trading. Clash never replaces an existing referral.</span>
                   <button
                     type="button"
@@ -7826,14 +7826,14 @@ function FuturesPanel() {
                 </button>
               )}
               {!lighterIntegratorConfigured && (
-                <div role="status" style={{fontSize: 12, fontWeight: 650, color: 'var(--terminal-warning)', lineHeight: 1.45, border: '1px solid var(--terminal-warning-border)', background: 'var(--terminal-warning-soft)', borderRadius: 12, padding: 12}}>
+                <div role="status" style={{fontSize: 12, fontWeight: 600, color: 'var(--terminal-warning)', lineHeight: 1.45, border: '1px solid var(--terminal-warning-border)', background: 'var(--terminal-warning-border)', borderRadius: 12, padding: 12}}>
                   {dex === 'rhlighter'
                     ? <>Robinhood Lighter uses a deployment-specific integrator account index. The standard Lighter index cannot be reused. Configure <code>RH_LIGHTER_INTEGRATOR_ACCOUNT_INDEX</code> after the Clash wallet has an RH Lighter account; 1 bps equals fee value <code>{lighterConfig?.builderFeeValue ?? 100}</code>. {lighterConfig?.integratorStatus?.reason || ''}</>
                     : <>Clash could not validate the configured Lighter integrator account. Opening orders remain disabled. {lighterConfig?.integratorStatus?.reason || ''}</>}
                 </div>
               )}
               {lighterNeedsIntegratorApproval && hasReferrer === true && lighterIntegratorConfigured && (
-                <div style={{fontSize: 12, fontWeight: 600, color: 'var(--terminal-text)', lineHeight: 1.35, border: '1px solid var(--terminal-warning-border)', background: 'var(--terminal-warning-soft)', borderRadius: 12, padding: 12, display: 'flex', flexDirection: 'column', gap: 10}}>
+                <div style={{fontSize: 12, fontWeight: 600, color: 'var(--terminal-text)', lineHeight: 1.35, border: '1px solid var(--terminal-warning-border)', background: 'var(--terminal-warning-border)', borderRadius: 12, padding: 12, display: 'flex', flexDirection: 'column', gap: 10}}>
                   <span>{lighterVenueLabel || 'Lighter'} API key is saved. Approve the Clash integrator fee before trading unlocks.</span>
                   <button
                     type="button"
@@ -7978,7 +7978,7 @@ function FuturesPanel() {
           }}>
             <div style={hlGateStyles.frame}>
               <div style={hlGateStyles.titleBlock}>
-                <span style={hlGateStyles.kicker}>{isRunning ? 'CONNECTING' : 'ACTION REQUIRED'}</span>
+                <span style={hlGateStyles.kicker}>{isRunning ? 'Connecting' : 'Action required'}</span>
                 <span style={hlGateStyles.title}>Add Hibachi API credentials</span>
                 <span style={hlGateStyles.subtitle}>
                   EVM wallet is connected. Hibachi does not expose builder codes, so Clash credits rewards only after importing fills from this Hibachi account.
@@ -8027,13 +8027,13 @@ function FuturesPanel() {
                   border: '1px solid var(--terminal-orange)',
                   color: 'var(--terminal-text)',
                   fontSize: 11,
-                  fontWeight: 650,
+                  fontWeight: 600,
                   lineHeight: 1.45,
                 }}>
                   <strong>Required in Hibachi:</strong> API Keys → Read-write → enable Trading. Hibachi selects Read-only by default. Withdraws and Transfers are not required.
                 </div>
                 <label style={{display: 'flex', flexDirection: 'column', gap: 5}}>
-                  <span style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)', textTransform: 'uppercase'}}>Hibachi API key</span>
+                  <span style={{fontSize: 12, fontWeight: 500, color: 'var(--terminal-text-muted)'}}>Hibachi API key</span>
                   <input
                     type="password"
                     value={hibachiApiKeyInput}
@@ -8048,7 +8048,7 @@ function FuturesPanel() {
                   />
                 </label>
                 <label style={{display: 'flex', flexDirection: 'column', gap: 5}}>
-                  <span style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)', textTransform: 'uppercase'}}>Account id</span>
+                  <span style={{fontSize: 12, fontWeight: 500, color: 'var(--terminal-text-muted)'}}>Account id</span>
                   <input
                     type="text"
                     value={hibachiAccountIdInput}
@@ -8063,7 +8063,7 @@ function FuturesPanel() {
                   />
                 </label>
                 <label style={{display: 'flex', flexDirection: 'column', gap: 5}}>
-                  <span style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)', textTransform: 'uppercase'}}>API private key</span>
+                  <span style={{fontSize: 12, fontWeight: 500, color: 'var(--terminal-text-muted)'}}>API private key</span>
                   <input
                     type="password"
                     value={hibachiPrivateKeyInput}
@@ -8077,7 +8077,7 @@ function FuturesPanel() {
                     style={{...S.input, padding: '10px 12px', fontSize: 14}}
                   />
                 </label>
-                <div style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-faint)', lineHeight: 1.35}}>
+                <div style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-faint)', lineHeight: 1.35}}>
                   Encrypted on this device; encrypted server sync requires wallet verification. Use the private key shown when you create the Hibachi API key.
                 </div>
                 <label style={{display: 'flex', alignItems: 'flex-start', gap: 8, cursor: isRunning ? 'default' : 'pointer'}}>
@@ -8088,7 +8088,7 @@ function FuturesPanel() {
                     disabled={isRunning}
                     style={{marginTop: 2, accentColor: 'var(--terminal-orange)'}}
                   />
-                  <span style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)', lineHeight: 1.4}}>
+                  <span style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-text)', lineHeight: 1.4}}>
                     I enabled Read-write → Trading for this Hibachi API key.
                   </span>
                 </label>
@@ -8181,7 +8181,7 @@ function FuturesPanel() {
           <div style={{...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: 'var(--terminal-surface)'}}>
             <div style={hlGateStyles.frame}>
               <div style={hlGateStyles.titleBlock}>
-                <span style={hlGateStyles.kicker}>{isRunning ? 'CONNECTING' : 'ACTION REQUIRED'}</span>
+                <span style={hlGateStyles.kicker}>{isRunning ? 'Connecting' : 'Action required'}</span>
                 <span style={hlGateStyles.title}>Authorize GRVT trading</span>
                 <span style={hlGateStyles.subtitle}>
                   Sign once with your GRVT wallet. Clash creates the GRVT API key and local trading signer automatically.
@@ -8245,7 +8245,7 @@ function FuturesPanel() {
                 padding: 12,
               }}>
                 <label style={{display: 'flex', flexDirection: 'column', gap: 5}}>
-                  <span style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)', textTransform: 'uppercase'}}>Existing GRVT API key</span>
+                  <span style={{fontSize: 12, fontWeight: 500, color: 'var(--terminal-text-muted)'}}>Existing GRVT API key</span>
                   <input
                     type="password"
                     value={grvtApiKeyInput}
@@ -8335,7 +8335,7 @@ function FuturesPanel() {
           <div style={{...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: 'var(--terminal-surface)'}}>
             <div style={hlGateStyles.frame}>
               <div style={hlGateStyles.titleBlock}>
-                <span style={hlGateStyles.kicker}>{isRunning ? 'CHECKING' : 'ACTION REQUIRED'}</span>
+                <span style={hlGateStyles.kicker}>{isRunning ? 'Checking' : 'Action required'}</span>
                 <span style={hlGateStyles.title}>Katana Perps setup</span>
                 <span style={hlGateStyles.subtitle}>
                   Add your Katana API key and secret, then approve a local delegated key once for one tap trading. Keys are encrypted on this device; encrypted server sync requires wallet verification.
@@ -8403,7 +8403,7 @@ function FuturesPanel() {
                 padding: 12,
               }}>
                 <label style={{display: 'flex', flexDirection: 'column', gap: 5}}>
-                  <span style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)', textTransform: 'uppercase'}}>Katana API key</span>
+                  <span style={{fontSize: 12, fontWeight: 500, color: 'var(--terminal-text-muted)'}}>Katana API key</span>
                   <input
                     type="password"
                     value={katanaApiKeyInput}
@@ -8418,7 +8418,7 @@ function FuturesPanel() {
                   />
                 </label>
                 <label style={{display: 'flex', flexDirection: 'column', gap: 5}}>
-                  <span style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)', textTransform: 'uppercase'}}>Katana API secret</span>
+                  <span style={{fontSize: 12, fontWeight: 500, color: 'var(--terminal-text-muted)'}}>Katana API secret</span>
                   <input
                     type="password"
                     value={katanaApiSecretInput}
@@ -8432,7 +8432,7 @@ function FuturesPanel() {
                     style={{...S.input, padding: '10px 12px', fontSize: 14}}
                   />
                 </label>
-                <div style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-faint)', lineHeight: 1.35}}>
+                <div style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-faint)', lineHeight: 1.35}}>
                   Do not enter a wallet private key. Katana one tap creates a delegated key encrypted on this device, with encrypted server sync after wallet verification.
                 </div>
               </div>
@@ -8486,7 +8486,7 @@ function FuturesPanel() {
               </button>
 
               {referralUrl && (
-                <div style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-faint)', lineHeight: 1.35, wordBreak: 'break-all'}}>
+                <div style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-faint)', lineHeight: 1.35, wordBreak: 'break-all'}}>
                   {referralUrl}
                 </div>
               )}
@@ -8541,7 +8541,7 @@ function FuturesPanel() {
           }}>
             <div style={hlGateStyles.frame}>
               <div style={hlGateStyles.titleBlock}>
-                <span style={hlGateStyles.kicker}>{isChecking ? 'CHECKING' : 'ACTION REQUIRED'}</span>
+                <span style={hlGateStyles.kicker}>{isChecking ? 'Checking' : 'Action required'}</span>
                 <span style={hlGateStyles.title}>{isChecking ? 'Checking GMTrade referral' : 'Claim GMTrade referral'}</span>
                 <span style={hlGateStyles.subtitle}>
                   {isChecking
@@ -8635,7 +8635,7 @@ function FuturesPanel() {
           }}>
             <div style={hlGateStyles.frame}>
               <div style={hlGateStyles.titleBlock}>
-                <span style={hlGateStyles.kicker}>{isChecking ? 'CHECKING' : 'ACTION REQUIRED'}</span>
+                <span style={hlGateStyles.kicker}>{isChecking ? 'Checking' : 'Action required'}</span>
                 <span style={hlGateStyles.title}>{isChecking ? 'Checking Flash referral' : 'Create Flash referral pass'}</span>
                 <span style={hlGateStyles.subtitle}>
                   {isChecking
@@ -8759,7 +8759,7 @@ function FuturesPanel() {
           }}>
             <div style={hlGateStyles.frame}>
               <div style={hlGateStyles.titleBlock}>
-                <span style={hlGateStyles.kicker}>{isChecking ? 'CHECKING' : isRunning ? 'APPROVING' : 'ACTION REQUIRED'}</span>
+                <span style={hlGateStyles.kicker}>{isChecking ? 'Checking' : isRunning ? 'Approving' : 'Action required'}</span>
                 <span style={hlGateStyles.title}>{isRunning ? 'Approve in your wallet' : 'Link Clash builder code'}</span>
                 <span style={hlGateStyles.subtitle}>
                   Avantis trading opens after this Base wallet is linked to the Clash code. This keeps gold rewards and quests attached to your game account.
@@ -8874,7 +8874,7 @@ function FuturesPanel() {
               <div style={{ ...hlGateStyles.frame, justifyContent: 'center', minHeight: 260 }}>
                 <span style={hlGateStyles.bigSpinner} />
                 <div style={hlGateStyles.titleBlock}>
-                  <span style={hlGateStyles.kicker}>CHECKING</span>
+                  <span style={hlGateStyles.kicker}>Checking</span>
                   <span style={hlGateStyles.title}>Checking Hotstuff setup</span>
                   <span style={hlGateStyles.subtitle}>
                     Reading your Hotstuff account, builder-code approval, funding, and browser trading agent before showing any action steps.
@@ -8916,7 +8916,7 @@ function FuturesPanel() {
           }}>
             <div style={hlGateStyles.frame}>
               <div style={hlGateStyles.titleBlock}>
-                <span style={hlGateStyles.kicker}>{isRunning ? 'APPROVE IN WALLET' : 'ACTION REQUIRED'}</span>
+                <span style={hlGateStyles.kicker}>{isRunning ? 'Approve in wallet' : 'Action required'}</span>
                 <span style={hlGateStyles.title}>Set up Hotstuff trading</span>
                 <span style={hlGateStyles.subtitle}>
                   Create or fund your Hotstuff account in Hotstuff official, approve the Clash builder code, then register a browser trading agent.
@@ -9051,7 +9051,7 @@ function FuturesPanel() {
           }}>
             <div style={hlGateStyles.frame}>
               <div style={hlGateStyles.titleBlock}>
-                <span style={hlGateStyles.kicker}>{isChecking ? 'CHECKING' : isRunning ? 'APPROVING' : 'ACTION REQUIRED'}</span>
+                <span style={hlGateStyles.kicker}>{isChecking ? 'Checking' : isRunning ? 'Approving' : 'Action required'}</span>
                 <span style={hlGateStyles.title}>{isRunning ? 'Approve in your wallet' : 'Approve Clash builder code'}</span>
                 <span style={hlGateStyles.subtitle}>
                   Pacifica trading opens only after builder-code routing is approved. This is required before opening, editing, or closing orders.
@@ -9179,7 +9179,7 @@ function FuturesPanel() {
     const headerStatus = isChecking ? 'CHECKING'
       : isRunning && activationStep?.total > 0
         ? `STEP ${Math.max(1, activationStep.index)} OF ${activationStep.total}`
-        : 'ACTION REQUIRED';
+        : 'Action required';
     const headerTitle = isRunning
       ? (activationStep.label || 'Setting up Hyperliquid')
       : isChecking
@@ -9331,7 +9331,7 @@ function FuturesPanel() {
             <div style={hlGateStyles.frame}>
               <div style={hlGateStyles.titleBlock}>
                 <img src={DEX_CONFIG.risex.logo} alt="" style={{width: 56, height: 56, objectFit: 'contain', alignSelf: 'center'}} />
-                <span style={hlGateStyles.kicker}>{isChecking ? 'CHECKING' : isRunning ? `STEP ${activationStep?.index || 1} OF ${activationStep?.total || totalSteps}` : 'ACTION REQUIRED'}</span>
+                <span style={hlGateStyles.kicker}>{isChecking ? 'Checking' : isRunning ? `Step ${activationStep?.index || 1} of ${activationStep?.total || totalSteps}` : 'Action required'}</span>
                 <span style={hlGateStyles.title}>{stepLabel}</span>
                 <span style={hlGateStyles.subtitle}>
                   RISEx uses a secure browser signer. Setup also approves the Clash builder fee at exactly 1 bps (0.01%) before orders can be placed.
@@ -9351,7 +9351,7 @@ function FuturesPanel() {
                   gap: 7,
                 }}>
                   <strong style={{fontSize: 14}}>Clash builder code is not registered yet</strong>
-                  <span style={{fontSize: 11, lineHeight: 1.4, fontWeight: 700}}>
+                  <span style={{fontSize: 11, lineHeight: 1.4, fontWeight: 600}}>
                     Fee recipient {shortAddr(builderConfig?.fee_recipient)} will receive the canonical 1 bps fee. Trading stays locked until RISEx returns a builder ID.
                   </span>
                   {canRegisterRisexBuilder ? (
@@ -9468,7 +9468,7 @@ function FuturesPanel() {
           </div>
           <div style={{...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: 'var(--terminal-surface)'}}>
             <TradingSetupGate
-              kicker={perplChecking ? 'VERIFYING ACCOUNT' : perplAuthed ? 'FUND TRADING ACCOUNT' : 'WALLET SIGNATURE REQUIRED'}
+              kicker={perplChecking ? 'Verifying account' : perplAuthed ? 'Fund trading account' : 'Wallet signature required'}
               title={perplChecking ? 'Checking your Perpl account' : perplAuthed ? 'Create or fund your Perpl account' : 'Sign in to Perpl'}
               subtitle={perplChecking
                 ? 'Waiting for Perpl to return the live wallet and exchange-account snapshot.'
@@ -9487,7 +9487,7 @@ function FuturesPanel() {
               workingText={perplChecking ? 'Loading the live Perpl account...' : loading ? 'Waiting for your wallet...' : ''}
               error={error ? humanizeTradeError(error, dex) : ''}
               primaryAction={{
-                label: loading || perplChecking ? 'PLEASE WAIT...' : perplAuthed ? 'CREATE ACCOUNT' : 'SIGN IN TO PERPL',
+                label: loading || perplChecking ? 'Please wait...' : perplAuthed ? 'Create account' : 'Sign in to Perpl',
                 disabled: loading || perplChecking || (perplAuthed && !canCreate),
                 onClick: async () => {
                   if (!perplAuthed) {
@@ -9533,7 +9533,7 @@ function FuturesPanel() {
                     style={{...S.input, width: '100%', padding: '10px 12px', fontSize: 14, marginTop: 8}}
                   />
                   {walletAusd <= 0 && (
-                    <div style={{fontSize: 11, color: 'var(--terminal-text-muted)', fontWeight: 700, lineHeight: 1.4, marginTop: 7}}>
+                    <div style={{fontSize: 11, color: 'var(--terminal-text-muted)', fontWeight: 600, lineHeight: 1.4, marginTop: 7}}>
                       No AUSD detected. Swap or bridge into AUSD first and keep a small MON balance for gas.
                     </div>
                   )}
@@ -9569,7 +9569,7 @@ function FuturesPanel() {
           </div>
           <div style={{...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: 'var(--terminal-surface)'}}>
             <TradingSetupGate
-              kicker={checkingInvite ? 'VERIFYING ACCOUNT' : whitelisted ? 'CREATE TRADER ACCOUNT' : 'ACCESS CODE REQUIRED'}
+              kicker={checkingInvite ? 'Verifying account' : whitelisted ? 'Create trader account' : 'Access code required'}
               title={checkingInvite ? 'Loading your Phoenix account' : whitelisted ? 'Create your Phoenix trader' : 'Enter your Phoenix code'}
               subtitle={waitingForPhoenixState
                 ? (restoringPhoenixSetup ? 'A cached Phoenix setup was found. Clash is confirming its live on-chain state.' : 'Clash checks live trader state before asking for a referral code or signature.')
@@ -9590,7 +9590,7 @@ function FuturesPanel() {
                 : loading ? 'Waiting for your Solana wallet...' : ''}
               error={error ? humanizeTradeError(error, dex) : ''}
               primaryAction={{
-                label: loading || checkingInvite ? 'PLEASE WAIT...' : whitelisted ? 'CREATE ACCOUNT' : 'ACTIVATE PHOENIX',
+                label: loading || checkingInvite ? 'Please wait...' : whitelisted ? 'Create account' : 'Activate Phoenix',
                 disabled: loading || checkingInvite,
                 onClick: async () => {
                   const inviteCode = phoenixInviteCode.trim();
@@ -9720,12 +9720,12 @@ function FuturesPanel() {
       return { ...s, state };
     });
 
-    const headerStatus = isChecking ? 'VERIFYING ACCOUNT'
-      : isReferralWorking ? 'VERIFYING REFERRAL'
+    const headerStatus = isChecking ? 'Verifying account'
+      : isReferralWorking ? 'Verifying referral'
       : isRunning && activationStep?.total > 0
         ? `STEP ${Math.max(2, activationStep.index + 1)} OF ${activationStep.total + 1}`
         : isRunning ? 'PREPARING'
-        : 'ACTION REQUIRED';
+        : 'Action required';
     const headerTitle = isRunning
       ? (activationStep?.label || 'Accepting Decibel referral')
       : isChecking
@@ -10059,7 +10059,7 @@ function FuturesPanel() {
           <div style={{opacity: 0.3, color: 'var(--terminal-text)'}}>
             <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect width="20" height="14" x="2" y="7" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
           </div>
-          <div style={{color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700}}>{dataReady ? 'No Positions' : 'Loading...'}</div>
+          <div style={{color: 'var(--terminal-text)', fontSize: 18, fontWeight: 600}}>{dataReady ? 'No Positions' : 'Loading...'}</div>
         </div>
       );
     }
@@ -10128,13 +10128,13 @@ function FuturesPanel() {
               <div key={positionStableKey(pos) || i} style={S.posCard}>
                 <div style={S.row}>
                   <div style={{display: 'flex', alignItems: 'center', gap: 8, minWidth: 0}}>
-                    <span style={{fontSize: 16, fontWeight: 700}}>{pos.symbol}</span>
+                    <span style={{fontSize: 16, fontWeight: 600}}>{pos.symbol}</span>
                     <span style={{
-                      fontSize: 12, fontWeight: 700,
+                      fontSize: 12, fontWeight: 600,
                       padding: '2px 8px', borderRadius: 6,
                       color: 'var(--terminal-on-trade, var(--terminal-on-accent))',
                       background: pos.side === 'bid' ? 'var(--terminal-long)' : 'var(--terminal-short)',
-                      letterSpacing: '0.5px',
+                      letterSpacing: 0,
                       textShadow: 'none',
                     }}>
                       {pos.side === 'bid' ? '▲ UP' : '▼ DOWN'}
@@ -10169,7 +10169,7 @@ function FuturesPanel() {
                   <button
                     style={{
                       width: 44, padding: 0,
-                      background: 'var(--terminal-chip-overlay)',
+                      background: 'var(--terminal-surface-muted)',
                       border: '1px solid var(--terminal-border)',
                       borderRadius: 8,
                       color: 'var(--terminal-text)',
@@ -10225,19 +10225,19 @@ function FuturesPanel() {
           return (
             <div key={positionStableKey(pos) || i} style={S.posCard}>
               <div style={S.row}>
-                <span style={{fontSize: 16, fontWeight: 700}}>{pos.symbol}</span>
+                <span style={{fontSize: 16, fontWeight: 600}}>{pos.symbol}</span>
                 <div style={{display: 'flex', alignItems: 'center', gap: 6}}>
                   {(() => {
                     const isIso = dex === 'gmtrade' ? true : (pos.is_isolated ?? marginModes?.[pos.symbol]);
                     return (
                       <span style={{fontSize: 11, fontWeight: 600, padding: '2px 6px', borderRadius: 5, borderWidth: 1, borderStyle: 'solid', borderColor: isIso ? 'var(--terminal-warning)' : 'var(--terminal-long)', color: isIso ? 'var(--terminal-warning)' : 'var(--terminal-long)', background: 'var(--terminal-chip-overlay)'}}>
-                        {isIso ? 'ISO' : 'CROSS'}
+                        {isIso ? 'Iso' : 'Cross'}
                       </span>
                     );
                   })()}
                   <span style={{fontSize: 11, fontWeight: 600, color: isDust ? 'var(--terminal-warning)' : 'var(--terminal-text-muted)', background: 'var(--terminal-surface)', padding: '2px 6px', borderRadius: 5, border: '1px solid var(--terminal-border)'}}>{isDust ? 'DUST' : formatPositionLeverageBadge(setLev)}</span>
-                  <span style={{fontSize: 13, fontWeight: 700, color: pos.side === 'bid' ? 'var(--terminal-long)' : 'var(--terminal-short)'}}>
-                    {pos.side === 'bid' ? 'LONG' : 'SHORT'}
+                  <span style={{fontSize: 13, fontWeight: 600, color: pos.side === 'bid' ? 'var(--terminal-long)' : 'var(--terminal-short)'}}>
+                    {pos.side === 'bid' ? 'Long' : 'Short'}
                   </span>
                 </div>
               </div>
@@ -10269,7 +10269,7 @@ function FuturesPanel() {
                   <div style={S.row}>
                     <span style={{ ...S.detail, color: danger ? 'var(--terminal-short)' : 'var(--terminal-text-muted)' }}>
                       {dex === 'imperial' ? 'API Liq' : 'Liq'}: ${formatPositionPrice(liq, dex)}
-                      {markP > 0 && <span style={{ marginLeft: 6, fontWeight: 700 }}>({distPct.toFixed(1)}% away)</span>}
+                      {markP > 0 && <span style={{ marginLeft: 6, fontWeight: 600 }}>({distPct.toFixed(1)}% away)</span>}
                     </span>
                     <span style={S.detail} />
                   </div>
@@ -10304,7 +10304,7 @@ function FuturesPanel() {
                 <button
                   style={{
                     width: 32, padding: 0,
-                    background: 'var(--terminal-chip-overlay)',
+                    background: 'var(--terminal-surface-muted)',
                     border: '1px solid var(--terminal-border)',
                     borderRadius: 6,
                     color: 'var(--terminal-text)',
@@ -10332,8 +10332,8 @@ function FuturesPanel() {
               {expanded === 'close' && (
                 <PositionActionDialog title={`Close ${pos.symbol}`} onClose={() => setExpandedPos(null)} feedback={localAlert || error}>
                   <div style={S.row}>
-                    <span style={{fontSize: 13, fontWeight: 700, color: 'var(--terminal-text)'}}>{isDust ? 'Clean up Flash dust' : `Close ${closePct}%`}</span>
-                    <span style={{fontSize: 11, color: 'var(--terminal-text-muted)', fontWeight: 700}}>
+                    <span style={{fontSize: 13, fontWeight: 600, color: 'var(--terminal-text)'}}>{isDust ? 'Clean up Flash dust' : `Close ${closePct}%`}</span>
+                    <span style={{fontSize: 11, color: 'var(--terminal-text-muted)', fontWeight: 600}}>
                       {formatCloseAmountLabel(pos, closePct, posValueUsd, isDust, dustUsd)}
                     </span>
                   </div>
@@ -10421,7 +10421,7 @@ function FuturesPanel() {
           <div style={{opacity: 0.3, color: 'var(--terminal-text)'}}>
             <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
           </div>
-          <div style={{color: 'var(--terminal-text)', fontSize: 18, fontWeight: 700}}>No Orders</div>
+          <div style={{color: 'var(--terminal-text)', fontSize: 18, fontWeight: 600}}>No Orders</div>
         </div>
       );
     }
@@ -10445,10 +10445,10 @@ function FuturesPanel() {
           return (
             <div key={orderStableKey(o, i)} style={S.posCard}>
               <div style={S.row}>
-                <span style={{fontSize: 16, fontWeight: 700}}>{sym}</span>
+                <span style={{fontSize: 16, fontWeight: 600}}>{sym}</span>
                 <span style={{fontSize: 11, fontWeight: 600, color: typeColor, background: 'var(--terminal-surface)', padding: '2px 6px', borderRadius: 5, border: '1px solid var(--terminal-border)'}}>{type}</span>
                 {pending ? <OrderPendingBadge /> : null}
-                <span style={{fontSize: 13, fontWeight: 700, color: isBid ? 'var(--terminal-long)' : 'var(--terminal-short)'}}>
+                <span style={{fontSize: 13, fontWeight: 600, color: isBid ? 'var(--terminal-long)' : 'var(--terminal-short)'}}>
                   {sideLabel}
                 </span>
                 {pending ? (
@@ -10708,7 +10708,7 @@ function FuturesPanel() {
           <div style={S.row}>
             <span style={S.label}>Connected Wallet</span>
             <div style={{display: 'flex', alignItems: 'center', gap: 6}}>
-              <span style={{fontSize: 12, fontWeight: 700, fontFamily: 'monospace', color: 'var(--terminal-text)'}}>
+              <span style={{fontSize: 12, fontWeight: 600, fontFamily: 'monospace', color: 'var(--terminal-text)'}}>
                 {walletCopied ? 'Copied' : `${walletAddr?.slice(0, 6)}...${walletAddr?.slice(-4)}`}
               </span>
               <button
@@ -10722,8 +10722,8 @@ function FuturesPanel() {
                 style={{
                   display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                   width: 22, height: 22, padding: 0, borderRadius: 6,
-                  background: walletCopied ? 'rgba(67,160,71,0.18)' : 'rgba(0,0,0,0.08)',
-                  border: `1px solid ${walletCopied ? 'rgba(46,125,50,0.5)' : 'rgba(17,24,39,0.3)'}`,
+                  background: walletCopied ? 'var(--terminal-long-soft)' : 'var(--terminal-surface-muted)',
+                  border: `1px solid ${walletCopied ? 'var(--terminal-long-border)' : 'var(--terminal-border-strong)'}`,
                   cursor: 'pointer', color: walletCopied ? 'var(--terminal-long)' : 'var(--terminal-text)',
                   transition: 'all 0.15s ease',
                 }}
@@ -10766,7 +10766,7 @@ function FuturesPanel() {
                   setLocalAlert('Enter the correct Hibachi API credentials.');
                 }}
               >
-                EDIT API
+                Edit API
               </button>
             </div>
             <div style={{...S.row, gap: 8, marginTop: 8}}>
@@ -10807,15 +10807,15 @@ function FuturesPanel() {
         {dex === 'etoro' && setupVerified === true && (
           <div style={S.fullCard}>
             <div style={S.row}>
-              <span style={{...S.label, color: '#5CBF2A'}}>eToro API</span>
+              <span style={S.label}>eToro API</span>
               <button
                 style={{
                   ...S.btnSmall,
                   padding: '6px 10px',
                   fontSize: 11,
-                  background: 'rgba(111,207,23,0.12)',
-                  color: '#4A9E12',
-                  border: '1px solid #6FCF17',
+                  background: 'var(--terminal-surface)',
+                  color: 'var(--terminal-text)',
+                  border: '1px solid var(--terminal-border)',
                   whiteSpace: 'nowrap',
                 }}
                 onClick={async () => {
@@ -10825,17 +10825,17 @@ function FuturesPanel() {
                   setLocalAlert('Paste the replacement eToro API key and user key.');
                 }}
               >
-                CHANGE API
+                Change API
               </button>
             </div>
             <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8}}>
               <div style={{background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 10, padding: '8px 10px'}}>
-                <div style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-faint)', textTransform: 'uppercase'}}>Environment</div>
-                <div style={{fontSize: 13, fontWeight: 800, color: 'var(--terminal-short-strong)'}}>REAL</div>
+                <div style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-faint)', textTransform: 'uppercase', letterSpacing: '0.06em'}}>Environment</div>
+                <div style={{fontSize: 13, fontWeight: 600, color: 'var(--terminal-short-strong)'}}>Real</div>
               </div>
               <div style={{background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 10, padding: '8px 10px'}}>
-                <div style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-faint)', textTransform: 'uppercase'}}>Account</div>
-                <div style={{fontSize: 13, fontWeight: 700, color: 'var(--terminal-text)', fontFamily: 'monospace'}}>{String(account?.account_id || '').slice(0, 18) || 'Connected'}</div>
+                <div style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-faint)', textTransform: 'uppercase', letterSpacing: '0.06em'}}>Account</div>
+                <div style={{fontSize: 13, fontWeight: 600, color: 'var(--terminal-text)', fontFamily: 'monospace'}}>{String(account?.account_id || '').slice(0, 18) || 'Connected'}</div>
               </div>
             </div>
             <div style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-faint)', lineHeight: 1.35}}>
@@ -10867,7 +10867,7 @@ function FuturesPanel() {
                   }
                 }}
               >
-                CLEAR AGENT
+                Clear agent
               </button>
             </div>
             <div style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-faint)', lineHeight: 1.35}}>
@@ -10899,17 +10899,17 @@ function FuturesPanel() {
                   setLocalAlert(`Paste the replacement ${lighterVenueLabel || 'Lighter'} API key.`);
                 }}
               >
-                CHANGE API
+                Change API
               </button>
             </div>
             <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8}}>
               <div style={{background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 10, padding: '8px 10px'}}>
-                <div style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-faint)', textTransform: 'uppercase'}}>Account index</div>
-                <div style={{fontSize: 13, fontWeight: 700, color: 'var(--terminal-text)'}}>{lighterCredentials.accountIndex}</div>
+                <div style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-faint)', textTransform: 'uppercase', letterSpacing: '0.06em'}}>Account index</div>
+                <div style={{fontSize: 13, fontWeight: 600, color: 'var(--terminal-text)'}}>{lighterCredentials.accountIndex}</div>
               </div>
               <div style={{background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 10, padding: '8px 10px'}}>
-                <div style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-faint)', textTransform: 'uppercase'}}>API key index</div>
-                <div style={{fontSize: 13, fontWeight: 700, color: 'var(--terminal-text)'}}>{lighterCredentials.apiKeyIndex ?? '-'}</div>
+                <div style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-faint)', textTransform: 'uppercase', letterSpacing: '0.06em'}}>API key index</div>
+                <div style={{fontSize: 13, fontWeight: 600, color: 'var(--terminal-text)'}}>{lighterCredentials.apiKeyIndex ?? '-'}</div>
               </div>
             </div>
             <div style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-faint)', lineHeight: 1.35}}>
@@ -10924,7 +10924,7 @@ function FuturesPanel() {
           <div style={S.row}>
             <span style={S.label}>{walletBalanceLabel}</span>
             <div style={{display: 'flex', alignItems: 'center', gap: 8}}>
-              <span style={{fontSize: 18, fontWeight: 700, color: walletBalanceColor}}>
+              <span style={{fontSize: 18, fontWeight: 600, color: walletBalanceColor}}>
                 {walletBalanceValue}
               </span>
               {dex === 'risex' && (risexWalletNeedsSwitch || risexWalletError) && (
@@ -10955,7 +10955,7 @@ function FuturesPanel() {
                     ...S.btnSmall,
                     padding: '5px 9px',
                     fontSize: 11,
-                    background: '#0891B2',
+                    background: 'var(--terminal-info)',
                     color: 'var(--terminal-on-accent)',
                     border: '1px solid var(--terminal-info)',
                     opacity: (nadoWalletBusy || loading) ? 0.65 : 1,
@@ -10984,7 +10984,7 @@ function FuturesPanel() {
           <div style={S.fullCard}>
             <div style={S.row}>
               <span style={S.label}>{hyperliquidUnified ? 'Hyperliquid USDC' : 'Legacy Spot USDC'}</span>
-              <span style={{fontSize: 18, fontWeight: 700, color: 'var(--terminal-text)'}}>
+              <span style={{fontSize: 18, fontWeight: 600, color: 'var(--terminal-text)'}}>
                 ${hyperliquidSpot.toFixed(2)}
               </span>
             </div>
@@ -11020,7 +11020,7 @@ function FuturesPanel() {
           <div style={S.fullCard}>
             <div style={S.row}>
               <span style={S.label}>GRVT Funding Account</span>
-              <span style={{fontSize: 18, fontWeight: 700, color: 'var(--terminal-text)'}}>
+              <span style={{fontSize: 18, fontWeight: 600, color: 'var(--terminal-text)'}}>
                 {grvtFundingBalance.toFixed(2)} {grvtFundingCurrency}
               </span>
             </div>
@@ -11038,12 +11038,12 @@ function FuturesPanel() {
             </div>
             <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8}}>
               <div style={{background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 10, padding: '8px 10px'}}>
-                <div style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-faint)', textTransform: 'uppercase'}}>API key</div>
-                <div style={{fontSize: 13, fontWeight: 700, color: 'var(--terminal-text)'}}>Saved</div>
+                <div style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-faint)', textTransform: 'uppercase', letterSpacing: '0.06em'}}>API key</div>
+                <div style={{fontSize: 13, fontWeight: 600, color: 'var(--terminal-text)'}}>Saved</div>
               </div>
-              <div style={{background: oneTapTrading?.enabled ? 'var(--terminal-long-soft)' : 'var(--terminal-surface-subtle)', border: `1px solid ${oneTapTrading?.enabled ? 'var(--terminal-long)' : 'var(--terminal-border)'}`, borderRadius: 10, padding: '8px 10px'}}>
-                <div style={{fontSize: 11, fontWeight: 700, color: oneTapTrading?.enabled ? 'var(--terminal-long-strong)' : 'var(--terminal-text-faint)', textTransform: 'uppercase'}}>One tap</div>
-                <div style={{fontSize: 13, fontWeight: 700, color: oneTapTrading?.enabled ? 'var(--terminal-long-strong)' : 'var(--terminal-text)'}}>
+              <div style={{background: oneTapTrading?.enabled ? 'var(--terminal-long-border)' : 'var(--terminal-surface-subtle)', border: `1px solid ${oneTapTrading?.enabled ? 'var(--terminal-long)' : 'var(--terminal-border)'}`, borderRadius: 10, padding: '8px 10px'}}>
+                <div style={{fontSize: 11, fontWeight: 600, color: oneTapTrading?.enabled ? 'var(--terminal-long-strong)' : 'var(--terminal-text-faint)', textTransform: 'uppercase'}}>One tap</div>
+                <div style={{fontSize: 13, fontWeight: 600, color: oneTapTrading?.enabled ? 'var(--terminal-long-strong)' : 'var(--terminal-text)'}}>
                   {oneTapTrading?.enabled ? 'Enabled' : 'Off'}
                 </div>
               </div>
@@ -11051,8 +11051,8 @@ function FuturesPanel() {
             {oneTapTrading?.enabled && oneTapTrading?.signer && (
               <div style={{
                 marginBottom: 8,
-                background: 'rgba(22,163,74,0.08)',
-                border: '1px dashed rgba(22,163,74,0.35)',
+                background: 'var(--terminal-long-soft)',
+                border: '1px dashed var(--terminal-long-border)',
                 borderRadius: 10,
                 padding: '8px 10px',
                 fontSize: 11,
@@ -11074,7 +11074,7 @@ function FuturesPanel() {
             >
               Change account
             </button>
-            <span style={{display: 'block', marginTop: 8, fontSize: 11, color: 'var(--terminal-text-muted)', fontWeight: 700, lineHeight: 1.35}}>
+            <span style={{display: 'block', marginTop: 8, fontSize: 11, color: 'var(--terminal-text-muted)', fontWeight: 600, lineHeight: 1.35}}>
               GRVT credentials are encrypted on this device and on Clash servers when synced after wallet verification. Order signatures remain local; sync does not enable bots.
             </span>
           </div>
@@ -11089,7 +11089,7 @@ function FuturesPanel() {
             <div style={S.levBackdrop} onClick={() => { if (!loading) setGrvtAccountModalOpen(false); }} />
             <div style={{...S.levModal, width: isMobile ? 'calc(100% - 32px)' : 380, maxWidth: 420, gap: 12}}>
               <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
-                <span style={{fontSize: 16, fontWeight: 700, color: 'var(--terminal-text)'}}>Change GRVT account</span>
+                <span style={{fontSize: 16, fontWeight: 600, color: 'var(--terminal-text)'}}>Change GRVT account</span>
                 <button style={S.levCloseBtn} disabled={loading} onClick={() => setGrvtAccountModalOpen(false)}>
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                 </button>
@@ -11113,7 +11113,7 @@ function FuturesPanel() {
                 {loading ? 'Authorizing...' : 'Authorize with wallet'}
               </button>
               <label style={{display: 'flex', flexDirection: 'column', gap: 6}}>
-                <span style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)', textTransform: 'uppercase'}}>New GRVT API key</span>
+                <span style={{fontSize: 12, fontWeight: 500, color: 'var(--terminal-text-muted)'}}>New GRVT API key</span>
                 <input
                   type="password"
                   placeholder="Paste GRVT API key"
@@ -11152,14 +11152,14 @@ function FuturesPanel() {
                   background: grvtAccountOneTap ? 'var(--terminal-long)' : 'var(--terminal-surface-subtle)',
                   color: grvtAccountOneTap ? 'var(--terminal-surface)' : 'var(--terminal-text)',
                   fontSize: 11,
-                  fontWeight: 700,
+                  fontWeight: 600,
                 }}>
-                  {grvtAccountOneTap ? 'ON' : 'OFF'}
+                  {grvtAccountOneTap ? 'On' : 'Off'}
                 </span>
               </button>
               {grvtAccountOneTap && (
                 <label style={{display: 'flex', flexDirection: 'column', gap: 6}}>
-                  <span style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)', textTransform: 'uppercase'}}>
+                  <span style={{fontSize: 12, fontWeight: 500, color: 'var(--terminal-text-muted)'}}>
                     GRVT Secret Private Key {oneTapTrading?.enabled ? '(optional replacement)' : ''}
                   </span>
                   <input
@@ -11254,11 +11254,11 @@ function FuturesPanel() {
           const isLeverup = dex === 'leverup';
           const isFlash = dex === 'flash';
           const isHibachi = dex === 'hibachi';
-          const accentLight = isLeverup ? 'var(--terminal-brand)' : isFlash ? 'var(--terminal-long)' : isGmtrade ? '#14B8A6' : isHibachi ? 'var(--terminal-short)' : isOstium ? 'var(--terminal-text)' : isHyperliquid ? 'var(--terminal-long)' : isGmx ? '#4F46E5' : '#0EA5E9';
-          const accentDark = isLeverup ? 'var(--terminal-brand-text)' : isFlash ? 'var(--terminal-long-strong)' : isGmtrade ? 'var(--terminal-long)' : isHibachi ? 'var(--terminal-short-strong)' : isOstium ? 'var(--terminal-warning)' : isHyperliquid ? 'var(--terminal-long-strong)' : isGmx ? '#3730A3' : '#0369A1';
-          const accentBg = isLeverup ? 'var(--terminal-brand-soft)' : isFlash ? 'rgba(34,197,94,0.08)' : isGmtrade ? 'rgba(20,184,166,0.08)' : isHibachi ? 'rgba(239,68,68,0.08)' : isOstium ? 'rgba(249,115,22,0.08)' : isHyperliquid ? 'rgba(22,163,74,0.08)' : isGmx ? 'rgba(79,70,229,0.08)' : 'rgba(14,165,233,0.08)';
-          const accentBorder = isLeverup ? 'var(--terminal-brand)' : isFlash ? 'rgba(34,197,94,0.30)' : isGmtrade ? 'rgba(20,184,166,0.35)' : isHibachi ? 'rgba(239,68,68,0.35)' : isOstium ? 'rgba(249,115,22,0.35)' : isHyperliquid ? 'rgba(22,163,74,0.35)' : isGmx ? 'rgba(79,70,229,0.35)' : 'rgba(14,165,233,0.35)';
-          const accentBtnBorder = isLeverup ? 'var(--terminal-brand)' : isFlash ? 'var(--terminal-long)' : isGmtrade ? 'var(--terminal-long)' : isHibachi ? 'var(--terminal-short)' : isOstium ? 'var(--terminal-orange)' : isHyperliquid ? 'var(--terminal-long)' : isGmx ? '#4338CA' : 'var(--terminal-info)';
+          const accentLight = 'var(--terminal-brand)';
+          const accentDark = 'var(--terminal-brand-text)';
+          const accentBg = 'var(--terminal-brand-soft)';
+          const accentBorder = 'var(--terminal-brand-border)';
+          const accentBtnBorder = 'var(--terminal-brand)';
           const chainName = isLeverup ? 'Monad' : (isGmtrade || isFlash) ? 'Solana' : isHibachi ? 'Base / Arbitrum' : isHyperliquid || isGmx || isOstium ? 'Arbitrum' : 'Base';
           const isDepositing = isHyperliquid && depositStatus?.status === 'depositing';
           const isMovingToPerp = isHyperliquid && depositStatus?.status === 'moving_to_perp';
@@ -11302,7 +11302,7 @@ function FuturesPanel() {
                         border: `1px solid ${accentBtnBorder}`,
                         background: manualTradingRefreshBusy ? 'var(--terminal-surface-muted)' : 'var(--terminal-warning-soft)',
                         color: accentDark,
-                        fontWeight: 700,
+                        fontWeight: 600,
                         cursor: manualTradingRefreshBusy ? 'default' : 'pointer',
                         lineHeight: 1,
                         display: 'inline-flex',
@@ -11344,7 +11344,7 @@ function FuturesPanel() {
                       border: `1px solid ${accentBtnBorder}`, whiteSpace: 'nowrap',
                     }}
                     onClick={async () => { try { await navigator.clipboard.writeText(walletAddr); } catch {} }}
-                  >COPY</button>
+                  >Copy</button>
                 )}
               </div>
               )}
@@ -11374,7 +11374,7 @@ function FuturesPanel() {
                       if (typeof openReferralJoin === 'function') openReferralJoin();
                       else window.open(referralUrl || 'https://hibachi.xyz/r/M4S4XNAGP4', '_blank', 'noopener,noreferrer');
                     }}
-                  >OPEN</button>
+                  >Open</button>
                   <button
                     style={{
                       ...S.btnSmall, padding: '6px 10px', fontSize: 11,
@@ -11389,7 +11389,7 @@ function FuturesPanel() {
                       setHibachiTradingPermissionConfirmed(false);
                       setLocalAlert('Enter the correct Hibachi API credentials.');
                     }}
-                  >EDIT API</button>
+                  >Edit API</button>
                 </div>
               )}
               {isHyperliquid && (
@@ -11433,7 +11433,7 @@ function FuturesPanel() {
               )}
               {isFlash && (
                 <div style={{...S.row, paddingTop: 2}}>
-                  <span style={{...S.label, color: '#9945FF'}}>Withdraw USDC</span>
+                  <span style={S.label}>Withdraw USDC</span>
                   {available > 0 && <span style={S.detail}>Max: ${withdrawMax.toFixed(2)}</span>}
                 </div>
               )}
@@ -11520,12 +11520,12 @@ function FuturesPanel() {
                   alignItems: 'center',
                   justifyContent: 'space-between',
                   gap: 8,
-                  background: oneTapTrading?.enabled ? 'rgba(22,163,74,0.10)' : 'rgba(17,24,39,0.06)',
-                  border: `1px solid ${oneTapTrading?.enabled ? 'rgba(22,163,74,0.35)' : 'rgba(17,24,39,0.18)'}`,
+                  background: oneTapTrading?.enabled ? 'var(--terminal-long-soft)' : 'var(--terminal-surface-muted)',
+                  border: `1px solid ${oneTapTrading?.enabled ? 'var(--terminal-long-border)' : 'var(--terminal-border-strong)'}`,
                   borderRadius: 8,
                   padding: '7px 9px',
                 }}>
-                  <span style={{fontSize: 11, fontWeight: 700, color: oneTapTrading?.enabled ? 'var(--terminal-long-strong)' : 'var(--terminal-text)'}}>
+                  <span style={{fontSize: 11, fontWeight: 600, color: oneTapTrading?.enabled ? 'var(--terminal-long-strong)' : 'var(--terminal-text)'}}>
                     One tap trading
                     {oneTapTrading?.enabled && oneTapTrading?.approved === false ? ' pending' : ''}
                   </span>
@@ -11543,7 +11543,7 @@ function FuturesPanel() {
                       opacity: referralLinking ? 0.7 : 1,
                     }}
                   >
-                    {referralLinking ? '...' : oneTapTrading?.enabled ? 'ON' : 'ENABLE'}
+                    {referralLinking ? '...' : oneTapTrading?.enabled ? 'On' : 'Enable'}
                   </button>
                 </div>
               )}
@@ -11605,7 +11605,7 @@ function FuturesPanel() {
                       }}
                       disabled={gmxUiFeeStatus?.checking || gmxUiFeeStatus?.activating}
                     >
-                      {gmxUiFeeStatus?.checking ? 'CHECKING...' : 'REFRESH'}
+                      {gmxUiFeeStatus?.checking ? 'Checking...' : 'Refresh'}
                     </button>
                     {gmxUiFeeOwnerConnected && !gmxUiFeeStatus?.configured && (
                       <button
@@ -11624,28 +11624,28 @@ function FuturesPanel() {
                         }}
                         disabled={gmxUiFeeStatus?.activating}
                       >
-                        {gmxUiFeeStatus?.activating ? 'ACTIVATING...' : 'ACTIVATE 1 BPS'}
+                        {gmxUiFeeStatus?.activating ? 'Activating...' : 'Activate 1 bps'}
                       </button>
                     )}
                   </div>
                 </div>
               )}
-              <span style={{fontSize: 11, color: 'var(--terminal-text-muted)', fontWeight: 700, lineHeight: 1.35}}>
+              <span style={{fontSize: 11, color: 'var(--terminal-text-muted)', fontWeight: 600, lineHeight: 1.35}}>
                 {isHyperliquid
                   ? hyperliquidUnified
                     ? <>{isFundingBusy ? 'Waiting for Hyperliquid to finish funding. ' : ''}Sends native <b>USDC on {chainName}</b> to Hyperliquid Bridge2. Unified account is active, so credited USDC is already available for trading. Minimum is <b>5 USDC</b>.</>
                     : <>{isFundingBusy ? 'Waiting for Hyperliquid to finish funding. ' : ''}Sends native <b>USDC on {chainName}</b> to Hyperliquid Bridge2. Legacy accounts may need one extra move from Spot into the trading balance. Minimum is <b>5 USDC</b>.</>
                   : isGmtrade
-                  ? <>Orders are built natively in Clash and signed by your connected <b>Solana wallet</b>. Use the normal Long/Short buttons in the Trade tab; keep <b>USDC</b> collateral and a small <b>SOL</b> gas float in this wallet.</>
+                  ? <>Orders are built natively in Clash and signed by your connected <b>Solana wallet</b>. Use the normal Long/Short buttons in the Trade tab; keep <b>USDC</b> collateral and a small <b>Sol</b> gas float in this wallet.</>
                   : isFlash
-                  ? <>Sends USDC between your connected <b>Solana wallet</b> and Flash. Each action opens a wallet signature; keep a small <b>SOL</b> gas float.</>
+                  ? <>Sends USDC between your connected <b>Solana wallet</b> and Flash. Each action opens a wallet signature; keep a small <b>Sol</b> gas float.</>
                   : isHibachi
                   ? <>Hibachi deposit and withdrawal are not exposed through this Clash API flow. Use the official Hibachi app to manage funds on <b>{chainName}</b>.</>
                   : isOstium
                   ? <>USDC stays in your <b>Arbitrum wallet</b>. Setup approves Ostium spending and registers a delegate that signs locally. Its key is encrypted on this device, with encrypted server sync after wallet verification. The delegate pays gas from a small ETH float.</>
                   : isLeverup
-                  ? <>USDC stays in your <b>Monad wallet</b>. Setup authorizes a LeverUp V2 agent and approves USDC. Its key is encrypted on this device, with encrypted server sync after wallet verification. Order intents sign locally; keep <b>MON</b> for setup changes.</>
-                  : <>Funds stay in YOUR wallet. Each trade prompts a signature. Make sure you have <b>USDC</b> + a small <b>ETH</b> gas float on <b>{chainName}</b>.</>}
+                  ? <>USDC stays in your <b>Monad wallet</b>. Setup authorizes a LeverUp V2 agent and approves USDC. Its key is encrypted on this device, with encrypted server sync after wallet verification. Order intents sign locally; keep <b>Mon</b> for setup changes.</>
+                  : <>Funds stay in YOUR wallet. Each trade prompts a signature. Make sure you have <b>USDC</b> + a small <b>Eth</b> gas float on <b>{chainName}</b>.</>}
               </span>
             </div>
           </div>
@@ -11664,19 +11664,19 @@ function FuturesPanel() {
                 ? <span style={S.detail}>Wallet: {nadoWalletValue} {selectedNadoDepositAsset.label}</span>
                 : dex === 'ondo'
                 ? <span style={S.detail}>{selectedOndoDepositNetwork?.label || 'Ethereum'} wallet: {ondoWalletValue} USDC</span>
-                : walletUsdc !== null && <span style={S.detail}>Wallet: ${walletUsdc.toFixed(2)} {dex === 'monad' ? 'AUSD' : 'USDC'}</span>}
+                : walletUsdc !== null && <span style={S.detail}>Wallet: ${walletUsdc.toFixed(2)} {dex === 'monad' ? 'Ausd' : 'USDC'}</span>}
             </div>
             {dex === 'etoro' ? (
               <div style={{display: 'flex', flexDirection: 'column', gap: 8}}>
                 <div style={{
-                  background: 'rgba(111,207,23,0.08)',
-                  border: '1px solid rgba(111,207,23,0.28)',
+                  background: 'var(--terminal-long-soft)',
+                  border: '1px solid var(--terminal-long-border)',
                   borderRadius: 8,
                   padding: '8px 10px',
                   fontSize: 11,
                   lineHeight: 1.4,
                   color: 'var(--terminal-text)',
-                  fontWeight: 750,
+                  fontWeight: 600,
                 }}>
                   Deposits and withdrawals stay in your eToro account. Clash opens the official portfolio so you can manage funds there.
                 </div>
@@ -11691,14 +11691,14 @@ function FuturesPanel() {
             ) : dex === 'hotstuff' ? (
               <div style={{display: 'flex', flexDirection: 'column', gap: 8}}>
                 <div style={{
-                  background: 'rgba(239,68,68,0.08)',
-                  border: '1px solid rgba(239,68,68,0.28)',
+                  background: 'var(--terminal-short-soft)',
+                  border: '1px solid var(--terminal-short-border)',
                   borderRadius: 8,
                   padding: '8px 10px',
                   fontSize: 11,
                   lineHeight: 1.4,
                   color: 'var(--terminal-text)',
-                  fontWeight: 750,
+                  fontWeight: 600,
                 }}>
                   Hotstuff deposit and withdrawal are handled in the official Hotstuff app. Clash reads your account balance and trades through the registered browser agent.
                 </div>
@@ -11730,14 +11730,14 @@ function FuturesPanel() {
             ) : dex === 'grvt' ? (
               <div style={{display: 'flex', flexDirection: 'column', gap: 8}}>
                 <div style={{
-                  background: 'rgba(59,130,246,0.08)',
-                  border: '1px solid rgba(59,130,246,0.24)',
+                  background: 'var(--terminal-info-soft)',
+                  border: '1px solid var(--terminal-info-border)',
                   borderRadius: 8,
                   padding: '8px 10px',
                   fontSize: 11,
                   lineHeight: 1.4,
                   color: 'var(--terminal-text)',
-                  fontWeight: 750,
+                  fontWeight: 600,
                 }}>
                   GRVT deposits must be completed in the GRVT app. Clash reads your credited GRVT trading balance and builder-code fills after the deposit is processed.
                 </div>
@@ -11755,14 +11755,14 @@ function FuturesPanel() {
             ) : dex === 'katana' ? (
               <div style={{display: 'flex', flexDirection: 'column', gap: 8}}>
                 <div style={{
-                  background: 'rgba(34,197,94,0.08)',
-                  border: '1px solid rgba(34,197,94,0.28)',
+                  background: 'var(--terminal-long-soft)',
+                  border: '1px solid var(--terminal-long-border)',
                   borderRadius: 8,
                   padding: '8px 10px',
                   fontSize: 11,
                   lineHeight: 1.4,
                   color: 'var(--terminal-text)',
-                  fontWeight: 750,
+                  fontWeight: 600,
                 }}>
                   Katana supports USDC deposits through its official bridge flow, including Arbitrum via Stargate. Native in-game deposit needs the full Katana bridge contract flow; for now Clash opens Katana so the deposit is handled by their app.
                 </div>
@@ -11780,14 +11780,14 @@ function FuturesPanel() {
             ) : dex === 'bulk' ? (
               <div style={{display: 'flex', flexDirection: 'column', gap: 8}}>
                 <div style={{
-                  background: 'rgba(17,24,39,0.07)',
-                  border: '1px solid rgba(17,24,39,0.22)',
+                  background: 'var(--terminal-surface-muted)',
+                  border: '1px solid var(--terminal-border-strong)',
                   borderRadius: 8,
                   padding: '8px 10px',
                   fontSize: 11,
                   lineHeight: 1.4,
                   color: 'var(--terminal-text)',
-                  fontWeight: 750,
+                  fontWeight: 600,
                 }}>
                   Bulk funding is currently handled by the closed-beta deposit page. The Clash referral is included automatically.
                 </div>
@@ -11904,7 +11904,7 @@ function FuturesPanel() {
               </button>
             </div>
             )}
-            <span style={{fontSize: 11, color: 'var(--terminal-text-muted)', fontWeight: 700}}>
+            <span style={{fontSize: 11, color: 'var(--terminal-text-muted)', fontWeight: 600}}>
               {dex === 'etoro'
                 ? 'Clash never moves eToro funds. Use the official eToro portfolio for deposits and withdrawals.'
                 : dex === 'decibel'
@@ -11947,7 +11947,7 @@ function FuturesPanel() {
         {dex !== 'avantis' && dex !== 'domfi' && dex !== 'etoro' && dex !== 'gmx' && dex !== 'ostium' && dex !== 'hibachi' && dex !== 'katana' && dex !== 'gmtrade' && dex !== 'hotstuff' && (dex === 'decibel' || dex === 'risex' || dex === 'hyperliquid' || dex === 'nado' || dex === 'ondo' || dex === 'flash' || available > 0) && (
           <div style={S.fullCard}>
             <div style={S.row}>
-              <span style={{...S.label, color: '#9945FF'}}>{dex === 'monad' ? 'Withdraw AUSD' : dex === 'nado' ? 'Withdraw USDt0' : 'Withdraw USDC'}</span>
+              <span style={S.label}>{dex === 'monad' ? 'Withdraw AUSD' : dex === 'nado' ? 'Withdraw USDt0' : 'Withdraw USDC'}</span>
               <span style={S.detail}>Max: ${withdrawMax.toFixed(2)}</span>
             </div>
             <div style={{display: 'flex', gap: 6, alignItems: 'stretch'}}>
@@ -11957,7 +11957,7 @@ function FuturesPanel() {
                 style={{...S.btnSmall, flex: 1, whiteSpace: 'nowrap', padding: '8px 4px', opacity: withdrawMax <= 0 ? 0.5 : 1}}
                 onClick={() => setWithdrawAmt(String(Math.floor(withdrawMax * 100) / 100))}
                 disabled={withdrawMax <= 0}
-              >MAX</button>
+              >Max</button>
               <button
                 style={{...S.btnPurple, flex: 2, whiteSpace: 'nowrap', padding: '8px 4px', opacity: withdrawMax <= 0 ? 0.5 : 1}}
                 onClick={async () => {
@@ -11986,7 +11986,7 @@ function FuturesPanel() {
                 {loading ? '...' : dex === 'grvt' ? 'Open' : (withdrawMax <= 0 ? 'No funds' : 'Withdraw')}
               </button>
             </div>
-            <span style={{fontSize: 11, color: 'var(--terminal-text-muted)', fontWeight: 700}}>
+            <span style={{fontSize: 11, color: 'var(--terminal-text-muted)', fontWeight: 600}}>
               {dex === 'hyperliquid'
                 ? 'Requests a Hyperliquid withdrawal to your connected Arbitrum address. Arrival usually takes a few minutes.'
                 : dex === 'risex'
@@ -12187,7 +12187,7 @@ function FuturesPanel() {
                   ? (oneTapTrading?.approved ? 'One tap trading is ready' : 'Enable Hyperliquid one tap trading')
                   : 'Unlock 5% off every Avantis trade'}
               </span>
-              <span style={{fontSize: 11, fontWeight: 700, color: 'var(--terminal-warning)'}}>
+              <span style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-warning)'}}>
                 {dex === 'nado'
                   ? (
                     <>
@@ -12225,13 +12225,13 @@ function FuturesPanel() {
                 background: referralLinking ? 'var(--terminal-text-faint)' : 'var(--terminal-orange)',
                 border: '1px solid var(--terminal-warning)', borderRadius: 8,
                 color: 'var(--terminal-on-accent)', padding: '6px 12px',
-                fontSize: 11, fontWeight: 700, letterSpacing: '0.5px',
+                fontSize: 11, fontWeight: 600, letterSpacing: 0,
                 cursor: referralLinking ? 'wait' : 'pointer',
                 textShadow: 'none',
                 whiteSpace: 'nowrap',
               }}
             >
-              {referralLinking ? 'CHECKING...' : (dex === 'decibel' ? 'ACCEPT' : dex === 'nado' ? 'ACCEPT' : dex === 'hyperliquid' ? 'ENABLE' : 'UNLOCK')}
+              {referralLinking ? 'Checking...' : (dex === 'decibel' ? 'Accept' : dex === 'nado' ? 'Accept' : dex === 'hyperliquid' ? 'Enable' : 'Unlock')}
             </button>
             <button
               data-nodrag
@@ -12240,7 +12240,7 @@ function FuturesPanel() {
               style={{
                 background: 'transparent', border: 'none',
                 color: 'var(--terminal-warning)', cursor: 'pointer',
-                fontSize: 18, fontWeight: 700, padding: '0 4px', lineHeight: 1,
+                fontSize: 18, fontWeight: 600, padding: '0 4px', lineHeight: 1,
                 display: (dex === 'nado' || dex === 'decibel') ? 'none' : undefined,
               }}
             >×</button>
@@ -12386,7 +12386,7 @@ const animCSS = `
     border: 1px solid var(--terminal-border);
     border-radius: 999px;
     cursor: pointer; overflow: hidden;
-    box-shadow: 0 2px 6px rgba(0,0,0,0.25);
+    box-shadow: var(--terminal-shadow-card);
     transition: width 0.22s cubic-bezier(0.34, 1.56, 0.64, 1), padding 0.22s ease, background 0.15s ease;
     font-family: inherit;
   }
@@ -12407,7 +12407,7 @@ const animCSS = `
   .explain-chart-pill .explain-label {
     max-width: 0; opacity: 0;
     overflow: hidden; white-space: nowrap;
-    font-size: 12px; font-weight: 800;
+    font-size: 12px; font-weight: 600;
     margin-left: 0;
     transition: max-width 0.22s ease, opacity 0.15s ease 0.05s, margin-left 0.22s ease;
   }
@@ -12422,8 +12422,8 @@ const animCSS = `
   }
 
   @keyframes pulse-glow {
-    0%, 100% { box-shadow: 0 0 0 rgba(232, 184, 48, 0.6); }
-    50% { box-shadow: 0 0 12px rgba(232, 184, 48, 0.9); }
+    0%, 100% { box-shadow: var(--terminal-shadow-card); }
+    50% { box-shadow: var(--terminal-shadow-card); }
   }
   @keyframes wallet-spin {
     to { transform: rotate(360deg); }
@@ -12449,7 +12449,7 @@ const animCSS = `
     border-radius: 50%;
     background: var(--terminal-surface);
     border: 4px solid var(--terminal-orange);
-    box-shadow: 0 1px 4px rgba(17,24,39,0.2);
+    box-shadow: var(--terminal-shadow-card);
     cursor: pointer;
   }
   .grad-slider::-moz-range-thumb {
@@ -12458,7 +12458,7 @@ const animCSS = `
     border-radius: 50%;
     background: var(--terminal-surface);
     border: 4px solid var(--terminal-orange);
-    box-shadow: 0 1px 4px rgba(17,24,39,0.2);
+    box-shadow: var(--terminal-shadow-card);
     cursor: pointer;
   }
 
@@ -12544,7 +12544,7 @@ const S = {
     position: 'fixed', top: 0, right: 0, bottom: 0, left: 0, width: '100%', height: '100%',
     background: 'var(--terminal-canvas)', border: 'none', borderRadius: 0,
     display: 'flex', flexDirection: 'column', pointerEvents: 'auto', overflow: 'hidden', zIndex: 100,
-    boxShadow: 'none', fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+    boxShadow: 'none', fontFamily: 'inherit',
     boxSizing: 'border-box',
   },
   container: {
@@ -12554,9 +12554,9 @@ const S = {
     bottom: 150,
     width: DESKTOP_PANEL_WIDTH,
     maxWidth: 'calc(100vw - 32px)',
-    background: 'var(--terminal-canvas)', border: '1px solid var(--terminal-border)', borderRadius: 20,
+    background: 'var(--terminal-canvas)', border: '1px solid var(--terminal-border)', borderRadius: 16,
     display: 'flex', flexDirection: 'column', pointerEvents: 'auto', overflow: 'hidden', zIndex: 100,
-    boxShadow: '0 20px 50px var(--terminal-shadow)', fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+    boxShadow: 'var(--terminal-shadow-card)', fontFamily: 'inherit',
     boxSizing: 'border-box',
   },
   header: {
@@ -12564,16 +12564,16 @@ const S = {
     padding: 'var(--terminal-header-padding, 8px 12px)', background: 'var(--terminal-surface)', borderBottom: '1px solid var(--terminal-border)',
     cursor: 'grab', userSelect: 'none',
   },
-  headerTitle: { fontSize: 16, fontWeight: 700, color: 'var(--terminal-text)' },
+  headerTitle: { fontSize: 16, fontWeight: 600, color: 'var(--terminal-text)' },
   tabActive: {
     display: 'flex', alignItems: 'center', gap: 4, padding: '6px 10px',
-    background: 'var(--terminal-brand-soft)', border: '1px solid var(--terminal-orange)', borderRadius: 10,
-    color: 'var(--terminal-brand-strong)', boxShadow: 'none', cursor: 'default',
+    background: 'var(--terminal-neutral-button)', border: '1px solid var(--terminal-neutral-button)', borderRadius: 999,
+    color: '#ffffff', boxShadow: 'none', cursor: 'default',
     minHeight: 36,
   },
   tabInactive: {
     display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, minHeight: 36,
-    background: 'var(--terminal-secondary-button, var(--terminal-surface))', border: '1px solid var(--terminal-border)', borderRadius: 10,
+    background: 'transparent', border: '1px solid transparent', borderRadius: 999,
     color: 'var(--terminal-text-muted)', boxShadow: 'none', cursor: 'pointer', padding: '6px 9px',
   },
   closeBtn: uiIconButton('secondary', 36, { background: 'var(--terminal-secondary-button, var(--terminal-surface))' }),
@@ -12602,8 +12602,8 @@ const S = {
   },
   infoCell: { display: 'flex', flexDirection: 'column', gap: 1, width: 'clamp(72px, 7vw, 90px)', flexShrink: 0 },
   infoCellWide: { width: 118 },
-  infoCellLabel: { fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-faint)', textTransform: 'uppercase', lineHeight: 1 },
-  infoCellValue: { fontSize: 13, fontWeight: 750, color: 'var(--terminal-text)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', lineHeight: 1.2 },
+  infoCellLabel: { fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-faint)', textTransform: 'uppercase', lineHeight: 1 },
+  infoCellValue: { fontSize: 13, fontWeight: 600, color: 'var(--terminal-text)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', lineHeight: 1.2 },
   infoCellValueCompact: { fontSize: 11 },
   fundingOverlay: {
     position: 'absolute', top: 5, right: 10, zIndex: 10,
@@ -12611,24 +12611,24 @@ const S = {
     pointerEvents: 'none',
   },
   fundingOverlayCompact: { right: 6, gap: 3 },
-  fundingOLabel: { fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-faint)', letterSpacing: '0.04em' },
-  fundingOValue: { fontSize: 11, fontWeight: 750, fontVariantNumeric: 'tabular-nums' },
+  fundingOLabel: { fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-faint)', letterSpacing: '0.04em' },
+  fundingOValue: { fontSize: 11, fontWeight: 600, fontVariantNumeric: 'tabular-nums' },
   fundingOValueCompact: { fontSize: 11 },
   // Common
   row: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
-  label: { color: 'var(--terminal-text-control)', fontSize: 11, fontWeight: 700, textTransform: 'uppercase' },
+  label: { color: 'var(--terminal-text-muted)', fontSize: 12, fontWeight: 500 },
   detail: { fontSize: 12, fontWeight: 600, color: 'var(--terminal-text-muted)' },
   orderPendingBadge: {
     display: 'inline-flex',
     alignItems: 'center',
     gap: 4,
     padding: '2px 6px',
-    borderRadius: 6,
+    borderRadius: 999,
     border: '1px solid var(--terminal-border)',
     background: 'var(--terminal-warning-soft)',
     color: 'var(--terminal-warning)',
     fontSize: 11,
-    fontWeight: 700,
+    fontWeight: 600,
     lineHeight: 1,
     whiteSpace: 'nowrap',
   },
@@ -12648,13 +12648,13 @@ const S = {
     flexWrap: 'wrap',
     gap: 8,
     padding: '5px 7px',
-    borderRadius: 8,
+    borderRadius: 12,
     background: 'var(--terminal-warning-soft)',
     border: '1px solid var(--terminal-border)',
   },
   attachedTpslLeg: {
     fontSize: 11,
-    fontWeight: 700,
+    fontWeight: 600,
     lineHeight: 1.15,
     whiteSpace: 'nowrap',
   },
@@ -12667,18 +12667,18 @@ const S = {
   },
   attachedTpslLegCompact: {
     fontSize: 11,
-    fontWeight: 700,
+    fontWeight: 600,
     lineHeight: 1.1,
     whiteSpace: 'nowrap',
   },
   input: {
-    background: 'var(--terminal-input, var(--terminal-surface))', border: '1px solid var(--terminal-border-strong)', borderRadius: 9,
-    padding: '10px', color: 'var(--terminal-text)', fontSize: 15, fontWeight: 650, outline: 'none',
+    background: 'var(--terminal-input, var(--terminal-surface))', border: '1px solid var(--terminal-border-strong)', borderRadius: 12,
+    padding: '10px', color: 'var(--terminal-text)', fontSize: 15, fontWeight: 600, outline: 'none',
     width: '100%', boxSizing: 'border-box', minWidth: 0,
   },
   errorBar: {
-    background: 'var(--terminal-depth-short)', border: '1px solid var(--terminal-short)', borderRadius: 8,
-    padding: '7px 10px', color: 'var(--terminal-short-strong)', fontSize: 12, fontWeight: 700, cursor: 'pointer',
+    background: 'var(--terminal-depth-short)', border: '1px solid var(--terminal-short)', borderRadius: 12,
+    padding: '7px 10px', color: 'var(--terminal-short-strong)', fontSize: 12, fontWeight: 600, cursor: 'pointer',
     display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8,
     minWidth: 0, maxWidth: '100%', overflow: 'hidden', overflowWrap: 'anywhere', wordBreak: 'break-word',
   },
@@ -12686,7 +12686,7 @@ const S = {
     flex: '1 1 auto', minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word',
   },
   errorCloseIcon: {
-    color: 'var(--terminal-short-strong)', fontSize: 14, fontWeight: 700, opacity: 0.7, flexShrink: 0,
+    color: 'var(--terminal-short-strong)', fontSize: 14, fontWeight: 600, opacity: 0.7, flexShrink: 0,
   },
   panelErrorToast: {
     position: 'absolute',
@@ -12700,8 +12700,8 @@ const S = {
     padding: '8px 10px',
     background: 'var(--terminal-short-soft)',
     border: '1px solid var(--terminal-short)',
-    borderRadius: 10,
-    boxShadow: '0 5px 14px rgba(17,24,39,0.24)',
+    borderRadius: 12,
+    boxShadow: 'var(--terminal-shadow-card)',
     color: 'var(--terminal-short-strong)',
     fontSize: 11,
     fontWeight: 600,
@@ -12720,7 +12720,7 @@ const S = {
     alignItems: 'center',
     justifyContent: 'center',
     fontSize: 12,
-    fontWeight: 700,
+    fontWeight: 600,
     flexShrink: 0,
     lineHeight: 1,
   },
@@ -12734,11 +12734,11 @@ const S = {
     width: 20,
     height: 20,
     borderRadius: '50%',
-    background: 'rgba(138,28,19,0.12)',
+    background: 'var(--terminal-short-soft)',
     border: 'none',
     color: 'var(--terminal-short-strong)',
     fontSize: 12,
-    fontWeight: 700,
+    fontWeight: 600,
     cursor: 'pointer',
     display: 'flex',
     alignItems: 'center',
@@ -12754,11 +12754,11 @@ const S = {
   oneTapFallbackBar: {
     background: 'var(--terminal-depth-short)',
     border: '1px solid var(--terminal-short)',
-    borderRadius: 8,
+    borderRadius: 12,
     padding: 9,
     color: 'var(--terminal-short-strong)',
     fontSize: 12,
-    fontWeight: 700,
+    fontWeight: 600,
     display: 'flex',
     flexDirection: 'column',
     gap: 8,
@@ -12780,7 +12780,7 @@ const S = {
     border: 'none',
     color: 'var(--terminal-short-strong)',
     fontSize: 16,
-    fontWeight: 700,
+    fontWeight: 600,
     lineHeight: 1,
     padding: 0,
     cursor: 'pointer',
@@ -12788,7 +12788,7 @@ const S = {
     flexShrink: 0,
   },
   successBar: {
-    background: 'var(--terminal-depth-long)', border: '1px solid var(--terminal-long)', borderRadius: 8,
+    background: 'var(--terminal-depth-long)', border: '1px solid var(--terminal-long)', borderRadius: 12,
     padding: '7px 10px', color: 'var(--terminal-long)', fontSize: 12, fontWeight: 600, cursor: 'pointer',
     textAlign: 'center',
   },
@@ -12798,19 +12798,19 @@ const S = {
   },
   // Trade
   chartArea: {
-    width: '100%', flex: 1, minHeight: 200, background: 'var(--terminal-surface)', borderRadius: 12,
+    width: '100%', flex: 1, minHeight: 200, background: 'var(--terminal-surface)', borderRadius: 16,
     border: '1px solid var(--terminal-border)', overflow: 'hidden', boxShadow: 'none',
     position: 'relative',
   },
   chartFullscreen: {
-    width: '100%', flex: 3, minHeight: 400, background: 'var(--terminal-surface)', borderRadius: 12,
-    border: '1px solid var(--terminal-border)', overflow: 'hidden', boxShadow: 'inset 0 3px 6px rgba(0,0,0,0.1)',
+    width: '100%', flex: 3, minHeight: 400, background: 'var(--terminal-surface)', borderRadius: 16,
+    border: '1px solid var(--terminal-border)', overflow: 'hidden', boxShadow: 'none',
     position: 'relative',
   },
   headerBtn: uiIconButton('secondary', 36, { background: 'var(--terminal-secondary-button, var(--terminal-surface))' }),
   symbolBtn: {
     display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px',
-    background: 'var(--terminal-secondary-button, var(--terminal-surface))', border: '1px solid var(--terminal-border)', borderRadius: 9, cursor: 'pointer', color: 'var(--terminal-text)',
+    background: 'var(--terminal-secondary-button, var(--terminal-surface))', border: '1px solid var(--terminal-border)', borderRadius: 999, cursor: 'pointer', color: 'var(--terminal-text)',
   },
   symbolBtnCompact: {
     flex: '0 1 auto', minWidth: 0, overflow: 'hidden', boxSizing: 'border-box',
@@ -12827,7 +12827,7 @@ const S = {
   balanceSummary: {
     display: 'flex', alignItems: 'stretch', flexShrink: 0,
     minWidth: 142, padding: '4px 7px',
-    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 8,
+    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 12,
     boxSizing: 'border-box',
   },
   balanceSummaryCompact: {
@@ -12849,11 +12849,11 @@ const S = {
     padding: '0 2px',
   },
   balanceMetricLabel: {
-    fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-faint)', lineHeight: 1,
-    letterSpacing: 0, textTransform: 'uppercase', whiteSpace: 'nowrap',
+    fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-faint)', lineHeight: 1,
+    letterSpacing: '0.06em', textTransform: 'uppercase', whiteSpace: 'nowrap',
   },
   balanceMetricValue: {
-    fontSize: 12, fontWeight: 750, color: 'var(--terminal-text)', lineHeight: 1.2,
+    fontSize: 12, fontWeight: 600, color: 'var(--terminal-text)', lineHeight: 1.2,
     fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap',
   },
   balanceLoadingValue: {
@@ -12871,45 +12871,43 @@ const S = {
   },
   chips: {
     display: 'flex', flexWrap: 'wrap', gap: 5, padding: 8,
-    background: 'var(--terminal-surface-subtle)', borderRadius: 10, border: '1px solid var(--terminal-border)', animation: 'slideDown 0.2s',
+    background: 'var(--terminal-surface-subtle)', borderRadius: 999, border: '1px solid var(--terminal-border)', animation: 'slideDown 0.2s',
   },
   chip: {
     padding: '5px 10px', background: 'var(--terminal-secondary-button, var(--terminal-surface))', border: '1px solid var(--terminal-border)',
-    borderRadius: 7, cursor: 'pointer', fontWeight: 700, fontSize: 12, color: 'var(--terminal-text)',
+    borderRadius: 999, cursor: 'pointer', fontWeight: 600, fontSize: 12, color: 'var(--terminal-text)',
   },
   chipActive: {
-    padding: '5px 10px', background: 'var(--terminal-brand-soft)', border: '1px solid var(--terminal-orange)',
-    borderRadius: 7, cursor: 'pointer', fontWeight: 700, fontSize: 12, color: 'var(--terminal-brand-text)',
+    padding: '5px 10px', background: 'var(--terminal-neutral-button)', border: '1px solid var(--terminal-neutral-button)',
+    borderRadius: 999, cursor: 'pointer', fontWeight: 600, fontSize: 12, color: '#ffffff',
   },
   depositRow: {
-    display: 'flex', gap: 6, background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 10, padding: 8,
+    display: 'flex', gap: 6, background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 12, padding: 8,
   },
   depositBtn: {
-    padding: '8px 14px', background: 'var(--terminal-orange)', border: '1px solid var(--terminal-brand-strong)', borderRadius: 8,
+    padding: '8px 14px', background: 'var(--terminal-orange)', border: '1px solid var(--terminal-brand-strong)', borderRadius: 999,
     color: 'var(--terminal-on-accent)', fontWeight: 600, fontSize: 12, cursor: 'pointer',
   },
   tradeBox: {
     display: 'flex', flexDirection: 'column', gap: 10, background: 'var(--terminal-surface)',
-    padding: 12, borderRadius: 12, border: '1px solid var(--terminal-border)',
+    padding: 12, borderRadius: 16, border: '1px solid var(--terminal-border)',
     minWidth: 0, boxSizing: 'border-box',
   },
   typeBtn: {
     flex: 1, padding: '8px', background: 'var(--terminal-secondary-button, var(--terminal-surface-muted))', border: '1px solid var(--terminal-border)',
-    borderRadius: 8, cursor: 'pointer', fontWeight: 700, fontSize: 12, color: 'var(--terminal-text-muted)', textTransform: 'uppercase',
-  },
+    borderRadius: 999, cursor: 'pointer', fontWeight: 600, fontSize: 12, color: 'var(--terminal-text-muted)',  },
   typeActive: {
-    flex: 1, padding: '8px', background: 'var(--terminal-brand-soft)', border: '1px solid var(--terminal-orange)',
-    borderRadius: 8, fontWeight: 750, fontSize: 12, color: 'var(--terminal-brand-strong)', textTransform: 'uppercase',
-    boxShadow: 'none',
+    flex: 1, padding: '8px', background: 'var(--terminal-neutral-button)', border: '1px solid var(--terminal-neutral-button)',
+    borderRadius: 999, fontWeight: 600, fontSize: 12, color: '#ffffff',    boxShadow: 'none',
   },
   levBackdrop: {
-    position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 10000,
+    position: 'fixed', inset: 0, background: 'var(--terminal-overlay)', zIndex: 10000,
   },
   levModal: {
     position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-    width: 320, background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 20,
+    width: 320, background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 16,
     padding: 20, display: 'flex', flexDirection: 'column', gap: 10,
-    boxShadow: '0 15px 40px rgba(0,0,0,0.4)', zIndex: 10001,
+    boxShadow: 'var(--terminal-shadow-card)', zIndex: 10001,
     fontFamily: '"Inter","Segoe UI",sans-serif',
   },
   levCloseBtn: {
@@ -12917,54 +12915,53 @@ const S = {
     color: 'var(--terminal-on-trade, var(--terminal-on-accent))', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
   },
   marginSwapBtn: {
-    padding: '8px 12px', background: 'var(--terminal-secondary-button, var(--terminal-surface-subtle))', border: '1px solid var(--terminal-border-strong)', borderRadius: 8,
+    padding: '8px 12px', background: 'var(--terminal-secondary-button, var(--terminal-surface-subtle))', border: '1px solid var(--terminal-border-strong)', borderRadius: 999,
     color: 'var(--terminal-text-control)', fontSize: 13, cursor: 'pointer', display: 'inline-flex', alignItems: 'center',
     height: '100%', boxSizing: 'border-box', whiteSpace: 'nowrap', flexShrink: 0,
     lineHeight: 1,
   },
   levPreset: {
-    flex: 1, padding: '8px 0', background: 'var(--terminal-secondary-button, var(--terminal-surface-subtle))', border: '1px solid var(--terminal-border)', borderRadius: 8,
+    flex: 1, padding: '8px 0', background: 'var(--terminal-secondary-button, var(--terminal-surface-subtle))', border: '1px solid var(--terminal-border)', borderRadius: 999,
     fontWeight: 600, fontSize: 13, color: 'var(--terminal-text)', cursor: 'pointer', textAlign: 'center',
   },
   levPresetActive: {
-    flex: 1, padding: '8px 0', background: 'var(--terminal-brand-soft)', border: '1px solid var(--terminal-orange)', borderRadius: 8,
-    fontWeight: 600, fontSize: 13, color: 'var(--terminal-brand-text)', cursor: 'pointer', textAlign: 'center',
+    flex: 1, padding: '8px 0', background: 'var(--terminal-neutral-button)', border: '1px solid var(--terminal-neutral-button)', borderRadius: 999,
+    fontWeight: 600, fontSize: 13, color: '#ffffff', cursor: 'pointer', textAlign: 'center',
     boxShadow: 'none',
   },
   unitToggle: {
-    padding: '3px 8px', background: 'var(--terminal-secondary-button, var(--terminal-surface-subtle))', border: '1px solid var(--terminal-border-strong)', borderRadius: 6,
-    fontSize: 11, fontWeight: 750, color: 'var(--terminal-text-control)', cursor: 'pointer', textTransform: 'uppercase',
+    padding: '3px 8px', background: 'var(--terminal-secondary-button, var(--terminal-surface-subtle))', border: '1px solid var(--terminal-border-strong)', borderRadius: 999,
+    fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-control)', cursor: 'pointer',
     display: 'flex', alignItems: 'center',
   },
   midPriceBtn: {
     padding: '2px 9px',
     background: 'var(--terminal-secondary-button, var(--terminal-surface-subtle))',
     border: '1px solid var(--terminal-border-strong)',
-    borderRadius: 6,
+    borderRadius: 999,
     fontSize: 11,
-    fontWeight: 750,
+    fontWeight: 600,
     color: 'var(--terminal-text-control)',
     cursor: 'pointer',
-    textTransform: 'uppercase',
     lineHeight: 1.2,
   },
   levBtn: {
-    width: '100%', background: 'var(--terminal-secondary-button, var(--terminal-surface))', border: '1px solid var(--terminal-border-strong)', borderRadius: 9,
-    padding: '10px', color: 'var(--terminal-text)', fontSize: 15, fontWeight: 700, cursor: 'pointer',
+    width: '100%', background: 'var(--terminal-secondary-button, var(--terminal-surface))', border: '1px solid var(--terminal-border-strong)', borderRadius: 999,
+    padding: '10px', color: 'var(--terminal-text)', fontSize: 15, fontWeight: 600, cursor: 'pointer',
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
     boxSizing: 'border-box', minWidth: 0,
   },
   sliderBox: {
-    background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 10, padding: 10,
+    background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 12, padding: 10,
     display: 'flex', flexDirection: 'column', gap: 6, animation: 'slideDown 0.2s',
   },
   slider: { width: '100%', cursor: 'pointer', accentColor: 'var(--terminal-orange)' },
-  sliderLabels: { display: 'flex', justifyContent: 'space-between', color: 'var(--terminal-text-faint)', fontSize: 11, fontWeight: 650 },
+  sliderLabels: { display: 'flex', justifyContent: 'space-between', color: 'var(--terminal-text-faint)', fontSize: 11, fontWeight: 600 },
   // Position-size readout — sits right below the Amount+Leverage row so the
   // trader sees leveraged exposure before they commit.
   positionBox: {
     background: 'var(--terminal-surface-subtle)',
-    border: '1px solid var(--terminal-border)', borderRadius: 10,
+    border: '1px solid var(--terminal-border)', borderRadius: 12,
     padding: '8px 12px',
     display: 'flex', flexDirection: 'column', gap: 2,
     boxShadow: 'none',
@@ -12973,22 +12970,22 @@ const S = {
     display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
   },
   positionLabel: {
-    fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-muted)',
-    textTransform: 'uppercase', letterSpacing: 0.8,
+    fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-muted)',
+    textTransform: 'uppercase', letterSpacing: '0.06em',
   },
   positionValue: {
-    fontSize: 18, fontWeight: 750, color: 'var(--terminal-text)',
+    fontSize: 18, fontWeight: 600, color: 'var(--terminal-text)',
   },
   positionSub: {
-    fontSize: 11, fontWeight: 650, color: 'var(--terminal-text-muted)',
+    fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-muted)',
   },
-  tradeBtn: { flex: 1, minWidth: 0, padding: '11px 6px', borderRadius: 10, border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', boxShadow: 'none' },
+  tradeBtn: { flex: 1, minWidth: 0, padding: '11px 6px', borderRadius: 999, border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', boxShadow: 'none' },
   tradeBtnLong: { background: 'var(--terminal-long)' },
   tradeBtnShort: { background: 'var(--terminal-short)' },
-  tradeBtnText: { color: 'var(--terminal-on-trade, var(--terminal-on-accent))', fontSize: 15, fontWeight: 750, letterSpacing: '0.04em' },
+  tradeBtnText: { color: 'var(--terminal-on-trade, var(--terminal-on-accent))', fontSize: 15, fontWeight: 600, letterSpacing: '0.04em' },
   // Positions
   posCard: {
-    background: 'var(--terminal-panel, var(--terminal-surface-subtle))', border: '1px solid var(--terminal-border)', borderRadius: 12,
+    background: 'var(--terminal-panel, var(--terminal-surface-subtle))', border: '1px solid var(--terminal-border)', borderRadius: 16,
     padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 5,
     // `flex: 0 0 auto` keeps the card sized to its content. Older value
     // `0 1 380px` set flex-basis=380px which, inside a column flex parent,
@@ -13013,28 +13010,28 @@ const S = {
   tpslMetaRow: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8,
     flexWrap: 'wrap', fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-secondary)',
-    background: 'rgba(255,255,255,0.35)', border: '1px solid var(--terminal-border)',
-    borderRadius: 8, padding: '5px 8px',
+    background: 'var(--terminal-surface-muted)', border: '1px solid var(--terminal-border)',
+    borderRadius: 12, padding: '5px 8px',
   },
   tpslModeRow: {
     display: 'flex', alignItems: 'center', gap: 6, minWidth: 0,
   },
   tpslModeLabel: {
-    fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-secondary)', textTransform: 'uppercase', flexShrink: 0,
+    fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-secondary)', textTransform: 'uppercase', flexShrink: 0,
   },
   tpslModeGroup: {
     display: 'flex', gap: 4, flex: '1 1 auto', minWidth: 0,
   },
   tpslModeButton: {
     flex: 1, minWidth: 0, padding: '5px 4px', background: 'var(--terminal-border)',
-    border: '1px solid var(--terminal-border-strong)', borderRadius: 7, color: 'var(--terminal-text)',
-    fontWeight: 700, fontSize: 11, cursor: 'pointer', textAlign: 'center',
+    border: '1px solid var(--terminal-border-strong)', borderRadius: 999, color: 'var(--terminal-text)',
+    fontWeight: 600, fontSize: 11, cursor: 'pointer', textAlign: 'center',
   },
   tpslModeActive: {
     flex: 1, minWidth: 0, padding: '5px 4px', background: 'var(--terminal-surface)',
-    border: '1px solid var(--terminal-border-strong)', borderRadius: 7, color: 'var(--terminal-text)',
-    fontWeight: 700, fontSize: 11, cursor: 'pointer', textAlign: 'center',
-    boxShadow: '0 1px 0 rgba(17,24,39,0.25)',
+    border: '1px solid var(--terminal-border-strong)', borderRadius: 999, color: 'var(--terminal-text)',
+    fontWeight: 600, fontSize: 11, cursor: 'pointer', textAlign: 'center',
+    boxShadow: 'var(--terminal-shadow-card)',
   },
   tpslInputGrid: {
     display: 'flex', gap: 6, alignItems: 'stretch', flexWrap: 'wrap',
@@ -13043,7 +13040,7 @@ const S = {
     flex: '1 1 118px', minWidth: 118, display: 'flex', flexDirection: 'column', gap: 3,
   },
   tpslInput: {
-    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 10,
+    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 12,
     padding: '7px 8px', color: 'var(--terminal-text-control)', fontSize: 12, fontWeight: 600,
     outline: 'none', width: '100%', boxSizing: 'border-box', minWidth: 0,
   },
@@ -13052,14 +13049,14 @@ const S = {
     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
   },
   tpslHint: {
-    fontSize: 11, fontWeight: 750, color: 'var(--terminal-text-muted)', lineHeight: 1.2,
+    fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-muted)', lineHeight: 1.2,
   },
   openTpslBox: {
-    border: '1px solid var(--terminal-border)', borderRadius: 10, background: 'var(--terminal-surface-subtle)',
+    border: '1px solid var(--terminal-border)', borderRadius: 12, background: 'var(--terminal-surface-subtle)',
     display: 'flex', flexDirection: 'column', overflow: 'hidden',
   },
   openTpslBoxActive: {
-    border: '1px solid var(--terminal-orange)', borderRadius: 10, background: 'var(--terminal-brand-soft)',
+    border: '1px solid var(--terminal-orange)', borderRadius: 12, background: 'var(--terminal-brand-border)',
     display: 'flex', flexDirection: 'column', overflow: 'hidden',
     boxShadow: 'none',
   },
@@ -13068,13 +13065,13 @@ const S = {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
     cursor: 'pointer', color: 'var(--terminal-text-control)',
   },
-  openTpslTitle: { fontSize: 12, fontWeight: 750, textTransform: 'uppercase' },
+  openTpslTitle: { fontSize: 12, fontWeight: 600,},
   openTpslToggleOff: {
-    fontSize: 11, fontWeight: 750, padding: '2px 7px', borderRadius: 999,
+    fontSize: 11, fontWeight: 600, padding: '2px 7px', borderRadius: 999,
     background: 'var(--terminal-border)', color: 'var(--terminal-text-muted)',
   },
   openTpslToggleOn: {
-    fontSize: 11, fontWeight: 750, padding: '2px 7px', borderRadius: 999,
+    fontSize: 11, fontWeight: 600, padding: '2px 7px', borderRadius: 999,
     background: 'var(--terminal-orange)', color: 'var(--terminal-on-accent)',
   },
   openTpslBody: {
@@ -13084,7 +13081,7 @@ const S = {
     display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 6,
   },
   openTpslNotice: {
-    fontSize: 11, fontWeight: 750, color: 'var(--terminal-text-muted)', lineHeight: 1.2,
+    fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-muted)', lineHeight: 1.2,
   },
   openTpslNoticeWarn: {
     fontSize: 11, fontWeight: 600, color: 'var(--terminal-warning)', lineHeight: 1.2,
@@ -13101,21 +13098,21 @@ const S = {
     width: 12, height: 12, borderRadius: '50%',
     borderWidth: 1,
     borderStyle: 'solid',
-    borderColor: 'rgba(255,255,255,0.42)',
+    borderColor: 'var(--terminal-chip-overlay)',
     borderTopColor: 'var(--terminal-on-accent)',
     animation: 'futures-close-spin 0.75s linear infinite',
     flexShrink: 0,
   },
   btnBlue: {
-    padding: '8px 12px', background: 'var(--terminal-orange)', border: '1px solid var(--terminal-brand-strong)', borderRadius: 8,
+    padding: '8px 12px', background: 'var(--terminal-orange)', border: '1px solid var(--terminal-brand-strong)', borderRadius: 999,
     color: 'var(--terminal-on-accent)', fontWeight: 600, fontSize: 12, cursor: 'pointer', boxShadow: 'none',
   },
   btnPurple: {
-    padding: '8px 12px', background: 'var(--terminal-neutral-button)', border: '1px solid var(--terminal-text)', borderRadius: 8,
+    padding: '8px 12px', background: 'var(--terminal-neutral-button)', border: '1px solid var(--terminal-text)', borderRadius: 999,
     color: 'var(--terminal-on-accent)', fontWeight: 600, fontSize: 12, cursor: 'pointer', boxShadow: 'none',
   },
   btnSmall: {
-    padding: '8px 10px', background: 'var(--terminal-secondary-button, var(--terminal-border))', border: '1px solid var(--terminal-border-strong)', borderRadius: 8,
+    padding: '8px 10px', background: 'var(--terminal-secondary-button, var(--terminal-border))', border: '1px solid var(--terminal-border-strong)', borderRadius: 999,
     fontWeight: 600, fontSize: 12, color: 'var(--terminal-text)', cursor: 'pointer',
   },
   marketClosedHint: {
@@ -13125,12 +13122,12 @@ const S = {
     padding: '8px 10px',
     background: 'var(--terminal-warning-soft)',
     border: '1px solid var(--terminal-warning)',
-    borderRadius: 10,
+    borderRadius: 12,
     color: 'var(--terminal-warning)',
     fontSize: 11,
-    fontWeight: 750,
+    fontWeight: 600,
     lineHeight: 1.25,
-    boxShadow: '0 2px 0 rgba(181,139,42,0.25)',
+    boxShadow: 'var(--terminal-shadow-card)',
   },
   marketClosedHead: {
     display: 'flex',
@@ -13140,17 +13137,16 @@ const S = {
   },
   marketClosedTitle: {
     fontSize: 12,
-    fontWeight: 700,
-    textTransform: 'uppercase',
+    fontWeight: 600,
     color: 'var(--terminal-warning)',
   },
   marketClosedSymbol: {
     fontSize: 11,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-text)',
-    background: 'var(--terminal-chip-overlay)',
-    border: '1px solid rgba(180,83,9,0.22)',
-    borderRadius: 6,
+    background: 'var(--terminal-surface-muted)',
+    border: '1px solid var(--terminal-short-border)',
+    borderRadius: 999,
     padding: '2px 6px',
     whiteSpace: 'nowrap',
   },
@@ -13167,7 +13163,7 @@ const S = {
   },
   marketClosedActionLabel: {
     fontSize: 11,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-warning)',
     textTransform: 'uppercase',
   },
@@ -13175,26 +13171,26 @@ const S = {
     padding: '4px 7px',
     background: 'var(--terminal-surface)',
     border: '1px solid var(--terminal-border)',
-    borderRadius: 7,
+    borderRadius: 999,
     cursor: 'pointer',
     color: 'var(--terminal-text)',
     fontSize: 11,
-    fontWeight: 700,
+    fontWeight: 600,
   },
   noBalanceHint: {
-    padding: '8px 12px', background: 'var(--terminal-brand-soft)', border: '1px solid var(--terminal-warning)', borderRadius: 8,
-    color: '#E65100', fontSize: 12, fontWeight: 700, textAlign: 'center', cursor: 'pointer',
+    padding: '8px 12px', background: 'var(--terminal-brand-border)', border: '1px solid var(--terminal-warning)', borderRadius: 12,
+    color: 'var(--terminal-orange)', fontSize: 12, fontWeight: 600, textAlign: 'center', cursor: 'pointer',
   },
   balCard: {
-    flex: 1, background: 'var(--terminal-panel, var(--terminal-surface-subtle))', border: '1px solid var(--terminal-border)', borderRadius: 12,
+    flex: 1, background: 'var(--terminal-panel, var(--terminal-surface-subtle))', border: '1px solid var(--terminal-border)', borderRadius: 16,
     padding: 10, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
   },
   balCardLabel: { fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-muted)', textTransform: 'uppercase' },
-  balCardValue: { fontSize: 18, fontWeight: 700, color: 'var(--terminal-text)' },
+  balCardValue: { fontSize: 18, fontWeight: 600, color: 'var(--terminal-text)' },
   cancelBtn: {
     width: 26, height: 26, borderRadius: '50%', background: 'var(--terminal-short)', border: '1px solid var(--terminal-surface)',
     color: 'var(--terminal-on-trade, var(--terminal-on-accent))', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-    fontSize: 13, fontWeight: 700, padding: 0,
+    fontSize: 13, fontWeight: 600, padding: 0,
   },
   // Bottom panel (fullscreen)
   bottomPanel: {
@@ -13207,13 +13203,13 @@ const S = {
   },
   bottomTabBtn: {
     padding: '6px 20px', background: 'transparent', border: 'none',
-    fontSize: 12, fontWeight: 650, color: 'var(--terminal-text-muted)', cursor: 'pointer',
+    fontSize: 12, fontWeight: 600, color: 'var(--terminal-text-muted)', cursor: 'pointer',
     borderBottom: '1px solid transparent',
   },
   bottomTabActive: {
     padding: '6px 20px', background: 'var(--terminal-surface)', border: 'none',
-    fontSize: 12, fontWeight: 750, color: 'var(--terminal-text)', cursor: 'default',
-    borderBottom: '1px solid var(--terminal-orange)',
+    fontSize: 12, fontWeight: 600, color: 'var(--terminal-text)', cursor: 'default',
+    borderBottom: '1px solid var(--terminal-text)',
   },
   dragHandleV: {
     width: 5, cursor: 'col-resize', background: 'var(--terminal-surface-muted)', flexShrink: 0,
@@ -13230,38 +13226,38 @@ const S = {
     marginLeft: 'auto', padding: '4px 8px', background: 'transparent', border: 'none',
     cursor: 'pointer', color: 'var(--terminal-text-secondary)', display: 'flex', alignItems: 'center', gap: 4, position: 'relative',
   },
-  filterBtnActive: { color: 'var(--terminal-brand-text)', background: 'var(--terminal-brand-soft)', borderColor: 'var(--terminal-orange)' },
+  filterBtnActive: { color: 'var(--terminal-brand-text)', background: 'var(--terminal-brand-border)', borderColor: 'var(--terminal-orange)' },
   filterDot: {
     position: 'absolute', top: 2, right: 2, width: 6, height: 6,
     borderRadius: '50%', background: 'var(--terminal-orange)',
   },
   table: { width: '100%', borderCollapse: 'collapse', fontSize: 12, fontVariantNumeric: 'tabular-nums' },
-  th: { padding: '6px 12px', textAlign: 'left', color: 'var(--terminal-text-faint)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase', background: 'var(--terminal-surface-subtle)' },
+  th: { padding: '6px 12px', textAlign: 'left', color: 'var(--terminal-text-faint)', fontWeight: 600, fontSize: 11, textTransform: 'uppercase', background: 'var(--terminal-surface-subtle)' },
   td: { padding: '6px 12px', color: 'var(--terminal-text)', fontSize: 12, borderBottom: '1px solid var(--terminal-border)' },
   tr: { background: 'var(--terminal-surface)' },
-  tblCloseBtn: uiButton('danger', { minHeight: 28, padding: '2px 8px', borderRadius: 8, fontSize: 11, color: 'var(--terminal-on-trade, var(--terminal-on-accent))', '--terminal-button-icon': 'var(--terminal-on-trade, var(--terminal-on-accent))' }),
+  tblCloseBtn: uiButton('danger', { minHeight: 28, padding: '2px 8px', borderRadius: 999, fontSize: 11, color: 'var(--terminal-on-trade, var(--terminal-on-accent))', '--terminal-button-icon': 'var(--terminal-on-trade, var(--terminal-on-accent))' }),
   tblActionGroup: {
     display: 'inline-flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4,
   },
-  tblRiskBtn: uiButton('secondary', { minHeight: 28, padding: '2px 8px', borderRadius: 8, fontSize: 11, background: 'var(--terminal-secondary-button, var(--terminal-surface))' }),
-  tblShareBtn: uiIconButton('secondary', 28, { borderRadius: 8, background: 'var(--terminal-secondary-button, var(--terminal-surface))' }),
+  tblRiskBtn: uiButton('secondary', { minHeight: 28, padding: '2px 8px', borderRadius: 999, fontSize: 11, background: 'var(--terminal-secondary-button, var(--terminal-surface))' }),
+  tblShareBtn: uiIconButton('secondary', 28, { borderRadius: 999, background: 'var(--terminal-secondary-button, var(--terminal-surface))' }),
   tblExpandedRow: { background: 'var(--terminal-surface-subtle)' },
   tblExpandedCell: {
     padding: '8px 12px 12px', borderBottom: '1px solid var(--terminal-border)',
   },
   tblExpandedPanel: {
     width: 'min(720px, 100%)', display: 'flex', flexDirection: 'column', gap: 8,
-    padding: 10, background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 10,
+    padding: 10, background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 12,
   },
-  tblExpandedTitle: { fontSize: 13, fontWeight: 700, color: 'var(--terminal-text)' },
-  tblExpandedAmount: { fontSize: 11, fontWeight: 650, color: 'var(--terminal-text-muted)' },
+  tblExpandedTitle: { fontSize: 13, fontWeight: 600, color: 'var(--terminal-text)' },
+  tblExpandedAmount: { fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-muted)' },
   mobileTradePositions: {
     display: 'flex', flexDirection: 'column', gap: 8, padding: '10px 8px max(12px, env(safe-area-inset-bottom))',
     background: 'var(--terminal-canvas)', borderTop: '1px solid var(--terminal-border)',
   },
   mobileTradePositionsHeader: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-    color: 'var(--terminal-text)', fontSize: 13, fontWeight: 700,
+    color: 'var(--terminal-text)', fontSize: 13, fontWeight: 600,
   },
   mobileTradePositionsCount: {
     minWidth: 24, height: 24, padding: '0 7px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',

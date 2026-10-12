@@ -180,7 +180,7 @@ export default memo(TutorialOverlay);
 const S = {
   overlay: {
     position: 'fixed', inset: 0,
-    background: 'rgba(0,0,0,0.6)',
+    background: 'var(--terminal-overlay)',
     display: 'flex', flexDirection: 'column',
     alignItems: 'center', justifyContent: 'flex-end',
     zIndex: 250, pointerEvents: 'all',
@@ -199,23 +199,23 @@ const S = {
     display: 'flex', gap: 10, zIndex: 260,
   },
   dot: {
-    width: 12, height: 12, borderRadius: '50%',
-    background: 'var(--terminal-chip-overlay)',
+    width: 8, height: 8, borderRadius: '50%',
+    background: 'var(--terminal-border-strong)',
     transition: 'all 0.2s',
   },
   dotActive: {
-    background: 'var(--terminal-long)',
-    boxShadow: '0 0 10px rgba(76, 175, 80, 0.8)',
-    transform: 'scale(1.3)',
+    background: 'var(--terminal-text)',
+    boxShadow: 'none',
+
   },
   card: {
     background: 'var(--terminal-surface)',
     border: '1px solid var(--terminal-border)',
-    borderRadius: 24,
+    borderRadius: 16,
     padding: '24px 24px 20px',
     maxWidth: 380, width: 'calc(100% - 32px)',
     display: 'flex', flexDirection: 'column', alignItems: 'center',
-    boxShadow: '0 20px 60px rgba(0,0,0,0.4)',
+    boxShadow: 'var(--terminal-shadow-card)',
     animation: 'panelRise 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275)',
   },
   cardVideo: {
@@ -229,26 +229,26 @@ const S = {
   },
   iconCircle: {
     width: 64, height: 64, borderRadius: '50%',
-    background: 'var(--terminal-surface-subtle)',
+    background: 'var(--terminal-surface-muted)',
     border: '1px solid var(--terminal-border)',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
-    boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+    boxShadow: 'none',
     marginTop: -52,
   },
   icon: { fontSize: 32, lineHeight: 1 },
   title: {
-    margin: '16px 0 8px', fontSize: 22, fontWeight: 700,
+    margin: '16px 0 8px', fontSize: 18, fontWeight: 600,
     color: 'var(--terminal-text)', textAlign: 'center',
-    fontFamily: '"Inter","Segoe UI",sans-serif',
+    fontFamily: 'inherit',
   },
   videoTitle: {
     marginTop: 4,
   },
   text: {
-    margin: '0 0 20px', fontSize: 15, fontWeight: 600,
+    margin: '0 0 20px', fontSize: 14, fontWeight: 500,
     color: 'var(--terminal-text-secondary)', textAlign: 'center',
     lineHeight: 1.5, maxWidth: 300,
-    fontFamily: '"Inter","Segoe UI",sans-serif',
+    fontFamily: 'inherit',
   },
   videoText: {
     maxWidth: 520,
@@ -261,8 +261,8 @@ const S = {
     overflow: 'hidden',
     borderRadius: 12,
     border: '1px solid var(--terminal-border)',
-    background: '#1f1a14',
-    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.18), 0 8px 20px rgba(0,0,0,0.28)',
+    background: 'var(--terminal-canvas)',
+    boxShadow: 'none',
     marginBottom: 16,
   },
   videoFrame: {
@@ -282,6 +282,6 @@ const S = {
   },
   counter: {
     marginTop: 12, fontSize: 12, fontWeight: 600,
-    color: 'var(--terminal-border-strong)',
+    color: 'var(--terminal-text-faint)',
   },
 };

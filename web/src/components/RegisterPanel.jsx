@@ -87,7 +87,7 @@ function DexPicker({ onPick, isInFrame, isSolanaMobile }) {
   }
   return (
     <div style={S.bodyStack}>
-      <h3 style={S.sectionTitle}>CHOOSE YOUR DEX</h3>
+      <h3 style={S.sectionTitle}>Choose your DEX</h3>
       <p style={S.subtle}>
         Your trading venue for the whole campaign. You can switch any time in profile.
       </p>
@@ -96,6 +96,7 @@ function DexPicker({ onPick, isInFrame, isSolanaMobile }) {
           <button
             key={cfg.id}
             type="button"
+            className="register-panel__dex-card"
             onClick={async () => {
               if (cfg.id !== 'ondo' || regionAccess.status === 'allowed') {
                 onPick(cfg.id);
@@ -133,27 +134,27 @@ function DexPicker({ onPick, isInFrame, isSolanaMobile }) {
               </div>
               <div style={isDesktopGrid ? { ...S.dexCardSubtitle, ...S.dexCardSubtitleDesktop } : S.dexCardSubtitle}>
                 {cfg.chain} · {
-                  cfg.id === 'avantis' || cfg.id === 'domfi' ? 'SELF-CUSTODY · EVM' :
-                  cfg.id === 'etoro' ? 'API ACCOUNT · CEX' :
-                  cfg.id === 'qfex' ? 'API ACCOUNT' :
-                  cfg.id === 'gmx' ? 'SELF-CUSTODY · EVM' :
-                  cfg.id === 'ostium' ? 'SELF-CUSTODY · EVM' :
-                  cfg.id === 'hyperliquid' ? 'SELF-CUSTODY · EVM' :
-                  cfg.id === 'risex' ? 'SELF-CUSTODY · RISE' :
-                  cfg.id === 'nado' ? 'SELF-CUSTODY · INK' :
-                  cfg.id === 'ondo' ? 'SELF-CUSTODY · EVM' :
-                  cfg.id === 'leverup' ? 'SELF-CUSTODY · MONAD' :
-                  cfg.id === 'aster' ? 'SELF-CUSTODY · EVM' :
-                  cfg.id === 'hibachi' ? 'SELF-CUSTODY · EVM' :
-                  cfg.id === 'hotstuff' ? 'SELF-CUSTODY · HOT' :
-                  cfg.id === 'grvt' ? 'SELF-CUSTODY · GRVT' :
-                  cfg.id === 'katana' ? 'SELF-CUSTODY · KATANA' :
-                  cfg.id === 'lighter' || cfg.id === 'rhlighter' ? 'SELF-CUSTODY · EVM' :
-                  cfg.id === 'gmtrade' ? 'SELF-CUSTODY · SOLANA' :
-                  cfg.id === 'flash' ? 'SELF-CUSTODY · SOLANA' :
-                  cfg.id === 'monad' ? 'SELF-CUSTODY · MONAD' :
-                  cfg.id === 'decibel' ? 'SELF-CUSTODY · APTOS' :
-                  'SELF-CUSTODY · SOLANA'
+                  cfg.id === 'avantis' || cfg.id === 'domfi' ? 'Self-custody · EVM' :
+                  cfg.id === 'etoro' ? 'API account · CEX' :
+                  cfg.id === 'qfex' ? 'API account' :
+                  cfg.id === 'gmx' ? 'Self-custody · EVM' :
+                  cfg.id === 'ostium' ? 'Self-custody · EVM' :
+                  cfg.id === 'hyperliquid' ? 'Self-custody · EVM' :
+                  cfg.id === 'risex' ? 'Self-custody · RISE' :
+                  cfg.id === 'nado' ? 'Self-custody · Ink' :
+                  cfg.id === 'ondo' ? 'Self-custody · EVM' :
+                  cfg.id === 'leverup' ? 'Self-custody · Monad' :
+                  cfg.id === 'aster' ? 'Self-custody · EVM' :
+                  cfg.id === 'hibachi' ? 'Self-custody · EVM' :
+                  cfg.id === 'hotstuff' ? 'Self-custody · HOT' :
+                  cfg.id === 'grvt' ? 'Self-custody · GRVT' :
+                  cfg.id === 'katana' ? 'Self-custody · Katana' :
+                  cfg.id === 'lighter' || cfg.id === 'rhlighter' ? 'Self-custody · EVM' :
+                  cfg.id === 'gmtrade' ? 'Self-custody · Solana' :
+                  cfg.id === 'flash' ? 'Self-custody · Solana' :
+                  cfg.id === 'monad' ? 'Self-custody · Monad' :
+                  cfg.id === 'decibel' ? 'Self-custody · Aptos' :
+                  'Self-custody · Solana'
                 }
               </div>
             </div>
@@ -234,8 +235,8 @@ function DexBadge({ dex, onChangeWallet, onChangeDex }) {
         )}
       </div>
       <div style={S.dexBadgeActions}>
-        <button type="button" onClick={onChangeWallet} style={S.changeBtn}>CHANGE WALLET</button>
-        <button type="button" onClick={onChangeDex} style={S.changeDexBtn}>CHANGE DEX</button>
+        <button type="button" onClick={onChangeWallet} style={S.changeBtn}>Change wallet</button>
+        <button type="button" onClick={onChangeDex} style={S.changeDexBtn}>Change DEX</button>
       </div>
     </div>
   );
@@ -282,9 +283,9 @@ function NameForm({ wallet, suggested, seekerHandle, error, onBack, onClearError
   return (
     <form onSubmit={submit} style={S.bodyStack}>
       <button type="button" style={S.backBtn} onClick={onBack}>
-        &larr; BACK TO WALLETS
+        &larr; Back to wallets
       </button>
-      <h3 style={S.sectionTitle}>PICK A NAME</h3>
+      <h3 style={S.sectionTitle}>Pick a name</h3>
       <div style={S.walletPill}>
         <span style={S.walletDot} />
         <span style={S.walletAddr}>{wallet.slice(0, 6)}…{wallet.slice(-4)}</span>
@@ -325,7 +326,7 @@ function NameForm({ wallet, suggested, seekerHandle, error, onBack, onClearError
 function ContinueAccount({ wallet, name, error, onContinue }) {
   return (
     <div style={S.bodyStack}>
-      <h3 style={S.sectionTitle}>WELCOME BACK</h3>
+      <h3 style={S.sectionTitle}>Welcome back</h3>
       <div style={S.walletPill}>
         <span style={S.walletDot} />
         <span style={S.walletAddr}>{wallet.slice(0, 6)}...{wallet.slice(-4)}</span>
@@ -341,7 +342,7 @@ function ContinueAccount({ wallet, name, error, onContinue }) {
 
 function ConnectVenueGate({
   dex,
-  kicker = 'SECURE CONNECTION',
+  kicker = 'Secure connection',
   title,
   subtitle,
   steps,
@@ -368,7 +369,7 @@ function ConnectVenueGate({
 }
 
 function ConnectPacifica({ onOpenWalletModal, onPrivyLogin, privyEnabled, privyAuthed, dex = 'pacifica' }) {
-  const venue = dex === 'imperial' ? 'IMPERIAL' : dex === 'bulk' ? 'BULK' : dex === 'flash' ? 'FLASH TRADE' : dex === 'gmtrade' ? 'GMTRADE' : dex === 'phoenix' ? 'PHOENIX' : 'PACIFICA';
+  const venue = dex === 'imperial' ? 'Imperial' : dex === 'bulk' ? 'Bulk' : dex === 'flash' ? 'Flash Trade' : dex === 'gmtrade' ? 'GMTrade' : dex === 'phoenix' ? 'Phoenix' : 'Pacifica';
   const connectCopy = dex === 'imperial'
     ? 'Connect your Solana wallet to browse Imperial markets and create a signed mobile session. Clash routes orders through Imperial with the CLASH builder code; your private key never leaves your wallet.'
     : dex === 'bulk'
@@ -385,12 +386,12 @@ function ConnectPacifica({ onOpenWalletModal, onPrivyLogin, privyEnabled, privyA
   ];
   const actions = [];
   if (privyEnabled) actions.push({
-    label: privyAuthed ? 'CONTINUE WITH EMAIL' : 'SIGN IN WITH EMAIL',
+    label: privyAuthed ? 'Continue with email' : 'Sign in with email',
     onClick: onPrivyLogin,
     icon: <EmailIcon />,
   });
   actions.push({
-    label: 'CONNECT SOLANA WALLET',
+    label: 'Connect Solana wallet',
     onClick: onOpenWalletModal,
     icon: <WalletIcon />,
     variant: privyEnabled ? 'secondary' : 'primary',
@@ -421,12 +422,12 @@ function ConnectLinkedWallet({
   const cfg = DEX_CONFIG[dex] || DEX_CONFIG.pacifica;
   const kind = walletKind(wallet);
   const cta = kind === 'evm'
-    ? 'CONNECT EVM WALLET'
+    ? 'Connect EVM wallet'
     : kind === 'aptos'
-      ? (aptosConnecting ? 'CONNECTING...' : (aptosHasProvider ? 'CONNECT APTOS WALLET' : 'INSTALL PETRA'))
+      ? (aptosConnecting ? 'Connecting...' : (aptosHasProvider ? 'Connect Aptos wallet' : 'Install Petra'))
       : kind === 'solana'
-        ? 'CONNECT SOLANA WALLET'
-        : 'CONNECT WALLET';
+        ? 'Connect Solana wallet'
+        : 'Connect wallet';
   const onClick = kind === 'evm'
     ? onOpenEvmModal
     : kind === 'aptos'
@@ -441,7 +442,7 @@ function ConnectLinkedWallet({
 
   const actions = [];
   if (privyEnabled) actions.push({
-    label: privyAuthed ? 'CONTINUE WITH EMAIL' : 'SIGN IN WITH EMAIL',
+    label: privyAuthed ? 'Continue with email' : 'Sign in with email',
     onClick: onPrivyLogin,
     icon: <EmailIcon />,
   });
@@ -455,7 +456,7 @@ function ConnectLinkedWallet({
   return (
     <ConnectVenueGate
       dex={dex}
-      kicker="LINKED WALLET REQUIRED"
+      kicker="Linked wallet required"
       title={`Reconnect to ${String(cfg.label || 'Clash')}`}
       subtitle="Reconnect the wallet already linked to this game account. A separate trading wallet can be connected after login when the venue needs another chain."
       steps={[
@@ -471,15 +472,15 @@ function ConnectLinkedWallet({
 function ConnectAccount({ onOpenWalletModal, onOpenEvmModal, onConnectAptos, aptosConnecting, aptosHasProvider, onPrivyLogin, privyEnabled, privyAuthed }) {
   const actions = [];
   if (privyEnabled) actions.push({
-    label: privyAuthed ? 'CONTINUE WITH EMAIL' : 'EMAIL / PASSWORD',
+    label: privyAuthed ? 'Continue with email' : 'Email / password',
     onClick: onPrivyLogin,
     icon: <EmailIcon />,
   });
   actions.push(
-    { label: 'CONNECT EVM WALLET', onClick: onOpenEvmModal, icon: <WalletIcon />, variant: privyEnabled ? 'secondary' : 'primary' },
-    { label: 'CONNECT SOLANA WALLET', onClick: onOpenWalletModal, icon: <WalletIcon />, variant: 'secondary' },
+    { label: 'Connect EVM wallet', onClick: onOpenEvmModal, icon: <WalletIcon />, variant: privyEnabled ? 'secondary' : 'primary' },
+    { label: 'Connect Solana wallet', onClick: onOpenWalletModal, icon: <WalletIcon />, variant: 'secondary' },
     {
-      label: aptosConnecting ? 'CONNECTING...' : (aptosHasProvider ? 'CONNECT APTOS WALLET' : 'INSTALL PETRA'),
+      label: aptosConnecting ? 'Connecting...' : (aptosHasProvider ? 'Connect Aptos wallet' : 'Install Petra'),
       disabled: aptosConnecting,
       icon: <WalletIcon />,
       variant: 'secondary',
@@ -494,7 +495,7 @@ function ConnectAccount({ onOpenWalletModal, onOpenEvmModal, onConnectAptos, apt
   );
   return (
     <ConnectVenueGate
-      kicker="ONE GAME ACCOUNT"
+      kicker="One game account"
       title="Create your Clash account"
       subtitle="Sign in once, then use any supported perp venue without losing your village, quests, or tournament progress."
       steps={[
@@ -513,7 +514,7 @@ function StoredWalletNotice({ record, onDisconnect }) {
   return (
     <div style={S.storedWalletBox}>
       <div style={S.storedWalletText}>
-        <span style={S.storedWalletLabel}>LINKED WALLET</span>
+        <span style={S.storedWalletLabel}>Linked wallet</span>
         <span style={S.storedWalletAddress}>{shortWallet(record.wallet)}</span>
         {record.name && <span style={S.storedWalletName}>{record.name}</span>}
       </div>
@@ -530,26 +531,26 @@ function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthe
   // agnostic at the address level — the same 0xABC… works on every EVM
   // chain; we just ensureChain(targetId) before each tx. So one panel,
   // venue labels.
-  const venue = dex === 'domfi' ? 'DOMFI'
-    : dex === 'etoro' ? 'ETORO'
+  const venue = dex === 'domfi' ? 'DomFi'
+    : dex === 'etoro' ? 'eToro'
     : dex === 'gmx' ? 'GMX'
-    : dex === 'ostium' ? 'OSTIUM'
-    : dex === 'monad' ? 'PERPL'
-    : dex === 'hyperliquid' ? 'HYPERLIQUID'
-    : dex === 'risex' ? 'RISEX'
-    : dex === 'nado' ? 'NADO'
-    : dex === 'ondo' ? 'ONDO PERPS'
-    : dex === 'leverup' ? 'LEVERUP V2'
-    : dex === 'aster' ? 'ASTER'
-    : dex === 'hibachi' ? 'HIBACHI'
-    : dex === 'hotstuff' ? 'HOTSTUFF'
+    : dex === 'ostium' ? 'Ostium'
+    : dex === 'monad' ? 'Perpl'
+    : dex === 'hyperliquid' ? 'Hyperliquid'
+    : dex === 'risex' ? 'RISEx'
+    : dex === 'nado' ? 'Nado'
+    : dex === 'ondo' ? 'Ondo Perps'
+    : dex === 'leverup' ? 'LeverUp V2'
+    : dex === 'aster' ? 'Aster'
+    : dex === 'hibachi' ? 'Hibachi'
+    : dex === 'hotstuff' ? 'Hotstuff'
     : dex === 'grvt' ? 'GRVT'
-    : dex === 'katana' ? 'KATANA'
-    : dex === 'lighter' ? 'LIGHTER'
-    : dex === 'rhlighter' ? 'RH LIGHTER'
-    : dex === 'gmtrade' ? 'GMTRADE'
-    : dex === 'flash' ? 'FLASH TRADE'
-    : 'AVANTIS';
+    : dex === 'katana' ? 'Katana'
+    : dex === 'lighter' ? 'Lighter'
+    : dex === 'rhlighter' ? 'RH Lighter'
+    : dex === 'gmtrade' ? 'GMTrade'
+    : dex === 'flash' ? 'Flash Trade'
+    : 'Avantis';
   const chainName = dex === 'gmx' || dex === 'ostium' ? 'Arbitrum'
     : dex === 'etoro' ? 'EVM'
     : dex === 'monad' ? 'Monad'
@@ -592,12 +593,12 @@ function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthe
       : { label: `Verify ${venue} setup`, hint: 'Clash checks the required account, referral, builder, and signer permissions.' };
   const actions = [];
   if (privyEnabled) actions.push({
-    label: privyAuthed ? 'CONTINUE WITH EMAIL' : 'SIGN IN WITH EMAIL',
+    label: privyAuthed ? 'Continue with email' : 'Sign in with email',
     onClick: onPrivyLogin,
     icon: <EmailIcon />,
   });
   actions.push({
-    label: `CONNECT ${chainName.toUpperCase()} WALLET`,
+    label: `Connect ${chainName} wallet`,
     onClick: onOpenEvmModal,
     icon: <WalletIcon />,
     variant: privyEnabled ? 'secondary' : 'primary',
@@ -642,7 +643,7 @@ function ConnectDecibel({ onConnectAptos, isConnecting, hasProvider, error }) {
         { id: 'builder', label: 'Verify builder fee routing', hint: 'Trading unlocks only after the builder approval is visible on-chain.', status: 'pending' },
       ]}
       actions={[{
-        label: isConnecting ? 'CONNECTING...' : (hasProvider ? 'CONNECT PETRA' : 'INSTALL PETRA'),
+        label: isConnecting ? 'Connecting...' : (hasProvider ? 'Connect Petra' : 'Install Petra'),
         onClick: handleClick,
         disabled: isConnecting,
         icon: <WalletIcon />,
@@ -881,37 +882,37 @@ function RegisterPanel() {
     );
 
   const headerTitle = (() => {
-    if (state === 'pick_dex') return 'WELCOME';
-    if (!dexPicked && state === 'manual_connect') return 'CLASH ACCOUNT';
-    if (state === 'confirm_login') return 'WELCOME BACK';
-    if (state === 'need_name') return 'YOUR NAME';
-    if (state === 'registering' || state === 'auto_connecting' || state === 'booting') return 'LOADING';
-    if (dex === 'avantis') return 'AVANTIS LOGIN';
-    if (dex === 'domfi') return 'DOMFI LOGIN';
-    if (dex === 'etoro') return 'ETORO LOGIN';
-    if (dex === 'qfex') return 'QFEX · CLASH LOGIN';
-    if (dex === 'decibel') return 'DECIBEL LOGIN';
-    if (dex === 'gmx') return 'GMX LOGIN';
-    if (dex === 'ostium') return 'OSTIUM LOGIN';
-    if (dex === 'monad') return 'PERPL LOGIN';
-    if (dex === 'hyperliquid') return 'HYPERLIQUID LOGIN';
-    if (dex === 'risex') return 'RISEX LOGIN';
-    if (dex === 'nado') return 'NADO LOGIN';
-    if (dex === 'ondo') return 'ONDO PERPS LOGIN';
-    if (dex === 'leverup') return 'LEVERUP V2 LOGIN';
-    if (dex === 'aster') return 'ASTER LOGIN';
-    if (dex === 'hibachi') return 'HIBACHI LOGIN';
-    if (dex === 'hotstuff') return 'HOTSTUFF LOGIN';
-    if (dex === 'grvt') return 'GRVT LOGIN';
-    if (dex === 'katana') return 'KATANA LOGIN';
-    if (dex === 'lighter') return 'LIGHTER LOGIN';
-    if (dex === 'rhlighter') return 'RH LIGHTER LOGIN';
-    if (dex === 'gmtrade') return 'GMTRADE LOGIN';
-    if (dex === 'flash') return 'FLASH TRADE LOGIN';
-    if (dex === 'bulk') return 'BULK LOGIN';
-    if (dex === 'imperial') return 'IMPERIAL LOGIN';
-    if (dex === 'phoenix') return 'PHOENIX LOGIN';
-    return 'PACIFICA LOGIN';
+    if (state === 'pick_dex') return 'Welcome';
+    if (!dexPicked && state === 'manual_connect') return 'Clash account';
+    if (state === 'confirm_login') return 'Welcome back';
+    if (state === 'need_name') return 'Your name';
+    if (state === 'registering' || state === 'auto_connecting' || state === 'booting') return 'Loading';
+    if (dex === 'avantis') return 'Avantis login';
+    if (dex === 'domfi') return 'DomFi login';
+    if (dex === 'etoro') return 'eToro login';
+    if (dex === 'qfex') return 'QFEX · Clash login';
+    if (dex === 'decibel') return 'Decibel login';
+    if (dex === 'gmx') return 'GMX login';
+    if (dex === 'ostium') return 'Ostium login';
+    if (dex === 'monad') return 'Perpl login';
+    if (dex === 'hyperliquid') return 'Hyperliquid login';
+    if (dex === 'risex') return 'RISEx login';
+    if (dex === 'nado') return 'Nado login';
+    if (dex === 'ondo') return 'Ondo Perps login';
+    if (dex === 'leverup') return 'LeverUp V2 login';
+    if (dex === 'aster') return 'Aster login';
+    if (dex === 'hibachi') return 'Hibachi login';
+    if (dex === 'hotstuff') return 'Hotstuff login';
+    if (dex === 'grvt') return 'GRVT login';
+    if (dex === 'katana') return 'Katana login';
+    if (dex === 'lighter') return 'Lighter login';
+    if (dex === 'rhlighter') return 'RH Lighter login';
+    if (dex === 'gmtrade') return 'GMTrade login';
+    if (dex === 'flash') return 'Flash Trade login';
+    if (dex === 'bulk') return 'Bulk login';
+    if (dex === 'imperial') return 'Imperial login';
+    if (dex === 'phoenix') return 'Phoenix login';
+    return 'Pacifica login';
   })();
 
   return (
@@ -919,9 +920,11 @@ function RegisterPanel() {
       <style>{`
         .register-panel button:focus-visible,
         .register-panel input:focus-visible {
-          outline: 3px solid rgba(242, 101, 34, 0.28);
+          outline: 3px solid var(--terminal-brand-ring);
           outline-offset: 2px;
         }
+        .register-panel__dex-card { transition: background-color 160ms ease-out, border-color 160ms ease-out; }
+        .register-panel__dex-card:hover { background: var(--terminal-surface-raised) !important; border-color: var(--terminal-border-strong) !important; }
         @media (max-width: 767px) {
           .register-panel { align-items: stretch !important; padding: 0 !important; }
           .register-panel__dialog { width: 100% !important; max-width: none !important; max-height: 100dvh !important; border-radius: 0 !important; }
@@ -972,7 +975,7 @@ export default memo(RegisterPanel);
 const S = {
   overlay: {
     position: 'fixed', inset: 0,
-    background: 'rgba(17,24,39,0.48)',
+    background: 'var(--terminal-overlay)',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     padding: 16,
     zIndex: 30, pointerEvents: 'all',
@@ -983,10 +986,10 @@ const S = {
     background: 'var(--terminal-surface)',
     border: '1px solid var(--terminal-border)',
     borderRadius: 16,
-    boxShadow: '0 24px 64px rgba(17,24,39,0.18)',
+    boxShadow: 'var(--terminal-shadow-card)',
     display: 'flex', flexDirection: 'column',
     overflow: 'hidden',
-    fontFamily: '"Inter","Segoe UI",sans-serif',
+    fontFamily: 'inherit',
     color: 'var(--terminal-text)',
   },
   dexPickerPanel: {
@@ -994,11 +997,11 @@ const S = {
   },
   header: {
     display: 'flex', alignItems: 'center', justifyContent: 'center',
-    minHeight: 56, background: 'var(--terminal-surface-subtle)',
+    minHeight: 56, background: 'var(--terminal-surface)',
     borderBottom: '1px solid var(--terminal-border)', padding: '0 20px',
   },
   headerTitle: {
-    fontSize: 18, fontWeight: 750, color: 'var(--terminal-text)',
+    fontSize: 18, fontWeight: 600, color: 'var(--terminal-text)',
     letterSpacing: '-0.01em',
   },
   content: {
@@ -1015,7 +1018,7 @@ const S = {
   },
   sectionTitle: {
     margin: 0,
-    fontSize: 18, fontWeight: 750, color: 'var(--terminal-text)',
+    fontSize: 18, fontWeight: 600, color: 'var(--terminal-text)',
     letterSpacing: '-0.01em', textAlign: 'center',
   },
   subtle: {
@@ -1035,15 +1038,15 @@ const S = {
   },
   dexCard: {
     width: '100%', display: 'flex', alignItems: 'center', gap: 14,
-    minHeight: 64, padding: '12px 14px', borderRadius: 12,
+    minHeight: 64, padding: '14px 16px', borderRadius: 16,
     border: '1px solid var(--terminal-border)', background: 'var(--terminal-surface)',
-    boxShadow: '0 1px 2px rgba(17,24,39,0.04)',
+    boxShadow: 'none',
     cursor: 'pointer', outline: 'none', textAlign: 'left', color: 'var(--terminal-text)',
     fontFamily: 'inherit',
   },
   dexCardDesktop: {
     minHeight: 86,
-    padding: '12px 14px',
+    padding: '14px 16px',
     boxSizing: 'border-box',
   },
   dexCardBody: {
@@ -1051,24 +1054,23 @@ const S = {
   },
   dexCardTitleRow: { display: 'flex', alignItems: 'center', gap: 8 },
   dexCardLabel: {
-    fontSize: 18, fontWeight: 750, color: 'var(--terminal-text)',
+    fontSize: 18, fontWeight: 600, color: 'var(--terminal-text)',
     letterSpacing: '-0.01em',
     textTransform: 'lowercase',
   },
   dexCardLabelDesktop: {
     fontSize: 18,
-    letterSpacing: '0.4px',
   },
   dexCardSubtitle: {
-    fontSize: 11, fontWeight: 600,
-    color: 'var(--terminal-text-muted)', letterSpacing: '0.02em',
+    fontSize: 12, fontWeight: 500,
+    color: 'var(--terminal-text-muted)',
   },
   dexCardSubtitleDesktop: {
-    fontSize: 10,
+    fontSize: 12,
     lineHeight: 1.25,
   },
   dexCardChevron: {
-    fontSize: 24, color: 'var(--terminal-orange)', fontWeight: 700,
+    fontSize: 22, color: 'var(--terminal-text-faint)', fontWeight: 500,
   },
 
   // DEX badge (shown after picker — a compact pill + CHANGE button).
@@ -1078,22 +1080,21 @@ const S = {
   },
   dexBadge: {
     display: 'flex', alignItems: 'center', gap: 6,
-    padding: '5px 10px', borderRadius: 10,
-    background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)',
+    padding: '5px 12px', borderRadius: 999,
+    background: 'var(--terminal-surface-muted)', border: '1px solid var(--terminal-border)',
   },
   dexBadgeLabel: {
-    fontSize: 11, fontWeight: 750, color: 'var(--terminal-text)',
-    letterSpacing: '0.04em',
+    fontSize: 12, fontWeight: 600, color: 'var(--terminal-text)',
   },
   dexBadgeActions: {
     display: 'flex', alignItems: 'center', justifyContent: 'flex-end',
     flexWrap: 'wrap', gap: 6,
   },
-  changeBtn: uiButton('secondary', { minHeight: 40, fontSize: 11, padding: '8px 12px' }),
-  changeDexBtn: uiButton('ghost', { minHeight: 40, fontSize: 11, padding: '8px 10px' }),
+  changeBtn: uiButton('secondary', { minHeight: 40, fontSize: 12, padding: '8px 12px' }),
+  changeDexBtn: uiButton('ghost', { minHeight: 40, fontSize: 12, padding: '8px 10px' }),
   backBtn: uiButton('secondary', {
     alignSelf: 'flex-start',
-    minHeight: 40, fontSize: 11, padding: '8px 12px',
+    minHeight: 40, fontSize: 12, padding: '8px 12px',
   }),
 
   storedWalletBox: {
@@ -1102,9 +1103,9 @@ const S = {
     alignItems: 'center',
     gap: 10,
     padding: '10px 12px',
-    background: 'var(--terminal-surface-subtle)',
+    background: 'var(--terminal-surface-muted)',
     border: '1px solid var(--terminal-border)',
-    borderRadius: 12,
+    borderRadius: 14,
   },
   storedWalletText: {
     minWidth: 0,
@@ -1114,14 +1115,13 @@ const S = {
   },
   storedWalletLabel: {
     color: 'var(--terminal-text-muted)',
-    fontSize: 11,
-    fontWeight: 700,
-    letterSpacing: '0.04em',
+    fontSize: 12,
+    fontWeight: 500,
   },
   storedWalletAddress: {
     color: 'var(--terminal-text)',
     fontSize: 14,
-    fontWeight: 700,
+    fontWeight: 600,
     fontFamily: '"SFMono-Regular",Consolas,monospace',
     fontVariantNumeric: 'tabular-nums',
     overflow: 'hidden',
@@ -1136,31 +1136,31 @@ const S = {
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
   },
-  storedWalletDisconnect: uiButton('danger', { minHeight: 40, fontSize: 11, padding: '8px 12px' }),
+  storedWalletDisconnect: uiButton('secondary', { minHeight: 40, fontSize: 12, padding: '8px 12px' }),
 
   // Wallet pill shown before name form.
   walletPill: {
     alignSelf: 'center',
     display: 'flex', alignItems: 'center', gap: 8,
     padding: '8px 16px',
-    background: 'var(--terminal-surface-subtle)',
+    background: 'var(--terminal-surface-muted)',
     border: '1px solid var(--terminal-border)',
-    borderRadius: 12,
+    borderRadius: 999,
   },
   walletDot: {
     width: 10, height: 10, borderRadius: '50%',
     background: 'var(--terminal-long)',
   },
   walletAddr: {
-    fontSize: 14, fontWeight: 700, fontFamily: '"SFMono-Regular",Consolas,monospace',
+    fontSize: 14, fontWeight: 600, fontFamily: '"SFMono-Regular",Consolas,monospace',
     fontVariantNumeric: 'tabular-nums', color: 'var(--terminal-text)',
   },
 
   input: {
-    width: '100%', minHeight: 46, padding: '11px 14px', borderRadius: 10,
-    border: '1px solid var(--terminal-border-strong)',
-    background: 'var(--terminal-surface)',
-    color: 'var(--terminal-text)', fontSize: 16, fontWeight: 600,
+    width: '100%', minHeight: 44, padding: '11px 14px', borderRadius: 12,
+    border: '1px solid var(--terminal-border)',
+    background: 'var(--terminal-input)',
+    color: 'var(--terminal-text)', fontSize: 16, fontWeight: 500,
     textAlign: 'center', outline: 'none', boxSizing: 'border-box',
     fontFamily: 'inherit',
   },
@@ -1173,7 +1173,7 @@ const S = {
     background: 'var(--terminal-short-soft)',
     color: 'var(--terminal-short)',
     fontSize: 13,
-    fontWeight: 650,
+    fontWeight: 600,
     lineHeight: 1.3,
     textAlign: 'center',
   },
@@ -1183,16 +1183,16 @@ const S = {
     padding: '10px 14px', borderRadius: 12,
     background: 'var(--terminal-brand-soft)',
     border: '1px solid var(--terminal-brand-border)',
-    color: 'var(--terminal-warning)',
-    fontSize: 12, fontWeight: 650, letterSpacing: '0.01em',
+    color: 'var(--terminal-brand-text)',
+    fontSize: 12, fontWeight: 600,
     cursor: 'pointer', textAlign: 'left',
     fontFamily: 'inherit',
   },
   skrChipIcon: {
     flexShrink: 0,
-    width: 22, height: 22, borderRadius: 6,
+    width: 22, height: 22, borderRadius: 999,
     background: 'var(--terminal-orange)',
-    color: 'var(--terminal-on-accent)',
+    color: '#ffffff',
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
     fontSize: 12, fontWeight: 600,
   },
@@ -1208,14 +1208,13 @@ const S = {
   },
   spinner: {
     width: 34, height: 34, borderRadius: '50%',
-    borderWidth: 1,
+    borderWidth: 2,
     borderStyle: 'solid',
     borderColor: 'var(--terminal-border)',
     borderTopColor: 'var(--terminal-orange)',
     animation: 'rp-spin 0.9s linear infinite',
   },
   spinnerLabel: {
-    fontSize: 13, fontWeight: 650, color: 'var(--terminal-text-muted)',
-    letterSpacing: '0.01em',
+    fontSize: 13, fontWeight: 500, color: 'var(--terminal-text-muted)',
   },
 };

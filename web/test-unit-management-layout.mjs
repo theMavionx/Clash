@@ -40,7 +40,7 @@ test('loaded cards and unit details remain keyboard accessible', () => {
 test('unaffordable ship and altar upgrades are blocked before mutation', () => {
   assert.match(panelSource, /if \(!canAffordAltarCost\(cost\)\) \{\s*setAltarError\('Not enough resources'\);\s*return;/);
   assert.match(panelSource, /const canClickUpgrade = current < 3 && nextCost && canAffordUpgrade && !altarBusy/);
-  assert.match(panelSource, /"UNLOCK GUNBOAT"[^]*disabled: getResourceShortfalls\(shipCost\)\.length > 0/s);
+  assert.match(panelSource, /"Unlock gunboat"[^]*disabled: getResourceShortfalls\(shipCost\)\.length > 0/s);
   assert.match(panelSource, /currentTownHallLevel < shipNextTownHall/);
   assert.match(panelSource, /if \(shipUpgradeBlockedReason \|\| shipLevel >= shipMaxLevel\) return/);
   assert.match(panelSource, /aria-busy=\{shipUpgradePending \|\| undefined\}/);

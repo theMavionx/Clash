@@ -148,7 +148,7 @@ function SanctumLstPanel({ open, onClose }) {
             <img src="/icons/icon-512.png" alt="Clash" style={styles.clashLogo} />
           </div>
           <div>
-            <div style={styles.eyebrow}>POWERED BY SANCTUM</div>
+            <div style={styles.eyebrow}>Powered by Sanctum</div>
             <h2 style={styles.title}>Stake SOL. Receive clashSOL.</h2>
             <p style={styles.subtitle}>Liquid staking for the Clash community — keep a transferable token while SOL earns staking yield.</p>
           </div>
@@ -160,7 +160,7 @@ function SanctumLstPanel({ open, onClose }) {
 
         {status && !available && (
           <div style={styles.pendingCard}>
-            <div style={styles.pendingBadge}>LAUNCH PREPARATION</div>
+            <div style={styles.pendingBadge}>Launch preparation</div>
             <h3 style={styles.pendingTitle}>clashSOL is being deployed with Sanctum</h3>
             <p style={styles.pendingCopy}>
               Sanctum reviews and deploys new LST pools before swaps can go live. This shop card will unlock automatically after the clashSOL mint is active.
@@ -253,10 +253,10 @@ const styles = {
   },
   panel: {
     position: 'relative', width: 'min(560px, 100%)', maxHeight: 'min(760px, 92dvh)', overflowY: 'auto',
-    padding: 'clamp(20px, 5vw, 32px)', borderRadius: 20, color: 'var(--terminal-text)',
+    padding: 'clamp(20px, 5vw, 32px)', borderRadius: 16, color: 'var(--terminal-text)',
     background: 'var(--terminal-surface)',
-    border: '1px solid var(--terminal-border)', boxShadow: '0 20px 60px var(--terminal-shadow)',
-    fontFamily: '"Inter", "Segoe UI", sans-serif', boxSizing: 'border-box',
+    border: '1px solid var(--terminal-border)', boxShadow: 'none',
+    fontFamily: 'inherit', boxSizing: 'border-box',
   },
   close: {
     ...uiIconButton('danger', 36), position: 'absolute', top: 12, right: 12, zIndex: 2,
@@ -264,36 +264,36 @@ const styles = {
   },
   hero: { display: 'grid', gridTemplateColumns: '82px 1fr', gap: 18, alignItems: 'center', paddingRight: 28 },
   logoStack: { position: 'relative', width: 78, height: 78 },
-  solLogo: { position: 'absolute', inset: 0, width: 62, height: 62, padding: 8, borderRadius: 16, background: '#171717', boxShadow: 'var(--terminal-shadow-card)' },
+  solLogo: { position: 'absolute', inset: 0, width: 62, height: 62, padding: 8, borderRadius: 16, background: 'var(--terminal-neutral-button)', boxShadow: 'var(--terminal-shadow-card)' },
   clashLogo: { position: 'absolute', right: -2, bottom: -2, width: 38, height: 38, borderRadius: '50%', border: '1px solid var(--terminal-border)', background: 'var(--terminal-surface)' },
-  eyebrow: { color: 'var(--terminal-brand-text)', fontSize: 11, fontWeight: 700, letterSpacing: 1.1 },
+  eyebrow: { color: 'var(--terminal-brand-text)', fontSize: 11, fontWeight: 600, letterSpacing: '0.06em' },
   title: { margin: '5px 0 4px', fontSize: 'clamp(21px, 5vw, 29px)', lineHeight: 1.05, color: 'var(--terminal-text)' },
   subtitle: { margin: 0, fontSize: 13, lineHeight: 1.4, color: 'var(--terminal-text-secondary)', fontWeight: 600 },
   centerState: { minHeight: 210, display: 'flex', gap: 12, alignItems: 'center', justifyContent: 'center', color: 'var(--terminal-text-muted)', fontWeight: 600 },
   spinner: { width: 18, height: 18, borderRadius: '50%', border: '1px solid var(--terminal-border-strong)', borderTopColor: 'var(--terminal-brand)', animation: 'spin 1s linear infinite' },
   pendingCard: { marginTop: 24, padding: 20, borderRadius: 16, background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', textAlign: 'center' },
-  pendingBadge: { display: 'inline-block', padding: '5px 9px', borderRadius: 999, background: 'var(--terminal-brand-soft)', color: 'var(--terminal-brand-text)', fontSize: 10, fontWeight: 700, letterSpacing: 1 },
+  pendingBadge: { display: 'inline-block', padding: '5px 9px', borderRadius: 999, background: 'var(--terminal-brand-soft)', color: 'var(--terminal-brand-text)', fontSize: 10, fontWeight: 600, letterSpacing: '0.06em' },
   pendingTitle: { margin: '12px 0 7px', fontSize: 20, color: 'var(--terminal-text)' },
   pendingCopy: { margin: '0 auto', maxWidth: 440, color: 'var(--terminal-text-secondary)', fontSize: 13, fontWeight: 600, lineHeight: 1.45 },
   factGrid: { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginTop: 17 },
-  fact: { padding: '11px 5px', borderRadius: 10, background: 'var(--terminal-surface-muted)', border: '1px solid var(--terminal-border)', display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-secondary)' },
+  fact: { padding: '11px 5px', borderRadius: 10, background: 'var(--terminal-surface-muted)', border: '1px solid var(--terminal-border)', display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-secondary)' },
   docsLink: { display: 'inline-block', marginTop: 16, color: 'var(--terminal-brand-text)', fontSize: 12, fontWeight: 600 },
   liveArea: { marginTop: 24 },
   marketStrip: { display: 'flex', alignItems: 'center', gap: 9, minHeight: 38, padding: '0 12px', borderRadius: 10, background: 'var(--terminal-surface-muted)', border: '1px solid var(--terminal-border)', fontSize: 12 },
-  liveBadge: { padding: '3px 7px', borderRadius: 999, color: 'var(--terminal-long)', background: 'var(--terminal-long-soft)', fontWeight: 700, fontSize: 9 },
-  apy: { marginLeft: 'auto', color: 'var(--terminal-long)', fontWeight: 700 },
-  inputLabel: { display: 'block', margin: '18px 0 6px', fontSize: 12, fontWeight: 700, color: 'var(--terminal-text-secondary)' },
+  liveBadge: { padding: '3px 7px', borderRadius: 999, color: 'var(--terminal-long)', background: 'var(--terminal-long-soft)', fontWeight: 600, fontSize: 9 },
+  apy: { marginLeft: 'auto', color: 'var(--terminal-long)', fontWeight: 600 },
+  inputLabel: { display: 'block', margin: '18px 0 6px', fontSize: 12, fontWeight: 600, color: 'var(--terminal-text-secondary)' },
   amountBox: { display: 'flex', alignItems: 'center', gap: 8, padding: '10px 13px', background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border-strong)', borderRadius: 10 },
-  amountInput: { width: '100%', minWidth: 0, border: 0, outline: 0, background: 'transparent', fontSize: 27, fontWeight: 700, color: 'var(--terminal-text)' },
-  currency: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 14, fontWeight: 700, whiteSpace: 'nowrap' },
+  amountInput: { width: '100%', minWidth: 0, border: 0, outline: 0, background: 'transparent', fontSize: 27, fontWeight: 600, color: 'var(--terminal-text)' },
+  currency: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 14, fontWeight: 600, whiteSpace: 'nowrap' },
   presets: { display: 'flex', gap: 7, marginTop: 8 },
   preset: { ...uiButton('secondary', { flex: 1, minHeight: 34, height: 34, padding: '0 8px', fontSize: 11 }) },
-  quoteCard: { marginTop: 14, padding: '11px 13px', borderRadius: 10, background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', display: 'grid', gap: 7 },
+  quoteCard: { marginTop: 14, padding: '11px 13px', borderRadius: 16, background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', display: 'grid', gap: 7 },
   quoteRow: { display: 'flex', justifyContent: 'space-between', gap: 12, color: 'var(--terminal-text-secondary)', fontSize: 12 },
   primaryButton: { ...uiButton('primary', { width: '100%', minHeight: 44, marginTop: 15, padding: '12px 16px', fontSize: 14 }) },
   secondaryButton: { ...uiButton('secondary', { width: '100%', marginTop: 9, padding: 12 }) },
   walletChoices: { display: 'grid' },
-  successCard: { marginTop: 15, padding: 15, borderRadius: 10, background: 'var(--terminal-long-soft)', color: 'var(--terminal-long)', border: '1px solid var(--terminal-long-border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', fontSize: 13 },
+  successCard: { marginTop: 15, padding: 15, borderRadius: 16, background: 'var(--terminal-long-soft)', color: 'var(--terminal-long)', border: '1px solid var(--terminal-long-border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', fontSize: 13 },
   disclosure: { margin: '13px 3px 0', color: 'var(--terminal-text-muted)', fontSize: 11, fontWeight: 600, lineHeight: 1.35, textAlign: 'center' },
   error: { marginTop: 14, padding: '10px 12px', borderRadius: 10, color: 'var(--terminal-short-strong)', background: 'var(--terminal-short-soft)', border: '1px solid var(--terminal-short-border)', fontSize: 12, fontWeight: 600 },
 };

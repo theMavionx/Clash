@@ -428,7 +428,7 @@ const styles = {
   overlay: {
     position: 'fixed',
     inset: 0,
-    background: 'rgba(0,0,0,0.5)',
+    background: 'var(--terminal-overlay)',
     display: 'flex',
     alignItems: 'flex-end',
     justifyContent: 'center',
@@ -455,7 +455,7 @@ const styles = {
     display: 'flex',
     position: 'relative',
     zIndex: 10,
-    boxShadow: '0 -10px 30px rgba(0,0,0,0.3), inset 0 6px 10px rgba(0,0,0,0.05)',
+    boxShadow: 'none',
     borderRadius: '24px 24px 0 0',
   },
   cardScroll: {
@@ -475,13 +475,13 @@ const styles = {
     width: 'clamp(110px, 40vw, 160px)',
     height: 'clamp(180px, 52vw, 240px)',
     background: 'var(--terminal-surface)',
-    borderRadius: 14,
+    borderRadius: 16,
     border: '1px solid var(--terminal-border)',
     display: 'flex',
     flexDirection: 'column',
     cursor: 'pointer',
     overflow: 'hidden',
-    boxShadow: '0 6px 12px rgba(0,0,0,0.15), inset 0 -4px 0 rgba(0,0,0,0.05)',
+    boxShadow: 'none',
     transition: 'transform 0.15s cubic-bezier(0.18, 0.89, 0.32, 1.28), box-shadow 0.1s',
     flexShrink: 0,
   },
@@ -497,7 +497,7 @@ const styles = {
     position: 'absolute',
     width: '100%',
     height: '100%',
-    background: 'radial-gradient(circle at center, var(--terminal-chip-overlay) 0%, transparent 60%)',
+    background: 'var(--terminal-chip-overlay)',
     zIndex: 0,
   },
   thumbnail: {
@@ -528,8 +528,8 @@ const styles = {
   },
   cardOnchainLocked: {
     opacity: 0.82,
-    border: '1px solid #58b9d8',
-    boxShadow: '0 0 0 2px rgba(86,216,255,0.22), 0 6px 12px rgba(0,0,0,0.15)',
+    border: '1px solid var(--terminal-brand)',
+    boxShadow: 'none',
     cursor: 'pointer',
   },
   cardMaxed: {
@@ -545,7 +545,7 @@ const styles = {
   },
   countBadge: {
     position: 'absolute', top: 6, right: 8, zIndex: 10,
-    fontSize: 13, fontWeight: 700, color: 'var(--terminal-text)',
+    fontSize: 13, fontWeight: 600, color: 'var(--terminal-text)',
   },
   lockOverlay: {
     position: 'absolute', inset: 0, zIndex: 10,
@@ -555,17 +555,17 @@ const styles = {
   },
   lockIcon: { fontSize: 32 },
   lockName: {
-    fontSize: 14, fontWeight: 700, color: 'var(--terminal-text)', marginTop: 4,
+    fontSize: 14, fontWeight: 600, color: 'var(--terminal-text)', marginTop: 4,
   },
   lockText: {
-    fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-muted)',
+    fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-muted)',
   },
   onchainPrice: {
     marginTop: 'auto',
     fontSize: 'clamp(15px, 4vw, 18px)',
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-text)',
-    fontFamily: '"Inter", "Segoe UI", sans-serif',
+    fontFamily: 'inherit',
     lineHeight: 1.1,
   },
   onchainCta: {
@@ -575,8 +575,8 @@ const styles = {
     background: 'var(--terminal-orange)',
     color: 'var(--terminal-on-accent)',
     fontSize: 10,
-    fontWeight: 700,
-    textTransform: 'uppercase',
+    fontWeight: 600,
+    textTransform: 'none',
     letterSpacing: 0,
     boxShadow: 'none',
   },
@@ -591,7 +591,7 @@ const styles = {
     fontSize: 'clamp(13px, 3.5vw, 15px)',
     fontWeight: 600,
     color: 'var(--terminal-text-control)',
-    fontFamily: '"Inter", "Segoe UI", sans-serif',
+    fontFamily: 'inherit',
     marginBottom: 1,
     lineHeight: 1.1,
   },
@@ -630,11 +630,11 @@ const styles = {
     fontSize: 'clamp(12px, 3.5vw, 16px)',
     fontWeight: 600,
     color: 'var(--terminal-text-control)',
-    fontFamily: '"Inter", "Segoe UI", sans-serif',
+    fontFamily: 'inherit',
   },
   freeText: {
     fontSize: 20,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-long)',
     textShadow: 'none',
   },
@@ -662,11 +662,11 @@ const animCSS = `
   /* Hover active state for building card */
   .grad-scrollbar > div > div:hover {
     transform: translateY(-4px) scale(1.02);
-    box-shadow: 0 10px 20px rgba(0,0,0,0.2), inset 0 -4px 0 rgba(0,0,0,0.05);
+    box-shadow: none;
   }
   
   .grad-scrollbar > div > div:active {
     transform: translateY(2px) scale(0.98);
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1), inset 0 -2px 0 rgba(0,0,0,0.05);
+    box-shadow: none;
   }
 `;

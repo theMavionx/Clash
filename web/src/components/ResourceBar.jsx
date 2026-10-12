@@ -7,9 +7,9 @@ import woodIcon from '../assets/resources/wood_bar.png';
 import stoneIcon from '../assets/resources/stone_bar.png';
 
 const ITEMS = [
-  { key: 'gold', icon: goldIcon, indicator: '#e6a817', offset: { left: -22, top: '48%' } },
-  { key: 'wood', icon: woodIcon, indicator: '#5c4026', offset: { left: -14, top: '50%' } },
-  { key: 'ore', icon: stoneIcon, indicator: '#8a8a8a', offset: { left: -14, top: '50%' } },
+  { key: 'gold', icon: goldIcon, indicator: 'var(--terminal-warning)', offset: { left: -22, top: '48%' } },
+  { key: 'wood', icon: woodIcon, indicator: 'var(--terminal-long)', offset: { left: -14, top: '50%' } },
+  { key: 'ore', icon: stoneIcon, indicator: 'var(--terminal-text-muted)', offset: { left: -14, top: '50%' } },
 ];
 
 const fmtShort = (n) => {
@@ -140,16 +140,17 @@ function ResourceBar() {
                 top: offset?.top ?? '50%'
               }}
             />
-            <div style={{ ...styles.pill, ...(mobile ? styles.pillMobile : {}), ...(isLandscape ? { minWidth: 110, height: 26, padding: '0 10px 0 34px' } : {}) }}>
-              <div style={{
-                ...styles.indicator,
-                background: barColor,
-                width: `${pct}%`,
-                boxShadow: 'inset 0 1px 1px var(--terminal-chip-overlay), inset 0 -1px 3px rgba(0,0,0,0.3)'
-              }} />
+            <div style={{ ...styles.pill, ...(mobile ? styles.pillMobile : {}), ...(isLandscape ? { minWidth: 110, height: 30, padding: '0 12px 0 34px' } : {}) }}>
               <div style={styles.textWrap}>
                 <span style={{ ...styles.value, ...(mobile ? { fontSize: 13 } : {}) }}>{fmtShort(current)}</span>
                 <span style={{ ...styles.maxValue, ...(mobile ? { fontSize: 9 } : {}) }}>/ {fmtShort(max)}</span>
+              </div>
+              <div style={{ ...styles.track, ...(mobile ? styles.trackMobile : {}) }}>
+                <div style={{
+                  ...styles.indicator,
+                  background: barColor,
+                  width: `${pct}%`,
+                }} />
               </div>
               <button
                 type="button"
@@ -178,7 +179,7 @@ const styles = {
     gap: 25,
     pointerEvents: 'all',
     zIndex: 10,
-    fontFamily: 'system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
+    fontFamily: 'inherit',
   },
   container: {
     position: 'relative',
@@ -188,25 +189,36 @@ const styles = {
   },
   pill: {
     display: 'flex',
-    alignItems: 'center',
-    padding: '0 15px 0 52px',
-    height: 32,
-    border: '2.5px solid #1a1a1a',
-    backgroundColor: 'rgba(0, 0, 0, 0.4)',
-    boxShadow: '0 4px 6px rgba(0,0,0,0.5), inset 0 2px 4px rgba(0,0,0,0.4)',
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    justifyContent: 'center',
+    gap: 4,
+    padding: '0 16px 0 52px',
+    height: 40,
+    boxSizing: 'border-box',
+    border: '1px solid var(--terminal-border)',
+    backgroundColor: 'rgba(17,20,27,0.95)',
+    boxShadow: 'var(--terminal-shadow-card)',
     minWidth: 170,
-    borderRadius: 8,
+    borderRadius: 999,
     position: 'relative',
     overflow: 'hidden',
   },
+  track: {
+    height: 6,
+    borderRadius: 999,
+    background: 'var(--terminal-surface-muted)',
+    overflow: 'hidden',
+    position: 'relative',
+    zIndex: 2,
+  },
+  trackMobile: {
+    height: 4,
+  },
   indicator: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    bottom: 0,
-    opacity: 1,
-    borderRight: '1.5px solid #1a1a1a',
-    transition: 'width 0.4s ease-out, background 0.3s',
+    height: '100%',
+    borderRadius: 999,
+    transition: 'width 0.4s ease-out, background-color 0.3s',
   },
   icon: {
     position: 'absolute',
@@ -215,7 +227,7 @@ const styles = {
     width: 74,
     height: 74,
     objectFit: 'contain',
-    filter: 'drop-shadow(0 4px 4px rgba(0,0,0,0.6))',
+    filter: 'drop-shadow(0 2px 3px rgba(0,0,0,0.45))',
     pointerEvents: 'none',
     zIndex: 4,
   },
@@ -226,18 +238,21 @@ const styles = {
     zIndex: 2,
     width: '100%',
     justifyContent: 'center',
+    lineHeight: 1,
   },
   value: {
-    fontSize: 18,
-    fontWeight: 700,
-    color: 'var(--terminal-on-accent)',
+    fontSize: 16,
+    fontWeight: 600,
+    color: 'var(--terminal-text)',
+    fontVariantNumeric: 'tabular-nums',
     textShadow: 'none',
-    letterSpacing: '0.5px',
+    letterSpacing: 0,
   },
   maxValue: {
     fontSize: 11,
-    fontWeight: 700,
-    color: 'var(--terminal-chip-overlay)',
+    fontWeight: 500,
+    color: 'var(--terminal-text-muted)',
+    fontVariantNumeric: 'tabular-nums',
     textShadow: 'none',
   },
   hiddenButton: {
@@ -265,9 +280,10 @@ const styles = {
   },
   pillMobile: {
     minWidth: 110,
-    height: 24,
-    padding: '0 10px 0 34px',
-    borderRadius: 6,
+    height: 30,
+    gap: 3,
+    padding: '0 12px 0 34px',
+    borderRadius: 999,
   },
   iconMobile: {
     width: 48,

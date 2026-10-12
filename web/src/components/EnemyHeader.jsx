@@ -34,7 +34,7 @@ function EnemyHeader() {
       <div style={compact ? { ...styles.headerWrap, gap: 8 } : styles.headerWrap}>
         <div style={styles.levelCircleContainer}>
           <div style={compact ? { ...styles.levelCircle, ...styles.levelCircleMobile } : styles.levelCircle}>
-            <div style={compact ? { ...styles.innerSquare, borderRadius: 6 } : styles.innerSquare}>
+            <div style={compact ? { ...styles.innerSquare, borderRadius: 10 } : styles.innerSquare}>
               <span style={compact ? { ...styles.levelText, ...styles.levelTextMobile } : styles.levelText}>{townHallLevel}</span>
             </div>
           </div>
@@ -55,7 +55,7 @@ function EnemyHeader() {
 
           {enemyMode.trophies !== undefined && (
             <div style={compact ? { ...styles.trophyContainer, height: 26, marginLeft: 2 } : styles.trophyContainer}>
-              <div style={compact ? { ...styles.trophyBox, width: 24, height: 24, borderRadius: 5 } : styles.trophyBox}>
+              <div style={compact ? { ...styles.trophyBox, width: 22, height: 22 } : styles.trophyBox}>
                 <img src={trophyIcon} alt="trophy" style={styles.trophyImg} />
               </div>
               <div style={compact ? { ...styles.trophyBar, height: 18, minWidth: 54, padding: '0 8px' } : styles.trophyBar}>
@@ -71,7 +71,7 @@ function EnemyHeader() {
       {/* Rewards Section */}
       {(reward.gold > 0 || reward.wood > 0 || reward.ore > 0) && (
         <div style={styles.rewardsSection}>
-          <div style={styles.rewardsTitle}>Victory Reward:</div>
+          <div style={styles.rewardsTitle}>Victory reward</div>
           <div style={styles.resourceList}>
             {reward.gold > 0 && <ResourceRow icon={goldIcon} value={reward.gold} />}
             {reward.wood > 0 && <ResourceRow icon={woodIcon} value={reward.wood} />}
@@ -98,7 +98,7 @@ function ResourceRow({ icon, value }) {
   );
 }
 
-const textOutline = '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 3px 6px rgba(0,0,0,0.8)';
+const hudSurface = 'rgba(17,20,27,0.95)';
 
 const styles = {
   container: {
@@ -110,7 +110,7 @@ const styles = {
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'flex-start',
-    fontFamily: '"Inter", "Segoe UI", sans-serif',
+    fontFamily: 'inherit',
     gap: 8,
   },
   containerReplayMobile: {
@@ -130,61 +130,66 @@ const styles = {
   levelCircle: {
     width: 60,
     height: 60,
-    borderRadius: 12,
-    background: 'linear-gradient(135deg, #1a1a1a 50%, var(--terminal-surface) 50%)',
-    border: '1px solid #0a0a0a',
-    boxShadow: '0 4px 10px rgba(0,0,0,0.7)',
+    boxSizing: 'border-box',
+    borderRadius: 16,
+    background: 'var(--terminal-surface-muted)',
+    border: '1px solid var(--terminal-border)',
+    boxShadow: 'var(--terminal-shadow-card)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',
-    padding: 6,
+    padding: 5,
   },
   levelCircleMobile: {
     width: 48,
     height: 48,
-    borderRadius: 10,
-    padding: 5,
+    borderRadius: 14,
+    padding: 4,
   },
   innerSquare: {
     width: '100%',
     height: '100%',
-    borderRadius: 8,
-    background: 'linear-gradient(180deg, #5899ff 0%, #3d86ef 100%)',
-    border: '1px solid #0a0a0a',
+    boxSizing: 'border-box',
+    borderRadius: 12,
+    background: hudSurface,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',
     overflow: 'hidden',
-    boxShadow: 'inset 0 2px 3px var(--terminal-chip-overlay), 0 2px 4px rgba(0,0,0,0.3)',
   },
   levelText: {
-    color: 'var(--terminal-on-accent)',
-    fontSize: 28,
+    color: 'var(--terminal-text)',
+    fontSize: 26,
     fontWeight: 700,
+    fontVariantNumeric: 'tabular-nums',
     textShadow: 'none',
     zIndex: 2,
-    transform: 'translateY(-1px)',
-    letterSpacing: '-1px',
+    letterSpacing: '-0.02em',
   },
   levelTextMobile: {
-    fontSize: 24,
+    fontSize: 22,
   },
   infoStack: {
     display: 'flex',
     flexDirection: 'column',
     justifyContent: 'center',
-    gap: 2,
+    alignItems: 'flex-start',
+    gap: 6,
     minWidth: 0,
   },
   playerName: {
-    color: 'var(--terminal-on-accent)',
-    fontSize: 20,
-    fontWeight: 700,
+    color: 'var(--terminal-text)',
+    fontSize: 17,
+    fontWeight: 600,
     textShadow: 'none',
-    marginLeft: 4,
-    letterSpacing: '0.5px',
+    letterSpacing: 0,
+    background: hudSurface,
+    border: '1px solid var(--terminal-border)',
+    borderRadius: 999,
+    padding: '4px 12px',
+    lineHeight: 1.2,
   },
   playerNameMobile: {
     display: 'block',
@@ -199,94 +204,95 @@ const styles = {
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
-    fontSize: 18,
-    marginLeft: 2,
+    fontSize: 15,
     letterSpacing: 0,
   },
   trophyContainer: {
     position: 'relative',
     display: 'flex',
     alignItems: 'center',
+    gap: 6,
     height: 32,
-    marginLeft: 4,
+    boxSizing: 'border-box',
+    padding: '0 12px 0 3px',
+    borderRadius: 999,
+    background: hudSurface,
+    border: '1px solid var(--terminal-border)',
   },
   trophyBox: {
-    width: 28,
-    height: 28,
-    borderRadius: 6,
-    background: 'linear-gradient(180deg, #ffa22a 0%, #d87b1c 100%)',
-    border: '1px solid #1a1a1a',
-    boxShadow: 'inset 0 1.5px 1px rgba(255, 255, 255, 0.7), 0 2px 3px rgba(0, 0, 0, 0.5)',
+    width: 24,
+    height: 24,
+    borderRadius: 999,
+    background: 'var(--terminal-surface-muted)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 3,
     position: 'relative',
+    flexShrink: 0,
   },
   trophyImg: {
-    width: '75%',
-    height: '75%',
+    width: '65%',
+    height: '65%',
     objectFit: 'contain',
-    filter: 'invert(88%) sepia(87%) saturate(2224%) hue-rotate(334deg) brightness(105%) contrast(106%) drop-shadow(0 1px 1px rgba(0,0,0,0.4))',
+    filter: 'invert(88%) sepia(87%) saturate(2224%) hue-rotate(334deg) brightness(105%) contrast(106%)',
   },
   trophyBar: {
-    height: 22,
-    minWidth: 70,
-    background: 'rgba(0, 0, 0, 0.35)',
-    border: '1.5px solid #1a1a1a',
-    borderRadius: '0 6px 6px 0',
+    minWidth: 48,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    marginLeft: -4,
-    padding: '0 10px',
     zIndex: 2,
-    boxShadow: '0 2px 4px rgba(0,0,0,0.4)',
   },
   trophiesText: {
     fontSize: 14,
-    fontWeight: 700,
-    color: 'var(--terminal-on-accent)',
+    fontWeight: 600,
+    color: 'var(--terminal-text)',
+    fontVariantNumeric: 'tabular-nums',
     textShadow: 'none',
-    letterSpacing: '0.5px',
+    letterSpacing: 0,
     width: '100%',
     textAlign: 'center',
   },
   rewardsSection: {
     display: 'flex',
     flexDirection: 'column',
-    gap: 6,
-    paddingLeft: 4,
+    gap: 8,
     marginTop: 4,
+    padding: '10px 14px',
+    borderRadius: 16,
+    background: hudSurface,
+    border: '1px solid var(--terminal-border)',
+    boxShadow: 'var(--terminal-shadow-card)',
   },
   rewardsTitle: {
-    fontSize: 14,
-    fontWeight: 700,
-    color: 'var(--terminal-on-accent)',
-    textShadow: textOutline,
-    letterSpacing: '0.3px',
+    fontSize: 12,
+    fontWeight: 500,
+    color: 'var(--terminal-text-muted)',
+    textShadow: 'none',
+    letterSpacing: 0,
   },
   resourceList: {
     display: 'flex',
     flexDirection: 'column',
-    gap: 4,
+    gap: 6,
   },
   resourceRow: {
     display: 'flex',
     alignItems: 'center',
-    gap: 6,
+    gap: 8,
   },
   resourceIcon: {
     width: 24,
     height: 24,
     objectFit: 'contain',
-    filter: 'drop-shadow(0 2px 3px rgba(0,0,0,0.8))',
   },
   resourceText: {
     fontSize: 15,
-    fontWeight: 700,
-    color: 'var(--terminal-on-accent)',
-    textShadow: textOutline,
+    fontWeight: 600,
+    color: 'var(--terminal-text)',
+    fontVariantNumeric: 'tabular-nums',
+    textShadow: 'none',
   },
 };
 

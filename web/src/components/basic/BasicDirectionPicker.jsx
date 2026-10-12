@@ -80,7 +80,7 @@ function BasicDirectionPicker({ symbol, iconSym, price, onPick }) {
           style={{ ...S.bigBtn, ...S.downBtn }}
         >
           <span style={S.arrowDown}>▼</span>
-          <span style={S.bigBtnLabel}>DOWN</span>
+          <span style={S.bigBtnLabel}>Down</span>
           <span style={S.bigBtnHint}>price drops</span>
         </motion.button>
       </div>
@@ -93,7 +93,7 @@ export default memo(BasicDirectionPicker);
 const S = {
   tightTitle: {
     fontSize: 'clamp(16px, 3vh, 20px)',
-    fontWeight: 700, color: colors.ink,
+    fontWeight: 600, color: colors.ink,
     textAlign: 'center', letterSpacing: '0.3px',
     margin: '2px 0 4px', lineHeight: 1.1,
   },
@@ -107,7 +107,7 @@ const S = {
     borderRadius: 16,
     background: 'var(--terminal-surface)',
     border: `1px solid ${colors.border}`,
-    boxShadow: '0 4px 12px rgba(17,24,39,0.06)',
+    boxShadow: 'var(--terminal-shadow-card)',
     margin: '2px 0 6px',
     flexShrink: 0,
   },
@@ -115,14 +115,13 @@ const S = {
     display: 'flex', alignItems: 'center', gap: 8,
   },
   symbol: {
-    fontSize: 14, fontWeight: 700,
+    fontSize: 14, fontWeight: 600,
     color: colors.inkSoft, letterSpacing: '1.2px',
-    textTransform: 'uppercase',
   },
   price: {
     // Scales 22pt (cramped) → 32pt (full panel).
     fontSize: 'clamp(22px, 5.5vh, 32px)',
-    fontWeight: 700, color: colors.ink,
+    fontWeight: 600, color: colors.ink,
     fontVariantNumeric: 'tabular-nums',
     letterSpacing: '-0.5px',
     lineHeight: 1.05,
@@ -160,7 +159,7 @@ const S = {
     marginLeft: 4,
   },
   bigBtnHint: {
-    fontSize: 12, fontWeight: 700, opacity: 0.85,
+    fontSize: 12, fontWeight: 600, opacity: 0.85,
     letterSpacing: '0.3px',
     fontStyle: 'italic',
   },

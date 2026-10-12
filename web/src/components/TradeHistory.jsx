@@ -813,7 +813,7 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
   }
   if (error) {
     return (
-      <div style={{ ...S.state, color: 'var(--terminal-short)', fontWeight: 700 }}>
+      <div style={{ ...S.state, color: 'var(--terminal-short)', fontWeight: 600 }}>
         <div>{error}</div>
         <button type="button" style={S.retryButton} onClick={() => setReloadKey(key => key + 1)}>Retry</button>
       </div>
@@ -860,12 +860,12 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
               <td style={S.td}>{displayNumber(t.amount, 6)}</td>
               <td style={S.td}>${Number(t.fee || 0).toFixed(4)}</td>
               {showPnl && (
-                <td style={{ ...S.td, color: pnl >= 0 ? 'var(--terminal-long)' : 'var(--terminal-short)', fontWeight: 700 }}>
+                <td style={{ ...S.td, color: pnl >= 0 ? 'var(--terminal-long)' : 'var(--terminal-short)', fontWeight: 600 }}>
                   {dex === 'hibachi' && t.realized_pnl_amount == null ? '—' : signedUsd(pnl)}
                 </td>
               )}
               {isDecibel && (
-                <td style={{ ...S.td, color: funding >= 0 ? 'var(--terminal-long)' : 'var(--terminal-short)', fontWeight: 700 }}>
+                <td style={{ ...S.td, color: funding >= 0 ? 'var(--terminal-long)' : 'var(--terminal-short)', fontWeight: 600 }}>
                   {signedUsd(funding)}
                 </td>
               )}
@@ -885,8 +885,8 @@ const S = {
   state: { padding: 20, textAlign: 'center', color: 'var(--terminal-text-muted)' },
   scroller: { width: '100%', overflowX: 'auto', WebkitOverflowScrolling: 'touch' },
   table: { width: '100%', minWidth: 680, borderCollapse: 'collapse', fontSize: 12, fontVariantNumeric: 'tabular-nums' },
-  th: { padding: '6px 12px', textAlign: 'left', color: 'var(--terminal-text-muted)', fontWeight: 700, fontSize: 10, textTransform: 'uppercase', background: 'var(--terminal-surface-subtle)', whiteSpace: 'nowrap' },
+  th: { padding: '6px 12px', textAlign: 'left', color: 'var(--terminal-text-muted)', fontWeight: 600, fontSize: 10, textTransform: 'uppercase', background: 'var(--terminal-surface-subtle)', whiteSpace: 'nowrap' },
   td: { padding: '6px 12px', color: 'var(--terminal-text)', fontSize: 12, borderBottom: '1px solid var(--terminal-border)', whiteSpace: 'nowrap' },
   tr: { background: 'var(--terminal-surface)' },
-  retryButton: { marginTop: 10, padding: '7px 14px', borderRadius: 8, border: '1px solid var(--terminal-border)', background: 'var(--terminal-surface-subtle)', color: 'var(--terminal-text)', fontWeight: 700, cursor: 'pointer' },
+  retryButton: { marginTop: 10, padding: '7px 14px', borderRadius: 999, border: '1px solid var(--terminal-border)', background: 'var(--terminal-surface-subtle)', color: 'var(--terminal-text)', fontWeight: 600, cursor: 'pointer' },
 };

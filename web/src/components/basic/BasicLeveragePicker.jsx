@@ -73,7 +73,7 @@ function BasicLeveragePicker({ amount, direction, maxLeverage = 20, onPick, onBa
         style={{
           ...S.banner,
           borderColor: band.color,
-          boxShadow: '0 4px 12px rgba(17,24,39,0.06)',
+          boxShadow: 'var(--terminal-shadow-card)',
         }}
       >
         <div style={S.bannerLeft}>
@@ -140,7 +140,7 @@ export { tierForLev };
 const S = {
   tightTitle: {
     fontSize: 'clamp(16px, 3vh, 20px)',
-    fontWeight: 700, color: colors.ink,
+    fontWeight: 600, color: colors.ink,
     textAlign: 'center', letterSpacing: '0.3px',
     margin: '2px 0 6px', lineHeight: 1.1,
   },
@@ -158,15 +158,15 @@ const S = {
   bannerLeft: { display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 },
   bannerIcon: { fontSize: 22, lineHeight: 1 },
   bannerLabel: {
-    fontSize: 14, fontWeight: 700, letterSpacing: '0.6px',
+    fontSize: 14, fontWeight: 600, letterSpacing: '0.6px',
   },
   bannerValue: {
-    fontSize: 'clamp(20px, 4vh, 26px)', fontWeight: 700,
+    fontSize: 'clamp(20px, 4vh, 26px)', fontWeight: 600,
     fontVariantNumeric: 'tabular-nums',
   },
   bannerBlurb: {
     margin: '2px 4px 4px',
-    fontSize: 12, fontWeight: 700, color: colors.inkFaint,
+    fontSize: 12, fontWeight: 600, color: colors.inkFaint,
     textAlign: 'center', lineHeight: 1.35,
   },
 
@@ -211,13 +211,13 @@ const S = {
     letterSpacing: '0.3px', marginBottom: 2,
   },
   statValue: {
-    fontSize: 14, fontWeight: 700, color: colors.ink,
+    fontSize: 14, fontWeight: 600, color: colors.ink,
     fontVariantNumeric: 'tabular-nums',
   },
   continueBtn: uiButton('primary', { width: '100%', minHeight: 44, padding: 12, fontSize: 15, boxSizing: 'border-box' }),
   backLink: {
     background: 'transparent', border: 'none',
-    color: colors.inkFaint, fontSize: 12, fontWeight: 700,
+    color: colors.inkFaint, fontSize: 12, fontWeight: 600,
     textAlign: 'center', padding: '4px 0', marginTop: 2,
     cursor: 'pointer', fontFamily: 'inherit',
   },

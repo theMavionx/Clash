@@ -12,11 +12,11 @@ export default function BulkOneTapControl({ state, setEnabled, revoke, reload })
     catch (error) { setFeedback(error.message || 'Bulk one-tap request failed.'); }
     finally { setRunning(false); }
   };
-  const button = { padding: '9px 12px', borderRadius: 8, border: '1px solid var(--terminal-border)',
-    background: 'var(--terminal-surface)', color: 'var(--terminal-text)', cursor: busy ? 'wait' : 'pointer', fontWeight: 700 };
+  const button = { padding: '9px 12px', borderRadius: 999, border: '1px solid var(--terminal-border)',
+    background: 'var(--terminal-surface)', color: 'var(--terminal-text)', cursor: busy ? 'wait' : 'pointer', fontWeight: 600 };
   return <>
     <button type="button" onClick={() => setOpen(true)} style={{ ...button, alignSelf: 'flex-end', padding: '5px 9px', fontSize: 11 }}>
-      ⚡ One tap · {state?.enabled ? 'ON' : 'OFF'}
+      ⚡ One tap · {state?.enabled ? 'On' : 'Off'}
     </button>
     {open && <PositionActionDialog title="BULK one-tap trading" onClose={() => setOpen(false)} feedback={feedback || state?.message}>
       <p style={{ marginTop: 0 }}>Approve a dedicated trading key once with your wallet. Then open, close and cancel orders without a wallet popup for every action.</p>

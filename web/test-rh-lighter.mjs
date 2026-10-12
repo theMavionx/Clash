@@ -35,7 +35,7 @@ assert.match(walletSelection, /'lighter', 'rhlighter'/);
 assert.match(authFlow, /authDex === 'rhlighter' \? 'rhlighter'/);
 assert.match(app, /dex === 'rhlighter'/);
 assert.match(tournamentUtils, /rhlighter:\s*'Robinhood Lighter'/);
-assert.match(registerPanel, /cfg\.id === 'lighter' \|\| cfg\.id === 'rhlighter' \? 'SELF-CUSTODY · EVM'/);
+assert.match(registerPanel, /cfg\.id === 'lighter' \|\| cfg\.id === 'rhlighter' \? 'Self-custody · EVM'/);
 assert.match(registerPanel, /applies CLASSHOFPERPS/);
 assert.doesNotMatch(hook, /clash_rh_lighter_credentials_v1[\s\S]{0,500}'CLASHOFPERPS'/);
 

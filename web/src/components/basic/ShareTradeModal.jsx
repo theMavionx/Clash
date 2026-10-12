@@ -207,7 +207,7 @@ const S = {
     borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--terminal-border)',
     borderRadius: 16,
     padding: 14,
-    boxShadow: '0 24px 64px rgba(17,24,39,0.22)',
+    boxShadow: 'var(--terminal-shadow-card)',
     display: 'flex', flexDirection: 'column', gap: 12,
     fontFamily: '"Inter","Segoe UI",sans-serif',
     boxSizing: 'border-box',
@@ -216,7 +216,7 @@ const S = {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
   },
   title: {
-    fontSize: 16, fontWeight: 700, color: colors.ink,
+    fontSize: 16, fontWeight: 600, color: colors.ink,
     letterSpacing: '0.4px',
   },
   closeBtn: uiIconButton('secondary', 32),
@@ -245,7 +245,7 @@ const S = {
     boxSizing: 'border-box',
   },
   errorBox: {
-    color: colors.shortDark, fontSize: 13, fontWeight: 700,
+    color: colors.shortDark, fontSize: 13, fontWeight: 600,
     textAlign: 'center', padding: 12,
   },
   actions: {
@@ -257,19 +257,19 @@ const S = {
     opacity: 0.6, cursor: 'wait',
   },
   feedbackOk: {
-    fontSize: 12, fontWeight: 700,
+    fontSize: 12, fontWeight: 600,
     color: 'var(--terminal-long)',
     background: 'var(--terminal-long-soft)',
     border: '1px solid var(--terminal-long-border)',
-    padding: '6px 10px', borderRadius: 8,
+    padding: '6px 10px', borderRadius: 999,
     textAlign: 'center',
   },
   feedbackErr: {
-    fontSize: 12, fontWeight: 700,
+    fontSize: 12, fontWeight: 600,
     color: 'var(--terminal-short)',
     background: 'var(--terminal-short-soft)',
     border: '1px solid var(--terminal-short-border)',
-    padding: '6px 10px', borderRadius: 8,
+    padding: '6px 10px', borderRadius: 999,
     textAlign: 'center',
   },
 };

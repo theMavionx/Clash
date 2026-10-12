@@ -779,7 +779,7 @@ export default function SanctumShopTab({
           />
         </div>
         <div className="sanctum-shop__hero-copy">
-          <span className="sanctum-shop__eyebrow">POWERED BY SANCTUM</span>
+          <span className="sanctum-shop__eyebrow">Powered by Sanctum</span>
           <h2>Stake on Sanctum. Earn yield. Claim Gold.</h2>
           <p>Stake on Sanctum, then link the same wallet here for Daily Gold.</p>
         </div>
@@ -1024,7 +1024,7 @@ export default function SanctumShopTab({
           >
             <header className="sanctum-swap-progress__header">
               <div>
-                <span className="sanctum-shop__eyebrow">SANCTUM SWAP</span>
+                <span className="sanctum-shop__eyebrow">Sanctum swap</span>
                 <h3 id="sanctum-swap-progress-title">
                   {swapProgress.status === 'success'
                     ? 'Swap confirmed'

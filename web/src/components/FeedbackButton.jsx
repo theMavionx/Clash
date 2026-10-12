@@ -18,18 +18,18 @@ export default function FeedbackButton() {
           pointer-events: auto;
           height: 34px;
           padding: 0 12px;
-          border: 1px solid var(--terminal-border-strong);
-          border-radius: 10px;
+          border: 1px solid var(--terminal-border);
+          border-radius: 999px;
           background: var(--terminal-surface);
           color: var(--terminal-text);
           box-shadow: none;
           font-family: inherit;
           font-size: 12px;
-          font-weight: 700;
-          letter-spacing: 0;
+          font-weight: 600;
+
           cursor: pointer;
         }
-        .clash-feedback-button:hover { filter: brightness(1.04); }
+        .clash-feedback-button:hover { background: var(--terminal-hover); }
         @media (max-width: 720px) {
           .clash-feedback-button {
             left: 10px;
@@ -79,7 +79,7 @@ const S = {
     inset: 0,
     zIndex: 1200,
     pointerEvents: 'auto',
-    background: 'rgba(0,0,0,0.52)',
+    background: 'var(--terminal-overlay)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -87,17 +87,17 @@ const S = {
   },
   modal: {
     width: 'min(360px, calc(100vw - 28px))',
-    borderRadius: 20,
+    borderRadius: 16,
     border: '1px solid var(--terminal-border)',
     background: 'var(--terminal-surface)',
     color: 'var(--terminal-text)',
     overflow: 'hidden',
-    boxShadow: '0 18px 38px rgba(0,0,0,0.45)',
-    fontFamily: '"Inter", "Segoe UI", sans-serif',
+    boxShadow: 'var(--terminal-shadow-card)',
+    fontFamily: 'inherit',
   },
   header: {
     height: 44,
-    background: 'var(--terminal-surface-subtle)',
+    background: 'var(--terminal-surface)',
     borderBottom: '1px solid var(--terminal-border)',
     display: 'flex',
     alignItems: 'center',
@@ -106,11 +106,11 @@ const S = {
   },
   title: {
     fontSize: 15,
-    fontWeight: 700,
-    letterSpacing: 0,
+    fontWeight: 600,
+
     color: 'var(--terminal-text)',
   },
-  close: uiIconButton('secondary', 30, { fontSize: 15 }),
+  close: uiIconButton('ghost', 30, { fontSize: 15 }),
   body: {
     padding: 14,
     display: 'flex',

@@ -32,7 +32,7 @@ function BasicConfirm({
     ? price * (1 - liqMovePct / 100)
     : price * (1 + liqMovePct / 100);
   const directionColor = direction === 'long' ? colors.long : colors.short;
-  const directionLabel = direction === 'long' ? 'LONG' : 'SHORT';
+  const directionLabel = direction === 'long' ? 'Long' : 'Short';
 
   // Swipe-to-confirm — drag thumb across the track. Track width measured at
   // runtime so the maths matches the actual render size on every viewport.
@@ -179,7 +179,7 @@ function BasicConfirm({
             <svg width="28" height="28" viewBox="0 0 24 24"
                  fill="none" stroke="var(--terminal-surface)" strokeWidth="3.5"
                  strokeLinecap="round" strokeLinejoin="round"
-                 style={{ filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.25))' }}>
+                 style={{ filter: 'none' }}>
               <line x1="5" y1="12" x2="19" y2="12" />
               <polyline points="13 6 19 12 13 18" />
             </svg>
@@ -207,7 +207,7 @@ const S = {
   },
   tightTitle: {
     fontSize: 'clamp(16px, 3vh, 20px)',
-    fontWeight: 700, color: colors.ink,
+    fontWeight: 600, color: colors.ink,
     textAlign: 'center', letterSpacing: '0.3px',
     margin: '2px 0 4px', lineHeight: 1.1,
   },
@@ -215,7 +215,7 @@ const S = {
     padding: '12px 14px', borderRadius: 16,
     background: 'var(--terminal-surface)',
     borderWidth: 1, borderStyle: 'solid', borderColor: 'transparent',
-    boxShadow: '0 4px 14px rgba(17,24,39,0.06)',
+    boxShadow: 'var(--terminal-shadow-card)',
     display: 'flex', flexDirection: 'column', gap: 6,
     boxSizing: 'border-box',
     width: '100%',
@@ -225,8 +225,8 @@ const S = {
   },
   header: { display: 'flex', alignItems: 'center', gap: 10 },
   directionBadge: {
-    padding: '4px 10px', borderRadius: 8,
-    fontSize: 12, fontWeight: 700, letterSpacing: '1px',
+    padding: '4px 10px', borderRadius: 999,
+    fontSize: 12, fontWeight: 600, letterSpacing: 0,
     color: 'var(--terminal-on-accent)',
   },
   symbol: {
@@ -234,14 +234,14 @@ const S = {
   },
   bigSize: {
     fontSize: 'clamp(20px, 4vh, 26px)',
-    fontWeight: 700, color: colors.ink,
+    fontWeight: 600, color: colors.ink,
     letterSpacing: '-0.5px',
     fontVariantNumeric: 'tabular-nums',
     marginTop: 2,
   },
-  x: { color: colors.inkFaint, fontWeight: 700 },
+  x: { color: colors.inkFaint, fontWeight: 600 },
   equals: {
-    fontSize: 13, fontWeight: 700, color: colors.inkSoft,
+    fontSize: 13, fontWeight: 600, color: colors.inkSoft,
   },
   divider: {
     height: 1, background: 'var(--terminal-border)',
@@ -252,7 +252,7 @@ const S = {
     gap: 8,
     minWidth: 0,
   },
-  rowLabel: { fontSize: 12, fontWeight: 700, color: colors.inkFaint, letterSpacing: '0.3px' },
+  rowLabel: { fontSize: 12, fontWeight: 600, color: colors.inkFaint, letterSpacing: '0.3px' },
   rowValue: {
     fontSize: 14, fontWeight: 600, color: colors.ink, fontVariantNumeric: 'tabular-nums',
     textAlign: 'right', minWidth: 0, overflowWrap: 'anywhere',
@@ -287,7 +287,7 @@ const S = {
     position: 'absolute', inset: 0,
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     paddingLeft: THUMB_SIZE,  // centre label over the un-filled portion
-    fontSize: 'clamp(11px, 3.5vw, 15px)', fontWeight: 700, letterSpacing: '0.4px',
+    fontSize: 'clamp(11px, 3.5vw, 15px)', fontWeight: 600, letterSpacing: '0.4px',
     color: colors.inkSoft,
     pointerEvents: 'none',
     boxSizing: 'border-box',
@@ -300,7 +300,7 @@ const S = {
     width: THUMB_SIZE, height: THUMB_SIZE,
     borderRadius: '50%',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
-    boxShadow: '0 3px 10px rgba(17,24,39,0.18)',
+    boxShadow: 'var(--terminal-shadow-card)',
     boxSizing: 'border-box',
     touchAction: 'none',
     zIndex: 2,
@@ -310,13 +310,13 @@ const S = {
     width: 22, height: 22,
     borderWidth: 1,
     borderStyle: 'solid',
-    borderColor: 'rgba(255,255,255,0.35)',
+    borderColor: 'var(--terminal-chip-overlay)',
     borderTopColor: 'var(--terminal-on-accent)',
     borderRadius: '50%',
   },
   backLink: {
     background: 'transparent', border: 'none',
-    color: colors.inkFaint, fontSize: 13, fontWeight: 700,
+    color: colors.inkFaint, fontSize: 13, fontWeight: 600,
     textAlign: 'center', padding: '8px 0', marginTop: 4,
     cursor: 'pointer', fontFamily: 'inherit',
   },

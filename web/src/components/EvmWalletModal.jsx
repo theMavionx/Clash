@@ -287,8 +287,8 @@ export default function EvmWalletModal({ open, onClose, onConnected, targetChain
     <div className="perps-wallet-modal" onClick={onClose} style={M.overlay}>
       <div role="dialog" aria-modal="true" aria-labelledby="evm-wallet-title" onClick={e => e.stopPropagation()} style={M.panel}>
         <div style={M.header}>
-          <span id="evm-wallet-title" style={M.headerTitle}>CONNECT WALLET</span>
-          <button type="button" onClick={onClose} style={M.closeBtn} aria-label="Close">✖</button>
+          <span id="evm-wallet-title" style={M.headerTitle}>Connect wallet</span>
+          <button type="button" onClick={onClose} style={M.closeBtn} aria-label="Close">×</button>
         </div>
         <div style={M.body}>
           <div style={M.subtitle}>
@@ -342,7 +342,7 @@ export default function EvmWalletModal({ open, onClose, onConnected, targetChain
 
           {error && <div style={M.error}>{error}</div>}
 
-          <button type="button" onClick={onClose} style={M.cancelBtn}>CANCEL</button>
+          <button type="button" onClick={onClose} style={M.cancelBtn}>Cancel</button>
         </div>
       </div>
     </div>
@@ -352,7 +352,7 @@ export default function EvmWalletModal({ open, onClose, onConnected, targetChain
 const M = {
   overlay: {
     position: 'fixed', inset: 0, zIndex: 1000,
-    background: 'rgba(17,24,39,0.48)',
+    background: 'var(--terminal-overlay)',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     pointerEvents: 'all',
   },
@@ -360,10 +360,10 @@ const M = {
     width: 380, maxWidth: 'calc(100vw - 24px)', maxHeight: 'calc(100dvh - 24px)',
     background: 'var(--terminal-surface)',
     border: '1px solid var(--terminal-border)', borderRadius: 16,
-    boxShadow: '0 24px 64px rgba(17,24,39,0.22)',
+    boxShadow: 'var(--terminal-shadow-card)',
     display: 'flex', flexDirection: 'column',
     overflow: 'auto',
-    fontFamily: '"Inter","Segoe UI",sans-serif',
+    fontFamily: 'inherit',
   },
   header: {
     display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative',
@@ -371,66 +371,64 @@ const M = {
     borderBottom: '1px solid var(--terminal-border)',
   },
   headerTitle: {
-    fontSize: 17, fontWeight: 750, color: 'var(--terminal-text)',
-    textTransform: 'uppercase', letterSpacing: .5,
+    fontSize: 17, fontWeight: 600, color: 'var(--terminal-text)',
   },
-  closeBtn: uiIconButton('secondary', 34, {
+  closeBtn: uiIconButton('ghost', 34, {
     position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)',
-    fontSize: 14, fontWeight: 700,
+    fontSize: 14, fontWeight: 600,
   }),
   body: {
     padding: '16px 20px 20px',
     display: 'flex', flexDirection: 'column', gap: 12,
   },
   subtitle: {
-    fontSize: 12, fontWeight: 650, color: 'var(--terminal-text-muted)',
-    textAlign: 'center', letterSpacing: 0.3,
+    fontSize: 13, fontWeight: 500, color: 'var(--terminal-text-muted)',
+    textAlign: 'center',
   },
   note: {
     marginTop: -6,
-    fontSize: 11,
-    fontWeight: 700,
-    color: 'var(--terminal-text-muted)',
+    fontSize: 12,
+    fontWeight: 500,
+    color: 'var(--terminal-text-faint)',
     textAlign: 'center',
     lineHeight: 1.35,
   },
   empty: {
     padding: '18px 14px', borderRadius: 12,
-    background: 'var(--terminal-surface-subtle)',
-    border: '1px dashed var(--terminal-border-strong)',
+    background: 'var(--terminal-surface-muted)',
+    border: '1px solid var(--terminal-border)',
     color: 'var(--terminal-text-muted)', fontSize: 13, textAlign: 'center', lineHeight: 1.5,
   },
   list: { display: 'flex', flexDirection: 'column', gap: 8 },
   providerBtn: uiButton('secondary', {
     width: '100%', justifyContent: 'flex-start', gap: 12,
-    minHeight: 52, padding: '12px 14px',
-    fontSize: 15, fontWeight: 700,
+    minHeight: 52, padding: '12px 14px', borderRadius: 12,
+    fontSize: 14, fontWeight: 600,
     textAlign: 'left', outline: 'none',
     fontFamily: 'inherit',
   }),
   providerBtnActive: {
     background: 'var(--terminal-brand-soft)',
-    borderColor: 'var(--terminal-orange)',
+    borderColor: 'var(--terminal-brand-border)',
   },
   providerIcon: {
     width: 28, height: 28, borderRadius: 6,
   },
   providerFallbackIcon: {
     width: 28, height: 28, borderRadius: 6,
-    background: 'var(--terminal-orange)',
+    background: 'var(--terminal-surface-muted)', border: '1px solid var(--terminal-border)',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
-    fontSize: 14, fontWeight: 700, color: 'var(--terminal-on-accent)',
+    fontSize: 14, fontWeight: 600, color: 'var(--terminal-text)',
   },
   providerName: { flex: 1 },
   connectingLabel: {
-    fontSize: 11, fontWeight: 700, color: 'var(--terminal-brand-strong)',
-    textTransform: 'uppercase', letterSpacing: 0.5,
+    fontSize: 12, fontWeight: 500, color: 'var(--terminal-brand-text)',
   },
   error: {
-    padding: '10px 12px', borderRadius: 10,
+    padding: '10px 12px', borderRadius: 12,
     background: 'var(--terminal-short-soft)',
     border: '1px solid var(--terminal-short-border)',
-    color: 'var(--terminal-short)', fontSize: 12, fontWeight: 700,
+    color: 'var(--terminal-short)', fontSize: 12, fontWeight: 600,
   },
-  cancelBtn: uiButton('secondary', { width: '100%', minHeight: 44, padding: '11px 18px', textTransform: 'uppercase' }),
+  cancelBtn: uiButton('secondary', { width: '100%', minHeight: 44, padding: '11px 18px' }),
 };

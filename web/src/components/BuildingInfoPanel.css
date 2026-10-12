@@ -1,25 +1,25 @@
 .building-info-modal__overlay {
-  --bim-canvas: #f5f5f5;
-  --bim-surface: #ffffff;
-  --bim-surface-subtle: #f9fafb;
-  --bim-surface-muted: #f3f4f6;
-  --bim-line: #e5e7eb;
-  --bim-line-strong: #d1d5db;
-  --bim-text: #111827;
-  --bim-text-secondary: #4b5563;
-  --bim-text-muted: #6b7280;
-  --bim-brand: #f26522;
-  --bim-brand-strong: #d95618;
-  --bim-brand-soft: #fff3ec;
-  --bim-brand-line: #fed7aa;
-  --bim-long: #087a55;
-  --bim-short: #d14343;
-  --bim-short-soft: #fef2f2;
-  --bim-short-line: #fecaca;
-  --bim-overlay: rgba(17, 24, 39, 0.48);
-  --bim-shadow: rgba(17, 24, 39, 0.16);
-  --bim-sphere-start: #ffffff;
-  --bim-sphere-end: #eef1f4;
+  --bim-canvas: var(--terminal-canvas);
+  --bim-surface: var(--terminal-surface);
+  --bim-surface-subtle: var(--terminal-surface-subtle);
+  --bim-surface-muted: var(--terminal-surface-muted);
+  --bim-line: var(--terminal-border);
+  --bim-line-strong: var(--terminal-border-strong);
+  --bim-text: var(--terminal-text);
+  --bim-text-secondary: var(--terminal-text-secondary);
+  --bim-text-muted: var(--terminal-text-muted);
+  --bim-brand: var(--terminal-orange);
+  --bim-brand-strong: var(--terminal-brand-strong);
+  --bim-brand-soft: var(--terminal-brand-soft);
+  --bim-brand-line: var(--terminal-brand-border);
+  --bim-long: var(--terminal-long);
+  --bim-short: var(--terminal-short);
+  --bim-short-soft: var(--terminal-short-soft);
+  --bim-short-line: var(--terminal-short-border);
+  --bim-overlay: var(--terminal-overlay);
+  --bim-shadow: var(--terminal-shadow);
+  --bim-sphere-start: var(--terminal-surface-muted);
+  --bim-sphere-end: var(--terminal-surface-muted);
 
   position: fixed;
   inset: 0;
@@ -30,32 +30,7 @@
   padding: 20px;
   background: var(--bim-overlay);
   pointer-events: auto;
-  font-family: Inter, "Segoe UI", system-ui, sans-serif;
-}
-
-:root[data-ui-theme='dark'] .building-info-modal__overlay,
-:root[data-futures-theme='dark'] .building-info-modal__overlay {
-  --bim-canvas: #0b0f17;
-  --bim-surface: #111827;
-  --bim-surface-subtle: #171f2d;
-  --bim-surface-muted: #1f2937;
-  --bim-line: #2c3748;
-  --bim-line-strong: #3a475c;
-  --bim-text: #f9fafb;
-  --bim-text-secondary: #cbd5e1;
-  --bim-text-muted: #aab4c3;
-  --bim-brand: #f47a3c;
-  --bim-brand-strong: #f26522;
-  --bim-brand-soft: #3a2117;
-  --bim-brand-line: #7c3a1e;
-  --bim-long: #34d399;
-  --bim-short: #f87171;
-  --bim-short-soft: #3a1c22;
-  --bim-short-line: #7f2634;
-  --bim-overlay: rgba(2, 6, 23, 0.72);
-  --bim-shadow: rgba(0, 0, 0, 0.34);
-  --bim-sphere-start: #253044;
-  --bim-sphere-end: #151d2a;
+  font-family: inherit;
 }
 
 .building-info-modal {
@@ -91,7 +66,7 @@
   margin: 0;
   color: var(--bim-text);
   font-size: 18px;
-  font-weight: 750;
+  font-weight: 600;
   letter-spacing: -0.01em;
   line-height: 1.2;
   text-overflow: ellipsis;
@@ -114,7 +89,7 @@
   color: var(--bim-text-secondary);
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 10px;
+  border-radius: 999px;
   font: inherit;
   font-size: 25px;
   line-height: 1;
@@ -128,17 +103,17 @@
 }
 
 .building-info-modal__close:focus-visible {
-  outline: 3px solid rgba(242, 101, 34, 0.24);
+  outline: 3px solid var(--terminal-brand-ring);
   outline-offset: -4px !important;
 }
 
 .building-info-modal__action:focus-visible {
-  outline: 3px solid rgba(242, 101, 34, 0.24);
+  outline: 3px solid var(--terminal-brand-ring);
   outline-offset: 2px;
 }
 
 .building-info-modal__body:focus-visible {
-  outline: 3px solid rgba(242, 101, 34, 0.28);
+  outline: 3px solid var(--terminal-brand-ring);
   outline-offset: -3px;
 }
 
@@ -179,7 +154,7 @@
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  background: radial-gradient(circle at 32% 28%, var(--bim-sphere-start), var(--bim-sphere-end) 72%);
+  background: var(--bim-surface-muted);
   border: 1px solid var(--bim-line);
   border-radius: 50%;
 }
@@ -191,7 +166,7 @@
   height: 100%;
   object-fit: contain;
   pointer-events: none;
-  filter: drop-shadow(0 10px 18px rgba(17, 24, 39, 0.2));
+  filter: drop-shadow(0 10px 18px var(--terminal-shadow));
 }
 
 .building-info-modal__building-image--altar {
@@ -219,7 +194,7 @@
   border-radius: 999px;
   font-size: 12px;
   font-variant-numeric: tabular-nums;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .building-info-modal__level strong {
@@ -246,7 +221,7 @@
   margin: 0 0 10px;
   color: var(--bim-text);
   font-size: 14px;
-  font-weight: 750;
+  font-weight: 600;
   letter-spacing: 0.02em;
 }
 
@@ -261,7 +236,7 @@
   padding: 11px 12px;
   background: var(--bim-surface-subtle);
   border: 1px solid var(--bim-line);
-  border-radius: 10px;
+  border-radius: 12px;
 }
 
 .building-info-stat__label {
@@ -269,7 +244,7 @@
   margin-bottom: 5px;
   color: var(--bim-text-muted);
   font-size: 11px;
-  font-weight: 650;
+  font-weight: 600;
   letter-spacing: 0.035em;
   line-height: 1.25;
   text-overflow: ellipsis;
@@ -314,9 +289,9 @@
   color: var(--bim-text-secondary);
   background: var(--bim-surface-subtle);
   border: 1px solid var(--bim-line);
-  border-radius: 10px;
+  border-radius: 12px;
   font-size: 13px;
-  font-weight: 550;
+  font-weight: 500;
   line-height: 1.5;
 }
 
@@ -344,7 +319,7 @@
   padding: 8px 10px;
   background: var(--bim-surface-subtle);
   border: 1px solid var(--bim-line);
-  border-radius: 10px;
+  border-radius: 12px;
 }
 
 .building-info-cost__chip--short {
@@ -372,7 +347,7 @@
 .building-info-cost__required-label {
   color: var(--bim-text-muted) !important;
   font-size: 10px;
-  font-weight: 650;
+  font-weight: 600;
   letter-spacing: 0.035em;
   text-transform: uppercase;
 }
@@ -401,7 +376,7 @@
   color: var(--bim-text-muted);
   background: var(--bim-surface-subtle);
   border: 1px dashed var(--bim-line-strong);
-  border-radius: 10px;
+  border-radius: 12px;
   font-size: 12px;
   text-align: center;
 }
@@ -422,7 +397,7 @@
   flex: 1 1 auto;
   color: var(--bim-short);
   font-size: 11px;
-  font-weight: 650;
+  font-weight: 600;
   line-height: 1.35;
 }
 
@@ -430,13 +405,13 @@
   min-width: 220px;
   min-height: 48px;
   padding: 12px 20px;
-  color: #ffffff;
+  color: var(--terminal-on-accent);
   background: var(--bim-brand);
   border: 1px solid var(--bim-brand-strong);
-  border-radius: 10px;
+  border-radius: 999px;
   font: inherit;
   font-size: 14px;
-  font-weight: 750;
+  font-weight: 600;
   cursor: pointer;
 }
 
@@ -612,7 +587,7 @@
 .building-config-modal__body > div:first-child {
   color: var(--bim-text-muted) !important;
   font-size: 11px !important;
-  font-weight: 700 !important;
+  font-weight: 600 !important;
   letter-spacing: .06em !important;
   text-transform: uppercase;
 }
@@ -643,7 +618,7 @@
 .building-config-modal__body > div:nth-child(3) {
   color: var(--bim-text-secondary) !important;
   font-size: 13px !important;
-  font-weight: 550 !important;
+  font-weight: 500 !important;
   line-height: 1.5 !important;
 }
 
@@ -652,7 +627,7 @@
   color: var(--bim-text-secondary) !important;
   background: var(--bim-surface-subtle) !important;
   border: 1px dashed var(--bim-line-strong) !important;
-  border-radius: 10px !important;
+  border-radius: 12px !important;
 }
 
 .altar-config-modal__scroll {
@@ -673,7 +648,7 @@
   color: var(--bim-text-secondary) !important;
   background: var(--bim-surface-subtle) !important;
   border: 1px solid var(--bim-line) !important;
-  border-radius: 10px !important;
+  border-radius: 999px !important;
   box-shadow: none !important;
   text-shadow: none !important;
 }
@@ -712,7 +687,7 @@
 .altar-config-modal__branch-title {
   color: var(--bim-text) !important;
   font-size: 18px !important;
-  font-weight: 750 !important;
+  font-weight: 600 !important;
   text-shadow: none !important;
 }
 
@@ -782,9 +757,9 @@
   color: var(--bim-short);
   background: var(--bim-short-soft);
   border: 1px solid var(--bim-short-line);
-  border-radius: 10px;
+  border-radius: 12px;
   font-size: 11px;
-  font-weight: 650;
+  font-weight: 600;
   line-height: 1.4;
 }
 
@@ -856,7 +831,7 @@
   min-width: 0;
   color: var(--bim-text) !important;
   font-size: 12px !important;
-  font-weight: 650 !important;
+  font-weight: 600 !important;
 }
 
 .unit-load-modal__ship-copy {
@@ -880,19 +855,14 @@
 }
 
 .unit-load-modal__ship-next {
-  color: #b45309;
-}
-
-:root[data-ui-theme='dark'] .unit-load-modal__ship-next,
-:root[data-futures-theme='dark'] .unit-load-modal__ship-next {
-  color: #fbbf24;
+  color: var(--terminal-warning);
 }
 
 .unit-load-modal__ship-status {
   flex: 1 0 100%;
   color: var(--bim-text-secondary) !important;
   font-size: 11px !important;
-  font-weight: 650;
+  font-weight: 600;
   text-align: right;
 }
 
@@ -900,10 +870,10 @@
   min-width: 132px;
   min-height: 44px !important;
   padding: 9px 14px !important;
-  color: #fff !important;
+  color: var(--terminal-on-accent) !important;
   background: var(--bim-brand) !important;
   border: 1px solid var(--bim-brand-strong) !important;
-  border-radius: 10px !important;
+  border-radius: 999px !important;
   box-shadow: none !important;
   text-shadow: none !important;
 }
@@ -927,7 +897,7 @@
   color: var(--bim-text);
   content: "Loaded troops";
   font-size: 13px;
-  font-weight: 750;
+  font-weight: 600;
 }
 
 .unit-load-modal__roster-scroll {
@@ -946,7 +916,7 @@
   color: var(--bim-text);
   background: var(--bim-surface-subtle) !important;
   border: 1px solid var(--bim-line-strong) !important;
-  border-radius: 10px !important;
+  border-radius: 12px !important;
   box-shadow: none !important;
   scroll-snap-align: start;
 }
@@ -982,7 +952,7 @@
 .unit-load-card--selected {
   background: var(--bim-brand-soft) !important;
   border-color: var(--bim-brand) !important;
-  box-shadow: 0 0 0 2px rgba(242, 101, 34, 0.18) !important;
+  box-shadow: 0 0 0 2px var(--terminal-brand-ring) !important;
   transform: none !important;
 }
 
@@ -1004,12 +974,12 @@
 
 .unit-load-card__free-number {
   font-size: 22px;
-  font-weight: 750;
+  font-weight: 600;
 }
 
 .unit-load-card__free-label {
   font-size: 10px;
-  font-weight: 650;
+  font-weight: 600;
   letter-spacing: .035em;
   text-align: center;
 }
@@ -1056,13 +1026,13 @@
   color: var(--bim-text);
   content: "Available troops";
   font-size: 13px;
-  font-weight: 750;
+  font-weight: 600;
 }
 
 .unit-load-modal__catalog > div:first-of-type {
   color: var(--bim-text-muted) !important;
   font-size: 11px !important;
-  font-weight: 550 !important;
+  font-weight: 500 !important;
   text-align: left !important;
 }
 
@@ -1090,12 +1060,12 @@
   background: var(--bim-surface) !important;
   border: 1px solid var(--bim-line) !important;
   border-radius: 12px !important;
-  box-shadow: 0 1px 2px rgba(17, 24, 39, .06) !important;
+  box-shadow: 0 1px 2px var(--terminal-shadow-soft) !important;
 }
 
 .unit-catalog-card:hover:not(.unit-catalog-card--locked):not([aria-disabled="true"]) {
   border-color: var(--bim-brand) !important;
-  box-shadow: 0 0 0 2px rgba(242, 101, 34, .14) !important;
+  box-shadow: 0 0 0 2px var(--terminal-brand-ring) !important;
 }
 
 .unit-catalog-card--locked,
@@ -1127,7 +1097,7 @@
   color: transparent !important;
   background: transparent !important;
   border: 0 !important;
-  border-radius: 10px !important;
+  border-radius: 999px !important;
   box-shadow: none !important;
 }
 
@@ -1141,19 +1111,18 @@
   background: color-mix(in srgb, var(--bim-surface) 94%, transparent);
   border: 1px solid var(--bim-line-strong);
   border-radius: 8px;
-  font-family: Georgia, serif;
+  font-family: inherit;
   font-size: 15px;
-  font-style: italic;
   font-weight: 700;
   line-height: 1;
-  box-shadow: 0 1px 2px rgba(17, 24, 39, .12);
+  box-shadow: none;
 }
 
 .unit-catalog-card__action:focus-visible,
 .unit-load-card__action:focus-visible,
 .unit-catalog-card__info:focus-visible,
 .unit-info-modal__close:focus-visible {
-  outline: 3px solid rgba(242, 101, 34, .28);
+  outline: 3px solid var(--terminal-brand-ring);
   outline-offset: 2px;
 }
 
@@ -1194,7 +1163,7 @@
   color: var(--bim-text-secondary) !important;
   background: transparent !important;
   border: 1px solid transparent !important;
-  border-radius: 10px !important;
+  border-radius: 999px !important;
   box-shadow: none !important;
   font-size: 24px !important;
 }
@@ -1225,15 +1194,15 @@
   margin: 0;
   color: var(--bim-text);
   font-size: 20px;
-  font-weight: 750;
+  font-weight: 600;
 }
 
 .unit-info-modal__role {
   margin-top: 5px;
-  color: var(--bim-brand-strong);
+  color: var(--bim-text-muted);
   font-size: 11px;
-  font-weight: 700;
-  letter-spacing: .04em;
+  font-weight: 600;
+  letter-spacing: .06em;
   text-transform: uppercase;
 }
 
@@ -1262,14 +1231,14 @@
   padding: 10px;
   background: var(--bim-surface-subtle);
   border: 1px solid var(--bim-line);
-  border-radius: 10px;
+  border-radius: 12px;
 }
 
 .unit-info-modal__stat span {
   display: block;
   color: var(--bim-text-muted);
   font-size: 10px;
-  font-weight: 650;
+  font-weight: 600;
   letter-spacing: .035em;
 }
 
@@ -1287,9 +1256,9 @@
   color: var(--bim-text-secondary);
   background: var(--bim-surface-muted);
   border: 1px solid var(--bim-line);
-  border-radius: 10px;
+  border-radius: 12px;
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 600;
   line-height: 1.35;
   text-align: center;
 }

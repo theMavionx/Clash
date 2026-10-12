@@ -24,14 +24,14 @@ export const tradingSetupStyles = {
   logoBadge: {
     width: 72,
     height: 72,
-    borderRadius: 18,
+    borderRadius: 16,
     alignSelf: 'center',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
     border: '1px solid var(--terminal-border)',
-    boxShadow: '0 8px 20px rgba(17,24,39,.10)',
+    boxShadow: 'var(--terminal-shadow-card)',
   },
   logo: {
     width: '82%',
@@ -47,7 +47,7 @@ export const tradingSetupStyles = {
   },
   kicker: {
     fontSize: 11,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-orange)',
     letterSpacing: 1.4,
     textTransform: 'uppercase',
@@ -55,7 +55,7 @@ export const tradingSetupStyles = {
   kickerBlocked: { color: 'var(--terminal-short)' },
   title: {
     fontSize: 'clamp(18px, 2.6vh, 22px)',
-    fontWeight: 750,
+    fontWeight: 600,
     color: 'var(--terminal-text)',
     lineHeight: 1.2,
   },
@@ -90,7 +90,7 @@ export const tradingSetupStyles = {
     alignItems: 'center',
     justifyContent: 'center',
     fontSize: 13,
-    fontWeight: 700,
+    fontWeight: 600,
     flexShrink: 0,
     marginTop: 1,
     background: 'var(--terminal-surface-muted)',
@@ -104,7 +104,7 @@ export const tradingSetupStyles = {
     background: 'var(--terminal-brand-soft)',
     border: '1px solid var(--terminal-orange)',
     color: 'var(--terminal-brand-strong)',
-    boxShadow: '0 0 0 3px rgba(242,101,34,.12)',
+    boxShadow: '0 0 0 3px var(--terminal-brand-ring)',
   },
   stepBubble_done: {
     background: 'var(--terminal-long)',
@@ -123,7 +123,7 @@ export const tradingSetupStyles = {
     lineHeight: 1.25,
     flex: 1,
   },
-  stepLabel: { fontSize: 13, fontWeight: 700, color: 'var(--terminal-text-muted)' },
+  stepLabel: { fontSize: 13, fontWeight: 600, color: 'var(--terminal-text-muted)' },
   stepLabel_active: { color: 'var(--terminal-text)' },
   stepLabel_done: { color: 'var(--terminal-text)' },
   stepLabel_error: { color: 'var(--terminal-short)' },
@@ -160,7 +160,7 @@ export const tradingSetupStyles = {
   },
   workingHint: {
     fontSize: 13,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-brand-text)',
     background: 'var(--terminal-brand-soft)',
     border: '1px solid var(--terminal-brand-border)',
@@ -178,7 +178,7 @@ export const tradingSetupStyles = {
     color: 'var(--terminal-text-secondary)',
     fontSize: 11,
     lineHeight: 1.45,
-    fontWeight: 750,
+    fontWeight: 600,
     overflowWrap: 'anywhere',
   },
   blockedBox: {
@@ -203,12 +203,12 @@ export const tradingSetupStyles = {
     borderRadius: 10,
     padding: '8px 10px',
     fontSize: 12,
-    fontWeight: 700,
+    fontWeight: 600,
     overflowWrap: 'anywhere',
   },
   footnote: {
     fontSize: 11,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-text-muted)',
     textAlign: 'center',
     lineHeight: 1.4,
@@ -224,7 +224,7 @@ function stepStyles(status) {
 }
 
 export const TradingSetupGate = memo(function TradingSetupGate({
-  kicker = 'ACTION REQUIRED',
+  kicker = 'Action required',
   title,
   subtitle,
   logo,
@@ -351,7 +351,7 @@ export const TradingRegionGate = memo(function TradingRegionGate({
 
   return (
     <TradingSetupGate
-      kicker={checking ? 'VERIFYING REGION' : blocked ? 'ACCESS BLOCKED' : 'CHECK REQUIRED'}
+      kicker={checking ? 'Verifying region' : blocked ? 'Access blocked' : 'Check required'}
       title={title}
       subtitle={subtitle}
       logo={logo}
@@ -365,8 +365,8 @@ export const TradingRegionGate = memo(function TradingRegionGate({
           ? `Wallet sign-in, account data, deposits, withdrawals and orders for ${venueName} are disabled through Clash from this IP region. This does not affect other exchanges.`
           : `Clash could not safely confirm your region. ${venueName} remains locked until the check succeeds.`
       ) : null}
-      primaryAction={unavailable && onRetry ? { label: 'RETRY REGION CHECK', onClick: onRetry } : null}
-      secondaryAction={!checking && onBack ? { label: 'CHOOSE ANOTHER EXCHANGE', onClick: onBack, variant: 'secondary' } : null}
+      primaryAction={unavailable && onRetry ? { label: 'Retry region check', onClick: onRetry } : null}
+      secondaryAction={!checking && onBack ? { label: 'Choose another exchange', onClick: onBack, variant: 'secondary' } : null}
       footnote={blocked ? 'Restricted regions include the United States, Canada, U.S. territories and sanctioned jurisdictions.' : null}
     />
   );

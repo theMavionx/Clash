@@ -255,7 +255,7 @@ export default function WalletSessionRecovery() {
     <>
       <style>{`
         .wallet-session-recovery button:focus-visible {
-          outline: 3px solid rgba(242, 101, 34, 0.28);
+          outline: 3px solid var(--terminal-brand-ring);
           outline-offset: 2px;
         }
       `}</style>
@@ -303,13 +303,13 @@ const S = {
     background: 'var(--terminal-surface)',
     border: '1px solid var(--terminal-border)',
     borderRadius: 16,
-    boxShadow: '0 16px 40px var(--terminal-shadow)',
+    boxShadow: 'var(--terminal-shadow-card)',
     padding: 16,
     boxSizing: 'border-box',
-    fontFamily: '"Inter","Segoe UI",sans-serif',
+    fontFamily: 'inherit',
   },
   close: {
-    ...uiIconButton('secondary', 36),
+    ...uiIconButton('ghost', 36),
     position: 'absolute',
     right: 10,
     top: 8,
@@ -319,7 +319,7 @@ const S = {
   title: {
     color: 'var(--terminal-text)',
     fontSize: 16,
-    fontWeight: 750,
+    fontWeight: 600,
     letterSpacing: '-0.01em',
   },
   text: {
@@ -341,7 +341,7 @@ const S = {
     fontFamily: 'inherit',
   },
   secondary: {
-    ...uiButton('danger', { minHeight: 44, padding: '10px 14px' }),
+    ...uiButton('secondary', { minHeight: 44, padding: '10px 14px' }),
     flex: '1 1 96px',
     fontFamily: 'inherit',
   },

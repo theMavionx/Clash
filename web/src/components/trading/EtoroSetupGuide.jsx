@@ -13,7 +13,7 @@ export default function EtoroSetupGuide() {
       fontSize: 12,
       lineHeight: 1.5,
     }}>
-      <summary style={{ cursor: 'pointer', fontWeight: 700, color: 'var(--terminal-text)' }}>
+      <summary style={{ cursor: 'pointer', fontWeight: 600, color: 'var(--terminal-text)' }}>
         How to create your eToro user key
       </summary>
       <ol style={{ margin: '12px 0', paddingLeft: 20, display: 'grid', gap: 10 }}>

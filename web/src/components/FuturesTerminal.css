@@ -37,7 +37,7 @@
   --terminal-info: #2563eb;
   --terminal-info-soft: #eff6ff;
   --terminal-info-border: #bfdbfe;
-  --terminal-neutral-button: #374151;
+  --terminal-neutral-button: #111827;
   --terminal-neutral-button-hover: #1f2937;
   --terminal-overlay: rgba(17, 24, 39, 0.48);
   --terminal-shadow: rgba(17, 24, 39, 0.16);
@@ -46,8 +46,15 @@
   --terminal-control-depth: rgba(17, 24, 39, 0.18);
   --terminal-control-shadow: rgba(17, 24, 39, 0.13);
   --terminal-field-inset: rgba(17, 24, 39, 0.08);
-  --terminal-shadow-control: inset 0 1px 0 var(--terminal-control-highlight), 0 2px 0 var(--terminal-control-depth), 0 5px 12px var(--terminal-control-shadow);
-  --terminal-shadow-card: inset 0 1px 0 rgba(255, 255, 255, 0.82), 0 2px 0 rgba(17, 24, 39, 0.09), 0 12px 30px rgba(17, 24, 39, 0.12);
+  --terminal-shadow-control: none;
+  --terminal-shadow-card: 0 1px 2px rgba(17, 24, 39, 0.06);
+  --terminal-panel: #ffffff;
+  --terminal-input: #f9fafb;
+  --terminal-secondary-button: #f3f4f6;
+  --terminal-dropdown: #ffffff;
+  --terminal-selected: #e5e7eb;
+  --terminal-hover: #f3f4f6;
+  --terminal-on-trade: #ffffff;
   --terminal-chart-grid: #f3f4f6;
   --terminal-loading-overlay: rgba(255, 255, 255, 0.78);
   --terminal-chip-overlay: rgba(255, 255, 255, 0.4);
@@ -58,63 +65,73 @@
   --terminal-scrollbar-thumb-active: #dc5418;
 }
 
+/* ClashBot dark palette (copybot `html[data-theme="dark"]`): neutral charcoal
+   surfaces, hairline borders, one orange accent, emerald/red only for PnL and
+   status. Every UI surface reads these tokens; do not add per-panel tints. */
 :root[data-futures-theme='dark'],
 :root[data-ui-theme='dark'] {
-  --terminal-canvas: #0b0f17;
-  --terminal-surface: #111827;
-  --terminal-surface-subtle: #171f2d;
-  --terminal-surface-muted: #1f2937;
-  --terminal-surface-raised: #182131;
-  --terminal-border: #2c3748;
-  --terminal-border-strong: #3a475c;
-  --terminal-text: #f9fafb;
-  --terminal-text-control: #e5e7eb;
-  --terminal-text-secondary: #cbd5e1;
-  --terminal-text-muted: #aab4c3;
-  --terminal-text-faint: #7f8a9a;
-  --terminal-text-disabled: #7f8a9a;
-  --terminal-icon: #768399;
-  --terminal-icon-active: #F26522;
+  --terminal-canvas: #0d0f14;
+  --terminal-surface: #171a22;
+  --terminal-surface-subtle: #12151c;
+  --terminal-surface-muted: #12151c;
+  --terminal-surface-raised: #1d212b;
+  --terminal-panel: #171a22;
+  --terminal-input: #12151c;
+  --terminal-secondary-button: #1d212b;
+  --terminal-dropdown: #1d212b;
+  --terminal-selected: #292e38;
+  --terminal-hover: #20242d;
+  --terminal-border: #2a2f3a;
+  --terminal-border-strong: #3a414f;
+  --terminal-text: #f4f5f7;
+  --terminal-text-control: #d7dbe2;
+  --terminal-text-secondary: #c0c6d0;
+  --terminal-text-muted: #a7afbc;
+  --terminal-text-faint: #7e8797;
+  --terminal-text-disabled: #7e8797;
+  --terminal-icon: #8d96a6;
+  --terminal-icon-active: #f26522;
   --terminal-on-accent: #ffffff;
   --terminal-on-warning: #111827;
-  --terminal-orange: #f47a3c;
-  --terminal-brand: #f47a3c;
-  --terminal-brand-strong: #f26522;
-  --terminal-brand-text: #fdba91;
-  --terminal-brand-soft: #3a2117;
-  --terminal-brand-border: #7c3a1e;
-  --terminal-brand-ring: rgba(244, 122, 60, 0.24);
+  --terminal-on-trade: #ffffff;
+  --terminal-orange: #f26522;
+  --terminal-brand: #f26522;
+  --terminal-brand-strong: #dc5418;
+  --terminal-brand-text: #ff9b67;
+  --terminal-brand-soft: rgba(242, 101, 34, 0.12);
+  --terminal-brand-border: rgba(242, 101, 34, 0.42);
+  --terminal-brand-ring: rgba(242, 101, 34, 0.24);
   --terminal-long: #34d399;
   --terminal-long-strong: #10b981;
-  --terminal-long-soft: #0f2f29;
-  --terminal-long-border: #176b59;
+  --terminal-long-soft: rgba(16, 185, 129, 0.13);
+  --terminal-long-border: rgba(52, 211, 153, 0.32);
   --terminal-short: #f87171;
   --terminal-short-strong: #ef4444;
-  --terminal-short-soft: #3a1c22;
-  --terminal-short-border: #7f2634;
-  --terminal-warning: #fbbf24;
-  --terminal-warning-soft: #33270d;
-  --terminal-warning-border: #6b5014;
-  --terminal-info: #60a5fa;
-  --terminal-info-soft: #14253f;
-  --terminal-info-border: #244b7d;
-  --terminal-neutral-button: #334155;
-  --terminal-neutral-button-hover: #475569;
-  --terminal-overlay: rgba(2, 6, 23, 0.72);
-  --terminal-shadow: rgba(0, 0, 0, 0.48);
-  --terminal-shadow-soft: rgba(0, 0, 0, 0.28);
-  --terminal-control-highlight: rgba(255, 255, 255, 0.12);
-  --terminal-control-depth: rgba(0, 0, 0, 0.58);
-  --terminal-control-shadow: rgba(0, 0, 0, 0.34);
-  --terminal-field-inset: rgba(0, 0, 0, 0.34);
-  --terminal-shadow-control: inset 0 1px 0 var(--terminal-control-highlight), 0 2px 0 var(--terminal-control-depth), 0 5px 12px var(--terminal-control-shadow);
-  --terminal-shadow-card: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 2px 0 rgba(0, 0, 0, 0.5), 0 14px 34px rgba(0, 0, 0, 0.34);
-  --terminal-chart-grid: #202a39;
-  --terminal-loading-overlay: rgba(11, 15, 23, 0.82);
-  --terminal-chip-overlay: rgba(17, 24, 39, 0.7);
+  --terminal-short-soft: rgba(239, 68, 68, 0.13);
+  --terminal-short-border: rgba(248, 113, 113, 0.32);
+  --terminal-warning: #fcd34d;
+  --terminal-warning-soft: rgba(245, 158, 11, 0.13);
+  --terminal-warning-border: rgba(251, 191, 36, 0.3);
+  --terminal-info: #7dd3fc;
+  --terminal-info-soft: rgba(56, 189, 248, 0.12);
+  --terminal-info-border: rgba(125, 211, 252, 0.28);
+  --terminal-neutral-button: #07080b;
+  --terminal-neutral-button-hover: #20242d;
+  --terminal-overlay: rgba(7, 8, 11, 0.72);
+  --terminal-shadow: rgba(0, 0, 0, 0.38);
+  --terminal-shadow-soft: rgba(0, 0, 0, 0.24);
+  --terminal-control-highlight: transparent;
+  --terminal-control-depth: transparent;
+  --terminal-control-shadow: transparent;
+  --terminal-field-inset: transparent;
+  --terminal-shadow-control: none;
+  --terminal-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.38);
+  --terminal-chart-grid: rgba(255, 255, 255, 0.06);
+  --terminal-loading-overlay: rgba(13, 15, 20, 0.82);
+  --terminal-chip-overlay: rgba(23, 26, 34, 0.7);
   --terminal-depth-long: rgba(52, 211, 153, 0.14);
   --terminal-depth-short: rgba(248, 113, 113, 0.14);
-  --terminal-scrollbar-thumb: rgba(55, 65, 81, 0.72);
+  --terminal-scrollbar-thumb: rgba(126, 135, 151, 0.68);
   --terminal-scrollbar-thumb-hover: #f26522;
   --terminal-scrollbar-thumb-active: #dc5418;
 }
@@ -212,28 +229,20 @@ html {
   font: inherit;
 }
 
+/* ClashBot controls: semibold labels, colour-only transitions, no lift. */
 .clash-ui-root button {
   text-shadow: none !important;
-  font-weight: 700;
+  font-weight: 600;
   line-height: 1.15;
   -webkit-tap-highlight-color: transparent;
   user-select: none;
-  transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease,
-    transform 150ms ease !important;
+  transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease !important;
 }
 
 .clash-ui-root button:disabled {
   opacity: 0.48 !important;
   cursor: not-allowed !important;
   transform: none !important;
-}
-
-.clash-ui-root button:hover:not(:disabled) {
-  transform: translateY(-1px);
-}
-
-.clash-ui-root button:active:not(:disabled) {
-  transform: translateY(0);
 }
 
 /* Shared uiButton controls expose --terminal-button-icon. Controls outside
@@ -301,26 +310,34 @@ html {
 .futures-ticket-side-selector {
   display: flex;
   gap: 4px;
-  padding: 5px;
+  padding: 4px;
   border: 1px solid var(--terminal-border);
-  border-radius: 12px;
+  border-radius: 999px;
+  background: var(--terminal-surface-muted);
 }
 .futures-ticket-side-selector button {
   flex: 1;
   min-width: 0;
-  min-height: 44px;
-  border: 0;
-  border-radius: 8px;
+  min-height: 40px;
+  border: 1px solid transparent;
+  border-radius: 999px;
   background: transparent;
   color: var(--terminal-text-muted);
   font: inherit;
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 600;
   cursor: pointer;
 }
-.futures-ticket-side-selector button[aria-pressed='true'] {
-  color: var(--terminal-brand-text);
-  background: var(--terminal-brand-soft);
+/* Long is always emerald and Short always red; brand orange is for actions. */
+.futures-ticket-side-selector button:first-child[aria-pressed='true'] {
+  color: var(--terminal-long);
+  background: var(--terminal-long-soft);
+  border-color: var(--terminal-long-border);
+}
+.futures-ticket-side-selector button:last-child[aria-pressed='true'] {
+  color: var(--terminal-short);
+  background: var(--terminal-short-soft);
+  border-color: var(--terminal-short-border);
 }
 .futures-ticket-topbar button:focus-visible,
 .futures-ticket-side-selector button:focus-visible {
@@ -344,20 +361,11 @@ html {
   font: inherit;
 }
 
-/* Manual terminal skin. Tokens intentionally stop at this shell: game HUD,
-   unrelated dialogs and the user's saved theme remain independent. Explicit
-   trading portals share the skin without inheriting shell layout rules. */
+/* The trading terminal shares the one ClashBot palette defined on :root; it
+   previously carried its own green-tinted light and pure-black dark skins,
+   which made the terminal and every other panel look like different apps. */
 .futures-terminal-shell,
 .futures-terminal-portal {
-  --terminal-canvas: #f3f4f2;
-  --terminal-surface: #ffffff;
-  --terminal-surface-subtle: #f7f8f6;
-  --terminal-surface-muted: #eef1ed;
-  --terminal-surface-raised: #ffffff;
-  --terminal-border: #dce1da;
-  --terminal-border-strong: #b8c1b6;
-  --terminal-shadow-control: none;
-  --terminal-shadow-card: none;
   font-variant-numeric: tabular-nums;
 }
 
@@ -365,38 +373,6 @@ html {
 [data-futures-theme='dark'] .futures-terminal-shell,
 [data-ui-theme='dark'] .futures-terminal-portal,
 [data-futures-theme='dark'] .futures-terminal-portal {
-  --terminal-canvas: #000000;
-  --terminal-surface: #111112;
-  --terminal-surface-subtle: #1a1b1e;
-  --terminal-surface-muted: #1a1b1e;
-  --terminal-surface-raised: #1d1f21;
-  --terminal-input: #1a1b1e;
-  --terminal-panel: #111112;
-  --terminal-secondary-button: #1a1b1e;
-  --terminal-dropdown: #1d1f21;
-  --terminal-selected: #2a2c32;
-  --terminal-hover: #393c44;
-  --terminal-border: #ffffff12;
-  --terminal-border-strong: #ffffff12;
-  --terminal-text: #e8e9ef;
-  --terminal-text-control: #e8e9ef;
-  --terminal-text-secondary: #979899;
-  --terminal-text-muted: #979899;
-  --terminal-text-faint: #979899;
-  --terminal-text-disabled: #979899;
-  --terminal-icon: #979899;
-  --terminal-long: #3ce362;
-  --terminal-long-strong: #3ce362;
-  --terminal-short: #ff4953;
-  --terminal-short-strong: #ff4953;
-  --terminal-on-trade: #111112;
-  --terminal-neutral-button: #1a1b1e;
-  --terminal-neutral-button-hover: #393c44;
-  --terminal-chart-grid: #ffffff12;
-  --terminal-depth-long: rgba(60, 227, 98, 0.14);
-  --terminal-depth-short: rgba(255, 73, 83, 0.14);
-  --terminal-loading-overlay: rgba(0, 0, 0, 0.82);
-  --terminal-chip-overlay: rgba(17, 17, 18, 0.7);
   color-scheme: dark;
 }
 
@@ -407,14 +383,14 @@ html {
 
 :is([data-ui-theme='dark'], [data-futures-theme='dark']) :is(.futures-terminal-shell, .futures-terminal-portal) button:hover:not(:disabled) {
   --terminal-secondary-button: var(--terminal-hover);
-  --terminal-text-muted: #e8e9ef;
-  --terminal-text-secondary: #e8e9ef;
-  --terminal-text-faint: #e8e9ef;
+  --terminal-text-muted: var(--terminal-text);
+  --terminal-text-secondary: var(--terminal-text);
+  --terminal-text-faint: var(--terminal-text);
 }
 
 :is([data-ui-theme='dark'], [data-futures-theme='dark']) :is(.futures-terminal-shell, .futures-terminal-portal) .futures-symbol-row:hover {
   background: var(--terminal-hover) !important;
-  --terminal-text-muted: #e8e9ef;
+  --terminal-text-muted: var(--terminal-text);
 }
 
 /* Keep signed market changes readable against the lighter hover row. */
@@ -433,14 +409,14 @@ html {
 
 :is([data-ui-theme='dark'], [data-futures-theme='dark']) :is(.futures-terminal-shell, .futures-terminal-portal) .imperial-route-option:hover {
   background: var(--terminal-hover);
-  --terminal-text-muted: #e8e9ef;
+  --terminal-text-muted: var(--terminal-text);
 }
 
 .futures-terminal-header { flex-shrink: 0; }
 .futures-terminal-header button { box-shadow: none !important; }
 .futures-market-strip {
   border: 1px solid var(--terminal-border);
-  border-radius: 14px;
+  border-radius: 16px;
   min-height: 64px;
   padding: 10px 12px !important;
   margin-bottom: 8px;
@@ -455,7 +431,7 @@ html {
 .futures-terminal-workspace__primary > .futures-terminal-ticket,
 .futures-terminal-activity {
   border: 1px solid var(--terminal-border);
-  border-radius: 14px;
+  border-radius: 16px;
   background: var(--terminal-surface);
   min-width: 0;
 }
@@ -501,20 +477,25 @@ html {
 .futures-order-ticket__submit { border-radius: 12px !important; }
 .futures-size-presets button {
   min-width: 36px;
-  min-height: 32px;
-  padding: 4px 6px;
+  min-height: 30px;
+  padding: 4px 10px;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: 999px;
   background: transparent;
   color: var(--terminal-text-muted);
   cursor: pointer;
   font-size: 11px;
+  font-weight: 600;
 }
-.futures-size-presets button[aria-pressed='true'],
 .futures-size-presets button:hover {
-  color: var(--terminal-brand-text);
-  background: var(--terminal-brand-soft);
-  border-color: var(--terminal-orange);
+  color: var(--terminal-text);
+  background: var(--terminal-hover);
+}
+/* ClashBot segmented control: the selected segment is a solid dark pill. */
+.futures-size-presets button[aria-pressed='true'] {
+  color: #ffffff;
+  background: var(--terminal-neutral-button);
+  border-color: var(--terminal-neutral-button);
 }
 .futures-tablet-market-tabs { display: none !important; }
 .futures-terminal-chart--compact { flex: 0 0 360px !important; min-height: 360px !important; }
@@ -597,9 +578,9 @@ html {
 }
 
 .futures-order-ticket__submit {
-  /* Orange stays the brand fill; dark lettering meets normal-text contrast. */
-  --terminal-on-accent: #111827;
-  --terminal-text-on-accent: #111827;
+  /* ClashBot primary: #F26522 fill with white label, darker orange on hover. */
+  --terminal-on-accent: #ffffff;
+  --terminal-text-on-accent: #ffffff;
   min-height: 44px;
   transition: background-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
 }
@@ -611,12 +592,7 @@ html {
 }
 
 .futures-order-ticket__submit:hover:not(:disabled) {
-  box-shadow: 0 6px 16px rgba(17, 24, 39, 0.14);
-  transform: translateY(-1px);
-}
-
-.futures-order-ticket__submit:active:not(:disabled) {
-  transform: translateY(0);
+  background-color: var(--terminal-brand-strong) !important;
 }
 
 .futures-mobile-market-tabs {
@@ -625,25 +601,25 @@ html {
   margin: 6px 8px 0;
   padding: 4px;
   border: 1px solid var(--terminal-border);
-  border-radius: 10px;
+  border-radius: 999px;
   background: var(--terminal-surface-muted);
 }
 
 .futures-mobile-market-tabs button {
   flex: 1;
-  min-height: 44px;
+  min-height: 40px;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: 999px;
   background: transparent;
   color: var(--terminal-text-muted);
-  font-weight: 700;
+  font-weight: 600;
   cursor: pointer;
 }
 
 .futures-mobile-market-tabs button.is-active {
-  border-color: var(--terminal-orange);
-  background: var(--terminal-brand-soft);
-  color: var(--terminal-brand-text);
+  border-color: var(--terminal-neutral-button);
+  background: var(--terminal-neutral-button);
+  color: #ffffff;
 }
 
 .futures-terminal-book--mobile {
@@ -723,7 +699,7 @@ html {
   .futures-terminal-workspace--mobile > .futures-terminal-book,
   .futures-terminal-workspace--mobile > .futures-terminal-ticket {
     border: 1px solid var(--terminal-border);
-    border-radius: 14px;
+    border-radius: 16px;
   }
   .futures-terminal-header button,
   .futures-terminal-shell .futures-trading-chart button,

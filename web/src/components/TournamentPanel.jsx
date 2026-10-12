@@ -213,7 +213,7 @@ function TownHallRequirementBlock({ required, current, blocked = false, compact 
     <div style={style}>
       <div style={S.townHallReqTop}>
         <span style={S.townHallReqTitle}>Town Hall requirement</span>
-        <span style={ok ? S.townHallReqBadgeOk : S.townHallReqBadgeBlocked}>{ok ? 'OK' : 'LOCKED'}</span>
+        <span style={ok ? S.townHallReqBadgeOk : S.townHallReqBadgeBlocked}>{ok ? 'OK' : 'Locked'}</span>
       </div>
       <div style={S.townHallReqText}>Requires Town Hall level {fmt(req)}+</div>
       {known && <div style={S.townHallReqSub}>Your level: {fmt(cur)}</div>}
@@ -663,7 +663,7 @@ function RankedRaidSummary({ state, tournament, joined }) {
           </div>
         </div>
         <span style={joined ? S.rankedSummaryLive : S.rankedSummaryLocked}>
-          {joined ? 'ACTIVE' : 'JOIN TO PLAY'}
+          {joined ? 'Active' : 'Join to play'}
         </span>
       </div>
 
@@ -1080,7 +1080,7 @@ function TournamentPanel({ onClose }) {
             </button>
           )}
           <button style={S.rewardSaveBtn} onClick={saveHandler} disabled={busy}>
-            {busy ? 'SAVING...' : (lucky && !joined ? 'REGISTER LUCKY RAIDER' : 'SAVE ADDRESS')}
+            {busy ? 'Saving...' : (lucky && !joined ? 'Register Lucky Raider' : 'Save address')}
           </button>
         </div>
       </div>
@@ -1287,15 +1287,15 @@ function TournamentPanel({ onClose }) {
                 {t.description && <div style={S.tDesc}>{t.description}</div>}
                 <div style={S.tagRow}>
                   <span style={S.dexTag}>{dexLabel(t, dex)}</span>
-                  {isMegaTournament(t) && <span style={S.megaTag}>MEGA</span>}
-                  {t.battle_mode === 'ranked_raids' && <span style={S.rankedTag}>RANKED RAIDS</span>}
-                  {t.mode === 'dex_vs_dex' && <span style={S.teamTag}>DEX VS DEX</span>}
+                  {isMegaTournament(t) && <span style={S.megaTag}>Mega</span>}
+                  {t.battle_mode === 'ranked_raids' && <span style={S.rankedTag}>Ranked raids</span>}
+                  {t.mode === 'dex_vs_dex' && <span style={S.teamTag}>DEX vs DEX</span>}
                   <span style={S.tag}>Sort: {sortLabel(t)}</span>
                   {isDailyPoolTournament(t) && <span style={S.prizeTag}>{fmt(t.daily_pool_points || 1000)} pts/day at {dailyPoolAwardTime(t)} UTC</span>}
                   {t.mode === 'dex_vs_dex' && <span style={S.tag}>Winner: {t.team_score_label || 'Volume'}</span>}
                   {t.mode === 'dex_vs_dex' && <span style={S.tag}>Player payout: {t.team_member_reward_label || 'Volume'}</span>}
                   {isHistory
-                    ? <span style={S.endedTag}>ENDED</span>
+                    ? <span style={S.endedTag}>Ended</span>
                     : <span style={paused ? S.phaseTagPaused : preregistration ? S.phaseTagBlue : live ? S.phaseTagGreen : S.tag}>{phase || t.status}</span>
                   }
                   {Number(t.gold_boost) !== 1 && <span style={S.boostTag}>×{t.gold_boost} GOLD</span>}
@@ -1434,7 +1434,7 @@ function TournamentPanel({ onClose }) {
                     </div>
                   )}
                   <button style={{ ...S.joinBtn, opacity: canJoin ? 1 : 0.6 }} onClick={handleJoin} disabled={busy || !canJoin}>
-                    {busy || tournamentLoading ? (preregistration ? 'REGISTERING...' : 'JOINING...') : (paused ? 'TOURNAMENT PAUSED' : !canJoin ? (joinBlockedByTownHall ? `TH ${joinTownHallRequirement?.required || t.min_town_hall_level} REQUIRED` : 'REGISTRATION CLOSED') : preregistration ? 'PRE-REGISTER' : 'JOIN TOURNAMENT')}
+                    {busy || tournamentLoading ? (preregistration ? 'Registering...' : 'Joining...') : (paused ? 'Tournament paused' : !canJoin ? (joinBlockedByTownHall ? `TH ${joinTownHallRequirement?.required || t.min_town_hall_level} required` : 'Registration closed') : preregistration ? 'Pre-register' : 'Join tournament')}
                   </button>
                   {joinBlockedByTownHall && (
                     <TownHallRequirementBlock
@@ -1773,7 +1773,7 @@ function Stat({ label, value, color }) {
 export default memo(TournamentPanel);
 
 const S = {
-  backdrop: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 250, pointerEvents: 'auto' },
+  backdrop: { position: 'fixed', inset: 0, background: 'var(--terminal-overlay)', zIndex: 250, pointerEvents: 'auto' },
   modal: {
     position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
     // Fixed height (clamped to viewport on small screens) keeps the modal
@@ -1781,31 +1781,29 @@ const S = {
     // and a 50-row leaderboard now share the same outer footprint.
     width: 480, maxWidth: 'calc(100dvw - 32px)',
     height: 'min(88dvh, 620px)',
-    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 24,
-    boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
+    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 16,
+    boxShadow: 'var(--terminal-shadow-card)',
     display: 'flex', flexDirection: 'column',
     zIndex: 251, pointerEvents: 'auto', overflow: 'hidden',
-    fontFamily: '"Inter","Segoe UI",sans-serif',
+    fontFamily: 'inherit',
   },
   header: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    padding: '14px 16px', background: 'var(--terminal-border)', borderBottom: '1px solid var(--terminal-border-strong)',
+    padding: '14px 16px', background: 'var(--terminal-surface)', borderBottom: '1px solid var(--terminal-border)',
   },
   tabRow: {
     display: 'flex', gap: 0, padding: '8px 12px 0',
-    borderBottom: '1px solid var(--terminal-surface-subtle)', background: 'var(--terminal-surface)',
+    borderBottom: '1px solid var(--terminal-border)', background: 'var(--terminal-surface)',
   },
   tab: {
     flex: 1, padding: '8px 12px', background: 'transparent',
     border: 'none', borderBottom: '1px solid transparent',
-    color: 'var(--terminal-text-muted)', fontSize: 13, fontWeight: 600, cursor: 'pointer',
-    textTransform: 'uppercase', letterSpacing: 0.5,
+    color: 'var(--terminal-text-muted)', fontSize: 14, fontWeight: 500, cursor: 'pointer',
   },
   tabActive: {
     flex: 1, padding: '8px 12px', background: 'transparent',
-    border: 'none', borderBottom: '2px solid var(--terminal-orange)',
-    color: 'var(--terminal-brand-text)', fontSize: 13, fontWeight: 700, cursor: 'pointer',
-    textTransform: 'uppercase', letterSpacing: 0.5,
+    border: 'none', borderBottom: '1px solid var(--terminal-text)',
+    color: 'var(--terminal-text)', fontSize: 14, fontWeight: 500, cursor: 'pointer',
   },
   histRow: {
     display: 'flex', alignItems: 'center', gap: 8,
@@ -1814,38 +1812,38 @@ const S = {
     cursor: 'pointer', textAlign: 'left', width: '100%',
     fontFamily: 'inherit',
   },
-  histName: { fontSize: 13, fontWeight: 700, color: 'var(--terminal-text)' },
-  histSub: { fontSize: 10, fontWeight: 700, color: 'var(--terminal-text-muted)', marginTop: 2 },
-  histFeatured: { fontSize: 14, fontWeight: 700, flexShrink: 0, fontVariantNumeric: 'tabular-nums' },
+  histName: { fontSize: 13, fontWeight: 600, color: 'var(--terminal-text)' },
+  histSub: { fontSize: 10, fontWeight: 600, color: 'var(--terminal-text-muted)', marginTop: 2 },
+  histFeatured: { fontSize: 14, fontWeight: 600, flexShrink: 0, fontVariantNumeric: 'tabular-nums' },
   endedTag: {
-    fontSize: 10, fontWeight: 600, padding: '3px 7px', borderRadius: 6,
-    background: 'var(--terminal-text-muted)', color: 'var(--terminal-on-accent)', textTransform: 'uppercase', letterSpacing: 0.5,
+    fontSize: 10, fontWeight: 600, padding: '3px 8px', borderRadius: 999,
+    background: 'var(--terminal-surface-muted)', border: '1px solid var(--terminal-border)', color: 'var(--terminal-text-muted)',
   },
   didNotJoin: {
     fontSize: 12, color: 'var(--terminal-text-muted)', textAlign: 'center', padding: '10px',
     background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 12,
-    fontWeight: 700,
+    fontWeight: 600,
   },
   backBtn: uiButton('secondary', { minHeight: 34, padding: '6px 12px', fontSize: 12, alignSelf: 'flex-start', marginBottom: 4 }),
   headerIcon: {
     width: 22, height: 22, objectFit: 'contain',
     filter: 'invert(60%) sepia(90%) saturate(500%) hue-rotate(10deg)',
   },
-  headerTitle: { fontSize: 18, fontWeight: 700, color: 'var(--terminal-text)' },
-  closeBtn: uiIconButton('danger', 30),
+  headerTitle: { fontSize: 18, fontWeight: 600, color: 'var(--terminal-text)' },
+  closeBtn: uiIconButton('ghost', 30),
   body: {
     flex: 1, minHeight: 0, padding: 12, display: 'flex', flexDirection: 'column', gap: 10,
     overflowY: 'auto', overflowX: 'hidden', overscrollBehavior: 'contain', WebkitOverflowScrolling: 'touch',
   },
-  empty: { textAlign: 'center', padding: 28, color: 'var(--terminal-text-muted)', fontWeight: 700, fontSize: 13 },
-  emptySmall: { textAlign: 'center', padding: 14, color: 'var(--terminal-text-muted)', fontWeight: 600, fontSize: 12 },
+  empty: { textAlign: 'center', padding: 28, color: 'var(--terminal-text-muted)', fontWeight: 500, fontSize: 13 },
+  emptySmall: { textAlign: 'center', padding: 14, color: 'var(--terminal-text-muted)', fontWeight: 500, fontSize: 12 },
   emptyIcon: { fontSize: 44, marginBottom: 6 },
-  emptyTitle: { fontSize: 16, fontWeight: 700, color: 'var(--terminal-text)', marginBottom: 4 },
+  emptyTitle: { fontSize: 14, fontWeight: 600, color: 'var(--terminal-text)', marginBottom: 4 },
   emptySub: { fontSize: 12, color: 'var(--terminal-text-muted)', lineHeight: 1.5 },
 
   luckyHero: {
-    background: 'linear-gradient(135deg, var(--terminal-warning-soft) 0%, var(--terminal-surface) 100%)',
-    border: '1px solid var(--terminal-warning)',
+    background: 'var(--terminal-surface)',
+    border: '1px solid var(--terminal-warning-border)',
     borderRadius: 14,
     padding: 12,
     display: 'flex',
@@ -1855,20 +1853,20 @@ const S = {
   },
   luckyKicker: {
     fontSize: 10,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-warning)',
     textTransform: 'uppercase',
     letterSpacing: 0.7,
   },
-  luckyTitle: { fontSize: 18, fontWeight: 700, color: 'var(--terminal-text)', marginTop: 2 },
-  luckySub: { fontSize: 12, fontWeight: 700, color: 'var(--terminal-text-secondary)', lineHeight: 1.35, marginTop: 3 },
+  luckyTitle: { fontSize: 18, fontWeight: 600, color: 'var(--terminal-text)', marginTop: 2 },
+  luckySub: { fontSize: 12, fontWeight: 600, color: 'var(--terminal-text-secondary)', lineHeight: 1.35, marginTop: 3 },
   luckyPrize: {
     fontSize: 12,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-long)',
     background: 'var(--terminal-long-soft)',
-    border: '1px solid var(--terminal-long)',
-    borderRadius: 10,
+    border: '1px solid var(--terminal-long-border)',
+    borderRadius: 12,
     padding: '6px 8px',
     textAlign: 'right',
     maxWidth: 128,
@@ -1889,10 +1887,9 @@ const S = {
   },
   luckySectionTitle: {
     fontSize: 12,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-text)',
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
+        letterSpacing: 0.6,
     marginTop: 2,
   },
   luckyList: { display: 'flex', flexDirection: 'column', gap: 6 },
@@ -1915,106 +1912,96 @@ const S = {
     alignItems: 'center',
     justifyContent: 'center',
     fontSize: 12,
-    fontWeight: 700,
+    fontWeight: 600,
     flexShrink: 0,
   },
-  luckyEntryName: { fontSize: 13, fontWeight: 700, color: 'var(--terminal-text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  luckyEntryName: { fontSize: 13, fontWeight: 600, color: 'var(--terminal-text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   luckyEntryMeta: { fontSize: 10, fontWeight: 600, color: 'var(--terminal-text-muted)', marginTop: 2 },
   luckyEntrySubMeta: { fontSize: 10, fontWeight: 600, color: 'var(--terminal-text-secondary)', marginTop: 2, opacity: 0.85 },
-  luckyTickets: { fontSize: 12, fontWeight: 700, color: 'var(--terminal-warning)', whiteSpace: 'nowrap' },
+  luckyTickets: { fontSize: 12, fontWeight: 600, color: 'var(--terminal-warning)', whiteSpace: 'nowrap' },
   luckyHistoryRow: {
     background: 'var(--terminal-surface-subtle)',
     border: '1px solid var(--terminal-border)',
     borderRadius: 12,
     padding: 9,
   },
-  luckyHistoryDay: { fontSize: 12, fontWeight: 700, color: 'var(--terminal-text)' },
+  luckyHistoryDay: { fontSize: 12, fontWeight: 600, color: 'var(--terminal-text)' },
   luckyHistoryMeta: { fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-secondary)', lineHeight: 1.45, marginTop: 3 },
   luckyHistoryWinners: { color: 'var(--terminal-long)', marginTop: 3 },
 
   tCard: {
     background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 14, padding: 12,
   },
-  tName: { fontSize: 16, fontWeight: 700, color: 'var(--terminal-text)', marginBottom: 4 },
+  tName: { fontSize: 16, fontWeight: 600, color: 'var(--terminal-text)', marginBottom: 4 },
   tDesc: { fontSize: 12, color: 'var(--terminal-text-secondary)', lineHeight: 1.4, marginBottom: 8 },
   tagRow: { display: 'flex', flexWrap: 'wrap', gap: 5 },
   dexTag: {
-    fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 6,
+    fontSize: 10, fontWeight: 600, padding: '3px 8px', borderRadius: 999,
     background: 'var(--terminal-info-soft)', border: '1px solid var(--terminal-info-border)', color: 'var(--terminal-info)',
-    textTransform: 'uppercase', letterSpacing: 0.4,
   },
   teamTag: {
-    fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 6,
-    background: 'var(--terminal-short-soft)', border: '1px solid var(--terminal-short)', color: 'var(--terminal-short-strong)',
-    textTransform: 'uppercase', letterSpacing: 0.4,
+    fontSize: 10, fontWeight: 600, padding: '3px 8px', borderRadius: 999,
+    background: 'var(--terminal-short-soft)', border: '1px solid var(--terminal-short-border)', color: 'var(--terminal-short-strong)',
   },
   megaTag: {
-    fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 6,
-    background: 'var(--terminal-brand-soft)', border: '1px solid var(--terminal-orange)', color: 'var(--terminal-brand-text)',
-    textTransform: 'uppercase', letterSpacing: 0.4,
+    fontSize: 10, fontWeight: 600, padding: '3px 8px', borderRadius: 999,
+    background: 'var(--terminal-brand-soft)', border: '1px solid var(--terminal-brand-border)', color: 'var(--terminal-brand-text)',
   },
   rankedTag: {
-    fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 6,
-    background: 'var(--terminal-info-soft)', border: '1px solid #3b82f6', color: 'var(--terminal-info)',
-    textTransform: 'uppercase', letterSpacing: 0.4,
+    fontSize: 10, fontWeight: 600, padding: '3px 8px', borderRadius: 999,
+    background: 'var(--terminal-info-soft)', border: '1px solid var(--terminal-info-border)', color: 'var(--terminal-info)',
   },
   tag: {
-    fontSize: 10, fontWeight: 600, padding: '3px 7px', borderRadius: 6,
+    fontSize: 10, fontWeight: 600, padding: '3px 8px', borderRadius: 999,
     background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', color: 'var(--terminal-text-secondary)',
-    textTransform: 'uppercase', letterSpacing: 0.4,
   },
   phaseTagBlue: {
-    fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 6,
-    background: 'var(--terminal-info-soft)', border: '1px solid #60a5fa', color: 'var(--terminal-info)',
-    textTransform: 'uppercase', letterSpacing: 0.4,
+    fontSize: 10, fontWeight: 600, padding: '3px 8px', borderRadius: 999,
+    background: 'var(--terminal-info-soft)', border: '1px solid var(--terminal-info-border)', color: 'var(--terminal-info)',
   },
   phaseTagGreen: {
-    fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 6,
-    background: 'var(--terminal-long-soft)', border: '1px solid var(--terminal-long)', color: 'var(--terminal-long)',
-    textTransform: 'uppercase', letterSpacing: 0.4,
+    fontSize: 10, fontWeight: 600, padding: '3px 8px', borderRadius: 999,
+    background: 'var(--terminal-long-soft)', border: '1px solid var(--terminal-long-border)', color: 'var(--terminal-long)',
   },
   phaseTagPaused: {
-    fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 6,
-    background: 'var(--terminal-warning-soft)', border: '1px solid var(--terminal-warning)', color: '#92400e',
-    textTransform: 'uppercase', letterSpacing: 0.4,
+    fontSize: 10, fontWeight: 600, padding: '3px 8px', borderRadius: 999,
+    background: 'var(--terminal-warning-soft)', border: '1px solid var(--terminal-warning-border)', color: 'var(--terminal-warning)',
   },
   pausedBanner: {
     display: 'flex', flexDirection: 'column', gap: 3,
-    padding: '9px 10px', borderRadius: 8,
-    background: 'var(--terminal-warning-soft)', border: '1px solid var(--terminal-warning)',
+    padding: '9px 10px', borderRadius: 12,
+    background: 'var(--terminal-warning-soft)', border: '1px solid var(--terminal-warning-border)',
   },
   pausedTitle: {
-    color: '#78350f', fontSize: 12, fontWeight: 700, textTransform: 'uppercase',
-  },
+    color: 'var(--terminal-warning)', fontSize: 12, fontWeight: 600 },
   pausedText: {
-    color: 'var(--terminal-text-secondary)', fontSize: 11, fontWeight: 700, lineHeight: 1.35,
+    color: 'var(--terminal-text-secondary)', fontSize: 11, fontWeight: 600, lineHeight: 1.35,
   },
   pausedReason: {
-    color: '#92400e', fontSize: 10, fontWeight: 600, lineHeight: 1.3,
+    color: 'var(--terminal-warning)', fontSize: 10, fontWeight: 600, lineHeight: 1.3,
   },
   rankedSummary: {
     display: 'flex', flexDirection: 'column', gap: 9,
-    padding: '10px 11px', borderRadius: 8,
+    padding: '10px 11px', borderRadius: 12,
     background: 'var(--terminal-info-soft)', border: '1px solid var(--terminal-info-border)',
   },
   rankedSummaryHead: {
     display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8,
   },
   rankedSummaryTitle: {
-    color: 'var(--terminal-info)', fontSize: 13, fontWeight: 700, textTransform: 'uppercase',
-  },
+    color: 'var(--terminal-info)', fontSize: 13, fontWeight: 600 },
   rankedSummarySub: {
-    color: 'var(--terminal-text-secondary)', fontSize: 10, fontWeight: 700, lineHeight: 1.35, marginTop: 2,
+    color: 'var(--terminal-text-secondary)', fontSize: 10, fontWeight: 600, lineHeight: 1.35, marginTop: 2,
   },
   rankedSummaryLive: {
-    flexShrink: 0, padding: '3px 6px', borderRadius: 5,
-    background: 'var(--terminal-long-soft)', border: '1px solid var(--terminal-long)',
-    color: 'var(--terminal-long)', fontSize: 10, fontWeight: 700,
+    flexShrink: 0, padding: '3px 6px', borderRadius: 999,
+    background: 'var(--terminal-long-soft)', border: '1px solid var(--terminal-long-border)',
+    color: 'var(--terminal-long)', fontSize: 10, fontWeight: 600,
   },
   rankedSummaryLocked: {
-    flexShrink: 0, padding: '3px 6px', borderRadius: 5,
-    background: 'var(--terminal-warning-soft)', border: '1px solid var(--terminal-warning)',
-    color: '#92400e', fontSize: 10, fontWeight: 700,
+    flexShrink: 0, padding: '3px 6px', borderRadius: 999,
+    background: 'var(--terminal-warning-soft)', border: '1px solid var(--terminal-warning-border)',
+    color: 'var(--terminal-warning)', fontSize: 10, fontWeight: 600,
   },
   rankedSummaryGrid: {
     display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
@@ -2024,11 +2011,11 @@ const S = {
     minWidth: 0, padding: '7px 3px', textAlign: 'center',
   },
   rankedSummaryValue: {
-    display: 'block', color: 'var(--terminal-text)', fontSize: 13, fontWeight: 700,
+    display: 'block', color: 'var(--terminal-text)', fontSize: 13, fontWeight: 600,
     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
   },
   rankedSummaryLabel: {
-    display: 'block', color: 'var(--terminal-text-muted)', fontSize: 10, fontWeight: 700,
+    display: 'block', color: 'var(--terminal-text-muted)', fontSize: 10, fontWeight: 600,
     textTransform: 'uppercase', marginTop: 2,
   },
   rankedSummaryMeta: {
@@ -2039,18 +2026,16 @@ const S = {
     color: 'var(--terminal-text-secondary)', fontSize: 10, fontWeight: 600, lineHeight: 1.4,
   },
   boostTag: {
-    fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 6,
-    background: 'var(--terminal-warning)', border: '1px solid var(--terminal-warning)', color: 'var(--terminal-on-accent)',
-    textTransform: 'uppercase', letterSpacing: 0.4,
+    fontSize: 10, fontWeight: 600, padding: '3px 8px', borderRadius: 999,
+    background: 'var(--terminal-warning)', border: '1px solid var(--terminal-warning-border)', color: 'var(--terminal-on-accent)',
     textShadow: 'none',
   },
   prizeTag: {
-    fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 6,
-    background: 'var(--terminal-long-soft)', border: '1px solid var(--terminal-long)', color: 'var(--terminal-long)',
-    textTransform: 'uppercase', letterSpacing: 0.4,
+    fontSize: 10, fontWeight: 600, padding: '3px 8px', borderRadius: 999,
+    background: 'var(--terminal-long-soft)', border: '1px solid var(--terminal-long-border)', color: 'var(--terminal-long)',
   },
   prizeProgress: {
-    background: 'var(--terminal-warning-soft)', border: '1px solid var(--terminal-warning)', borderRadius: 14,
+    background: 'var(--terminal-warning-soft)', border: '1px solid var(--terminal-warning-border)', borderRadius: 14,
     padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 6,
   },
   prizeProgressTop: {
@@ -2058,11 +2043,10 @@ const S = {
     gap: 8, minWidth: 0,
   },
   prizeProgressTitle: {
-    fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)',
-    textTransform: 'uppercase', letterSpacing: 0.4,
+    fontSize: 11, fontWeight: 600, color: 'var(--terminal-text)',
   },
   prizeProgressNeed: {
-    fontSize: 11, fontWeight: 700, color: 'var(--terminal-long)',
+    fontSize: 11, fontWeight: 600, color: 'var(--terminal-long)',
     whiteSpace: 'nowrap',
   },
   prizeProgressTrack: {
@@ -2071,7 +2055,7 @@ const S = {
   },
   prizeProgressFill: {
     height: '100%', borderRadius: 999,
-    background: 'linear-gradient(90deg, var(--terminal-long) 0%, var(--terminal-warning) 100%)',
+    background: 'var(--terminal-long)',
   },
   prizeProgressMeta: {
     display: 'flex', justifyContent: 'space-between', gap: 8,
@@ -2083,17 +2067,17 @@ const S = {
   },
   rewardScheduleHeader: {
     display: 'flex', justifyContent: 'space-between', gap: 8,
-    fontSize: 12, fontWeight: 700, color: 'var(--terminal-text)',
-    textTransform: 'uppercase', letterSpacing: 0.4,
+    fontSize: 12, fontWeight: 600, color: 'var(--terminal-text)',
+    letterSpacing: 0.4,
   },
   rewardScheduleLine: {
-    fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)',
-    background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 8,
+    fontSize: 11, fontWeight: 600, color: 'var(--terminal-text)',
+    background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 12,
     padding: '5px 7px',
   },
   rewardScheduleLucky: {
     fontSize: 10, fontWeight: 600, color: 'var(--terminal-text-secondary)',
-    background: 'var(--terminal-warning-soft)', border: '1px solid var(--terminal-warning)', borderRadius: 8,
+    background: 'var(--terminal-warning-soft)', border: '1px solid var(--terminal-warning-border)', borderRadius: 12,
     padding: '6px 7px', display: 'flex', flexDirection: 'column', gap: 3,
   },
   sectorCard: {
@@ -2101,41 +2085,41 @@ const S = {
     padding: 10, display: 'flex', flexDirection: 'column', gap: 8,
   },
   sectorHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
-  sectorTitle: { fontSize: 12, fontWeight: 700, color: 'var(--terminal-text)', textTransform: 'uppercase', letterSpacing: 0.5 },
-  sectorMine: { fontSize: 11, fontWeight: 700, color: 'var(--terminal-long)', background: 'var(--terminal-long-soft)', border: '1px solid var(--terminal-long)', borderRadius: 8, padding: '3px 7px' },
+  sectorTitle: { fontSize: 12, fontWeight: 600, color: 'var(--terminal-text)', letterSpacing: 0.5 },
+  sectorMine: { fontSize: 11, fontWeight: 600, color: 'var(--terminal-long)', background: 'var(--terminal-long-soft)', border: '1px solid var(--terminal-long-border)', borderRadius: 12, padding: '3px 7px' },
   sectorGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 6 },
-  sectorTile: { background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 10, padding: 8 },
-  sectorTileActive: { background: 'var(--terminal-warning-soft)', border: '1px solid var(--terminal-warning)', borderRadius: 10, padding: 8 },
-  sectorTileTop: { display: 'flex', justifyContent: 'space-between', gap: 6, fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)' },
+  sectorTile: { background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 12, padding: 8 },
+  sectorTileActive: { background: 'var(--terminal-warning-soft)', border: '1px solid var(--terminal-warning-border)', borderRadius: 12, padding: 8 },
+  sectorTileTop: { display: 'flex', justifyContent: 'space-between', gap: 6, fontSize: 11, fontWeight: 600, color: 'var(--terminal-text)' },
   sectorReq: { fontSize: 10, fontWeight: 600, color: 'var(--terminal-text-secondary)', marginTop: 3 },
-  sectorVolume: { fontSize: 10, fontWeight: 700, color: 'var(--terminal-long)', marginTop: 4 },
+  sectorVolume: { fontSize: 10, fontWeight: 600, color: 'var(--terminal-long)', marginTop: 4 },
   dexBreakdownLine: { fontSize: 10, fontWeight: 600, color: 'var(--terminal-text-secondary)' },
   teamBoard: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 6 },
   teamCard: {
-    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 10, padding: 8,
+    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 12, padding: 8,
   },
   teamWinner: {
-    background: 'var(--terminal-warning-soft)', border: '1px solid var(--terminal-warning)', borderRadius: 10, padding: 8,
+    background: 'var(--terminal-warning-soft)', border: '1px solid var(--terminal-warning-border)', borderRadius: 12, padding: 8,
   },
-  teamName: { fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)' },
+  teamName: { fontSize: 11, fontWeight: 600, color: 'var(--terminal-text)' },
   teamMeta: { fontSize: 10, fontWeight: 600, color: 'var(--terminal-text-secondary)', marginTop: 2 },
-  teamPrize: { fontSize: 10, fontWeight: 700, color: 'var(--terminal-long)', marginTop: 3 },
+  teamPrize: { fontSize: 10, fontWeight: 600, color: 'var(--terminal-long)', marginTop: 3 },
   lbGroupList: { display: 'flex', flexDirection: 'column', gap: 5 },
   lbGroup: { display: 'flex', flexDirection: 'column', gap: 6 },
   lbGroupHeader: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
-    background: 'var(--terminal-warning-soft)', border: '1px solid var(--terminal-warning)', borderRadius: 9,
-    padding: '6px 8px', fontSize: 11, fontWeight: 700, color: 'var(--terminal-text)',
+    background: 'var(--terminal-warning-soft)', border: '1px solid var(--terminal-warning-border)', borderRadius: 9,
+    padding: '6px 8px', fontSize: 11, fontWeight: 600, color: 'var(--terminal-text)',
   },
 
   rewardBox: {
-    background: 'var(--terminal-warning-soft)', border: '1px solid var(--terminal-warning)', borderRadius: 14, padding: 10,
+    background: 'var(--terminal-warning-soft)', border: '1px solid var(--terminal-warning-border)', borderRadius: 14, padding: 10,
   },
   rewardHeaderRow: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
   },
-  rewardLabel: { fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-secondary)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 5 },
-  rewardHelp: { fontSize: 11, fontWeight: 700, color: 'var(--terminal-text-secondary)', lineHeight: 1.35, marginBottom: 7 },
+  rewardLabel: { fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-secondary)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 5 },
+  rewardHelp: { fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-secondary)', lineHeight: 1.35, marginBottom: 7 },
   rewardHint: { fontSize: 11, fontWeight: 600, color: 'var(--terminal-warning)', textAlign: 'center', marginTop: 6 },
   townHallReq: {
     display: 'flex',
@@ -2148,13 +2132,13 @@ const S = {
     padding: '8px 10px',
     background: 'var(--terminal-long-soft)',
     color: 'var(--terminal-long-strong)',
-    fontWeight: 700,
+    fontWeight: 600,
     lineHeight: 1.25,
   },
   townHallReqCompact: {
     padding: '6px 7px',
     borderWidth: 1,
-    borderRadius: 8,
+    borderRadius: 12,
   },
   townHallReqOk: {
     background: 'var(--terminal-long-soft)',
@@ -2174,13 +2158,13 @@ const S = {
   },
   townHallReqTitle: {
     fontSize: 10,
-    fontWeight: 700,
+    fontWeight: 600,
     textTransform: 'uppercase',
     letterSpacing: 0.45,
   },
   townHallReqBadgeOk: {
     fontSize: 10,
-    fontWeight: 700,
+    fontWeight: 600,
     padding: '2px 6px',
     borderRadius: 999,
     background: 'var(--terminal-long)',
@@ -2189,48 +2173,46 @@ const S = {
   },
   townHallReqBadgeBlocked: {
     fontSize: 10,
-    fontWeight: 700,
+    fontWeight: 600,
     padding: '2px 6px',
     borderRadius: 999,
     background: 'var(--terminal-short)',
     color: 'var(--terminal-on-accent)',
     whiteSpace: 'nowrap',
   },
-  townHallReqText: { fontSize: 12, fontWeight: 700 },
+  townHallReqText: { fontSize: 12, fontWeight: 600 },
   townHallReqSub: { fontSize: 10, fontWeight: 600, opacity: 0.82 },
   rewardCurrent: {
-    fontSize: 13, fontWeight: 700, color: 'var(--terminal-text)',
+    fontSize: 13, fontWeight: 600, color: 'var(--terminal-text)',
     background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 9,
     padding: '5px 8px', overflowWrap: 'anywhere',
   },
   rewardInput: {
-    width: '100%', boxSizing: 'border-box', border: '1px solid var(--terminal-border)', borderRadius: 10,
+    width: '100%', boxSizing: 'border-box', border: '1px solid var(--terminal-border)', borderRadius: 12,
     background: 'var(--terminal-surface)', color: 'var(--terminal-text)', fontSize: 12, fontWeight: 600,
     padding: '8px 10px', outline: 'none',
   },
   rewardActionRow: {
     display: 'flex', gap: 8, marginTop: 8,
   },
-  rewardChangeBtn: uiButton('secondary', { minHeight: 34, padding: '7px 10px', fontSize: 11, textTransform: 'uppercase' }),
+  rewardChangeBtn: uiButton('secondary', { minHeight: 34, padding: '7px 10px', fontSize: 11 }),
   rewardCancelBtn: {
     ...uiButton('secondary', { flex: 1, minHeight: 36, padding: '8px 12px', fontSize: 12 }),
-    textTransform: 'uppercase',
-  },
+      },
   rewardSaveBtn: {
     ...uiButton('primary', { flex: 1, minHeight: 36, padding: '8px 12px', fontSize: 12 }),
-    letterSpacing: 0.5, textTransform: 'uppercase',
-  },
+    letterSpacing: 0.5,   },
   hibachiSyncBanner: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
-    padding: '8px 10px', borderRadius: 10,
+    padding: '8px 10px', borderRadius: 12,
     background: 'var(--terminal-info-soft)', border: '1px solid var(--terminal-info-border)',
-    color: 'var(--terminal-text-secondary)', fontSize: 11, fontWeight: 700,
+    color: 'var(--terminal-text-secondary)', fontSize: 11, fontWeight: 600,
   },
   hibachiSyncWarning: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
-    padding: '8px 10px', borderRadius: 10,
-    background: 'var(--terminal-short-soft)', border: '1px solid var(--terminal-short)',
-    color: 'var(--terminal-short-strong)', fontSize: 11, fontWeight: 700,
+    padding: '8px 10px', borderRadius: 12,
+    background: 'var(--terminal-short-soft)', border: '1px solid var(--terminal-short-border)',
+    color: 'var(--terminal-short-strong)', fontSize: 11, fontWeight: 600,
   },
   hibachiSyncButton: {
     ...uiButton('secondary', { minHeight: 32, padding: '6px 9px', fontSize: 10 }),
@@ -2243,23 +2225,23 @@ const S = {
   },
 
   myCard: {
-    background: 'var(--terminal-warning-soft)', border: '1px solid var(--terminal-warning)', borderRadius: 14, padding: 12,
+    background: 'var(--terminal-warning-soft)', border: '1px solid var(--terminal-warning-border)', borderRadius: 14, padding: 12,
   },
   myCardHeader: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8,
   },
   myCardLabel: { fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-secondary)', textTransform: 'uppercase', letterSpacing: 0.5 },
-  myCardRank: { fontSize: 22, fontWeight: 700, color: 'var(--terminal-warning)' },
+  myCardRank: { fontSize: 22, fontWeight: 600, color: 'var(--terminal-warning)' },
   statRow: { display: 'flex', gap: 5, flexWrap: 'wrap', marginBottom: 8 },
   stat: {
     flex: '1 1 56px', minWidth: 56, textAlign: 'center', background: 'var(--terminal-surface)',
-    border: '1px solid var(--terminal-border)', borderRadius: 8, padding: '6px 4px',
+    border: '1px solid var(--terminal-border)', borderRadius: 12, padding: '6px 4px',
   },
-  statValue: { fontSize: 14, fontWeight: 700, lineHeight: 1.2 },
-  statLabel: { fontSize: 10, color: 'var(--terminal-text-muted)', textTransform: 'uppercase', marginTop: 2, fontWeight: 700, letterSpacing: 0.4 },
+  statValue: { fontSize: 14, fontWeight: 600, lineHeight: 1.2 },
+  statLabel: { fontSize: 10, color: 'var(--terminal-text-muted)', textTransform: 'uppercase', marginTop: 2, fontWeight: 600, letterSpacing: 0.4 },
   freezeNote: {
     fontSize: 11, color: 'var(--terminal-text-secondary)', lineHeight: 1.4, padding: '6px 4px',
-    background: 'var(--terminal-surface)', borderRadius: 8, marginBottom: 8,
+    background: 'var(--terminal-surface)', borderRadius: 12, marginBottom: 8,
   },
   leaveBtn: uiButton('danger', { width: '100%', minHeight: 34, padding: '6px', fontSize: 11 }),
 
@@ -2274,32 +2256,32 @@ const S = {
     minWidth: 0, display: 'flex', alignItems: 'center', gap: 10, flex: '1 1 auto',
   },
   dailyTitle: {
-    fontSize: 13, fontWeight: 700, color: 'var(--terminal-text)',
-    textTransform: 'uppercase', letterSpacing: 0.5,
+    fontSize: 13, fontWeight: 600, color: 'var(--terminal-text)',
+    letterSpacing: 0.5,
   },
   dailySub: { fontSize: 10, fontWeight: 600, color: 'var(--terminal-text-secondary)', marginTop: 1 },
   dailyCompactMine: {
     display: 'flex', alignItems: 'baseline', gap: 4, minWidth: 0,
-    padding: '4px 7px', borderRadius: 8,
-    background: 'var(--terminal-warning-soft)', border: '1px solid rgba(124, 90, 58, 0.18)',
+    padding: '4px 7px', borderRadius: 12,
+    background: 'var(--terminal-warning-soft)', border: '1px solid var(--terminal-warning-border)',
     whiteSpace: 'nowrap',
   },
   dailyCompactLabel: {
-    fontSize: 10, fontWeight: 700, color: 'var(--terminal-text-secondary)', textTransform: 'uppercase',
+    fontSize: 10, fontWeight: 600, color: 'var(--terminal-text-secondary)', textTransform: 'uppercase',
   },
   dailyCompactValue: {
-    fontSize: 12, fontWeight: 700, color: 'var(--terminal-long)',
+    fontSize: 12, fontWeight: 600, color: 'var(--terminal-long)',
   },
   dailyToggleLive: {
-    fontSize: 10, fontWeight: 700, padding: '4px 7px', borderRadius: 7,
-    background: 'var(--terminal-info-soft)', border: '1px solid #60a5fa', color: 'var(--terminal-info)',
-    textTransform: 'uppercase', letterSpacing: 0.4, cursor: 'pointer',
+    fontSize: 10, fontWeight: 600, padding: '4px 7px', borderRadius: 999,
+    background: 'var(--terminal-info-soft)', border: '1px solid var(--terminal-info-border)', color: 'var(--terminal-info)',
+    cursor: 'pointer',
     fontFamily: 'inherit', display: 'inline-flex', alignItems: 'center', gap: 5,
   },
   dailyToggleDone: {
-    fontSize: 10, fontWeight: 700, padding: '4px 7px', borderRadius: 7,
-    background: 'var(--terminal-long-soft)', border: '1px solid var(--terminal-long)', color: 'var(--terminal-long)',
-    textTransform: 'uppercase', letterSpacing: 0.4, cursor: 'pointer',
+    fontSize: 10, fontWeight: 600, padding: '4px 7px', borderRadius: 999,
+    background: 'var(--terminal-long-soft)', border: '1px solid var(--terminal-long-border)', color: 'var(--terminal-long)',
+    cursor: 'pointer',
     fontFamily: 'inherit', display: 'inline-flex', alignItems: 'center', gap: 5,
   },
   dailyCaret: {
@@ -2312,12 +2294,12 @@ const S = {
   dailyChip: {
     flex: '0 0 auto', padding: '5px 8px', borderRadius: 999,
     background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', color: 'var(--terminal-text-secondary)',
-    fontSize: 10, fontWeight: 700, cursor: 'pointer',
+    fontSize: 10, fontWeight: 600, cursor: 'pointer',
   },
   dailyChipActive: {
     flex: '0 0 auto', padding: '5px 8px', borderRadius: 999,
-    background: 'var(--terminal-warning-soft)', border: '1px solid var(--terminal-warning)', color: 'var(--terminal-text)',
-    fontSize: 10, fontWeight: 700, cursor: 'pointer',
+    background: 'var(--terminal-warning-soft)', border: '1px solid var(--terminal-warning-border)', color: 'var(--terminal-text)',
+    fontSize: 10, fontWeight: 600, cursor: 'pointer',
   },
   dailyWindow: {
     fontSize: 10,
@@ -2331,26 +2313,25 @@ const S = {
   },
   dailyMine: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    background: 'var(--terminal-warning-soft)', border: '1px solid var(--terminal-warning)', borderRadius: 12,
+    background: 'var(--terminal-warning-soft)', border: '1px solid var(--terminal-warning-border)', borderRadius: 12,
     padding: '7px 9px',
   },
   dailyMineMain: { display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 },
   dailyMineLabel: {
-    fontSize: 10, fontWeight: 700, color: 'var(--terminal-text-secondary)',
-    textTransform: 'uppercase', letterSpacing: 0.4,
+    fontSize: 10, fontWeight: 600, color: 'var(--terminal-text-secondary)',
   },
   dailyMineValue: {
-    fontSize: 16, fontWeight: 700, color: 'var(--terminal-long)',
+    fontSize: 16, fontWeight: 600, color: 'var(--terminal-long)',
     fontVariantNumeric: 'tabular-nums',
   },
-  dailyMineRank: { fontSize: 20, fontWeight: 700, color: 'var(--terminal-warning)' },
+  dailyMineRank: { fontSize: 20, fontWeight: 600, color: 'var(--terminal-warning)' },
   dailyGrid: { display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 5 },
   dailyMiniStat: {
     minWidth: 0, background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 9,
     padding: '5px 3px', textAlign: 'center', display: 'flex', flexDirection: 'column', gap: 1,
   },
   dailyMiniValue: {
-    fontSize: 10, fontWeight: 700, color: 'var(--terminal-text)',
+    fontSize: 10, fontWeight: 600, color: 'var(--terminal-text)',
     whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
   },
   dailyMiniLabel: {
@@ -2365,17 +2346,17 @@ const S = {
     borderWidth: 1,
     borderStyle: 'solid',
     borderColor: 'var(--terminal-border)',
-    borderRadius: 10,
+    borderRadius: 12,
     padding: '5px 7px',
   },
   dailyPlayerRank: {
     width: 24, height: 24, borderRadius: '50%', background: 'var(--terminal-text-muted)', color: 'var(--terminal-on-accent)',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
-    fontSize: 11, fontWeight: 700,
+    fontSize: 11, fontWeight: 600,
   },
   dailyPlayerInfo: { display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 },
   dailyPlayerName: {
-    fontSize: 12, fontWeight: 700, color: 'var(--terminal-text)',
+    fontSize: 12, fontWeight: 600, color: 'var(--terminal-text)',
     whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
   },
   dailyPlayerMeta: {
@@ -2383,7 +2364,7 @@ const S = {
     whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
   },
   dailyPlayerPoints: {
-    fontSize: 12, fontWeight: 700, color: 'var(--terminal-long)',
+    fontSize: 12, fontWeight: 600, color: 'var(--terminal-long)',
     fontVariantNumeric: 'tabular-nums',
   },
   dailyEmpty: {
@@ -2391,7 +2372,7 @@ const S = {
     background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 9,
   },
 
-  lbHeader: { fontSize: 13, fontWeight: 700, color: 'var(--terminal-text)', textTransform: 'uppercase', letterSpacing: 0.6, padding: '4px 2px 0' },
+  lbHeader: { fontSize: 13, fontWeight: 600, color: 'var(--terminal-text)', letterSpacing: 0.6, padding: '4px 2px 0' },
   lbList: { display: 'flex', flexDirection: 'column', gap: 5 },
   row: {
     display: 'grid', gridTemplateColumns: '26px minmax(0, 1fr) max-content',
@@ -2401,23 +2382,23 @@ const S = {
   rank: {
     width: 26, height: 26, borderRadius: '50%',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
-    fontSize: 12, fontWeight: 700, flexShrink: 0, justifySelf: 'center',
+    fontSize: 12, fontWeight: 600, flexShrink: 0, justifySelf: 'center',
   },
   info: { display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 },
-  name: { fontSize: 13, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+  name: { fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
   topDexBadge: {
     display: 'inline-block', marginLeft: 6, verticalAlign: 'middle',
-    fontSize: 10, fontStyle: 'normal', fontWeight: 700, color: 'var(--terminal-info)',
-    background: 'var(--terminal-info-soft)', border: '1px solid var(--terminal-info-border)', borderRadius: 6,
+    fontSize: 10, fontStyle: 'normal', fontWeight: 600, color: 'var(--terminal-info)',
+    background: 'var(--terminal-info-soft)', border: '1px solid var(--terminal-info-border)', borderRadius: 999,
     padding: '1px 5px', textTransform: 'uppercase',
   },
   subRow: {
-    display: 'block', fontSize: 10, fontWeight: 700, color: 'var(--terminal-text-muted)',
+    display: 'block', fontSize: 10, fontWeight: 600, color: 'var(--terminal-text-muted)',
     lineHeight: 1.22, overflowWrap: 'anywhere',
   },
-  prizeText: { color: 'var(--terminal-long)', fontWeight: 700, whiteSpace: 'nowrap' },
+  prizeText: { color: 'var(--terminal-long)', fontWeight: 600, whiteSpace: 'nowrap' },
   featured: {
-    fontSize: 13, fontWeight: 700, flexShrink: 0, fontVariantNumeric: 'tabular-nums',
+    fontSize: 13, fontWeight: 600, flexShrink: 0, fontVariantNumeric: 'tabular-nums',
     lineHeight: 1.1, justifySelf: 'end', textAlign: 'right', whiteSpace: 'nowrap',
   },
 };

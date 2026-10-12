@@ -5,8 +5,7 @@
   display: grid;
   place-items: center;
   padding: 18px;
-  background: rgba(19, 27, 31, 0.66);
-  backdrop-filter: blur(3px);
+  background: var(--terminal-overlay);
 }
 
 .ranked-attack-panel {
@@ -14,9 +13,9 @@
   max-height: min(820px, calc(100vh - 36px));
   overflow: auto;
   border: 1px solid var(--terminal-border);
-  border-radius: 20px;
+  border-radius: 16px;
   background: var(--terminal-surface);
-  box-shadow: 0 20px 60px var(--terminal-shadow);
+  box-shadow: var(--terminal-shadow-card);
   color: var(--terminal-text);
   scrollbar-gutter: stable;
 }
@@ -32,7 +31,7 @@
   min-height: 76px;
   padding: 12px 16px;
   border-bottom: 1px solid var(--terminal-border);
-  background: var(--terminal-surface-subtle);
+  background: var(--terminal-surface);
 }
 
 .ranked-attack-title-lockup {
@@ -51,9 +50,10 @@
 
 .ranked-attack-title-lockup span {
   display: block;
-  color: var(--terminal-text-muted);
+  color: var(--terminal-text-faint);
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 600;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
@@ -66,10 +66,11 @@
 .ranked-attack-panel h2 {
   overflow: hidden;
   color: var(--terminal-text);
-  font-size: clamp(22px, 4vw, 30px);
-  line-height: 1.04;
+  font-size: clamp(20px, 3.4vw, 28px);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
   text-overflow: ellipsis;
-  text-shadow: none;
   white-space: nowrap;
 }
 
@@ -77,16 +78,21 @@
   width: 42px;
   height: 42px;
   flex: 0 0 42px;
-  border: 1px solid var(--terminal-short-strong);
-  border-radius: 10px;
-  background: var(--terminal-short);
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
   box-shadow: none;
-  color: var(--terminal-on-accent);
+  color: var(--terminal-text-secondary);
   cursor: pointer;
   font: inherit;
   font-size: 20px;
-  font-weight: 700;
+  font-weight: 500;
   line-height: 32px;
+}
+
+.ranked-attack-close:hover {
+  background: var(--terminal-hover);
+  color: var(--terminal-text);
 }
 
 .ranked-attack-tournament-picker {
@@ -95,22 +101,22 @@
   gap: 10px;
   margin: 12px 14px 0;
   color: var(--terminal-text-muted);
-  font-size: 11px;
-  font-weight: 700;
-  text-transform: uppercase;
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .ranked-attack-tournament-picker select {
   min-width: 0;
   flex: 1;
-  border: 1px solid var(--terminal-border-strong);
-  border-radius: 10px;
-  background: var(--terminal-surface-subtle);
+  border: 1px solid var(--terminal-border);
+  border-radius: 12px;
+  background: var(--terminal-input);
   color: var(--terminal-text);
   font: inherit;
-  font-size: 12px;
-  font-weight: 600;
-  padding: 8px 10px;
+  font-size: 13px;
+  font-weight: 500;
+  min-height: 40px;
+  padding: 8px 12px;
 }
 
 .ranked-attack-modes {
@@ -130,7 +136,7 @@
   border: 1px solid var(--terminal-border);
   border-radius: 16px;
   background: var(--terminal-surface);
-  box-shadow: 0 1px 2px var(--terminal-shadow-soft);
+  box-shadow: none;
 }
 
 .ranked-attack-mode.casual {
@@ -155,11 +161,11 @@
 }
 
 .ranked-attack-visual.casual {
-  background: #b5dce8;
+  background: var(--terminal-surface-muted);
 }
 
 .ranked-attack-visual.ranked {
-  background: #f0bd59;
+  background: var(--terminal-surface-muted);
 }
 
 .ranked-attack-hero {
@@ -207,13 +213,12 @@
   position: absolute;
   top: 10px;
   right: 10px;
-  border: 1px solid currentColor;
+  border: 1px solid var(--terminal-border);
   border-radius: 999px;
-  padding: 4px 8px;
+  padding: 4px 10px;
   background: var(--terminal-surface);
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .ranked-attack-status.casual {
@@ -243,17 +248,19 @@
 .ranked-attack-heading > span {
   display: block;
   margin-bottom: 2px;
-  color: var(--terminal-brand-text);
+  color: var(--terminal-text-faint);
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 600;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
 .ranked-attack-heading h3 {
   overflow: hidden;
   color: var(--terminal-text);
-  font-size: 21px;
-  line-height: 1.1;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -262,7 +269,7 @@
   margin-top: 5px;
   color: var(--terminal-text-muted);
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 500;
   line-height: 1.4;
 }
 
@@ -273,12 +280,6 @@
   left: 16px;
   z-index: 1;
   color: var(--terminal-text);
-  text-shadow:
-    -1px -1px 0 rgba(255, 248, 231, 0.96),
-    1px -1px 0 rgba(255, 248, 231, 0.96),
-    -1px 1px 0 rgba(255, 248, 231, 0.96),
-    1px 1px 0 rgba(255, 248, 231, 0.96),
-    0 2px 2px var(--terminal-warning-soft);
 }
 
 .ranked-attack-casual-heading h3,
@@ -287,7 +288,7 @@
 }
 
 .ranked-attack-casual-heading > span {
-  color: var(--terminal-brand-text);
+  color: var(--terminal-text-faint);
 }
 
 .ranked-attack-casual-heading h3 {
@@ -319,8 +320,10 @@
   display: block;
   overflow: hidden;
   color: var(--terminal-text-muted);
+  color: var(--terminal-text-faint);
   font-size: 10px;
-  font-weight: 700;
+  font-weight: 600;
+  letter-spacing: 0.06em;
   text-overflow: ellipsis;
   text-transform: uppercase;
   white-space: nowrap;
@@ -331,6 +334,8 @@
   margin-top: 2px;
   color: var(--terminal-text);
   font-size: 16px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 
 .ranked-attack-trading-strip {
@@ -354,11 +359,11 @@
 }
 
 .ranked-attack-rules span {
-  border-radius: 5px;
+  border-radius: 999px;
   background: var(--terminal-surface-muted);
-  color: var(--terminal-text-control);
-  padding: 4px 7px;
-  font-size: 9px;
+  color: var(--terminal-text-muted);
+  padding: 4px 8px;
+  font-size: 10px;
   font-weight: 600;
 }
 
@@ -370,7 +375,7 @@
 .ranked-attack-deadline {
   color: var(--terminal-info);
   font-size: 10px;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .ranked-attack-registration {
@@ -387,24 +392,24 @@
 
 .ranked-attack-registration label > span {
   color: var(--terminal-text-muted);
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .ranked-attack-registration input {
   width: 100%;
   min-width: 0;
   box-sizing: border-box;
-  border: 1px solid var(--terminal-border-strong);
-  border-radius: 10px;
+  border: 1px solid var(--terminal-border);
+  border-radius: 12px;
   outline: none;
-  background: var(--terminal-surface);
+  background: var(--terminal-input);
   color: var(--terminal-text);
   font: inherit;
-  font-size: 12px;
-  font-weight: 600;
-  padding: 8px 9px;
+  font-size: 13px;
+  font-weight: 500;
+  min-height: 40px;
+  padding: 8px 12px;
 }
 
 .ranked-attack-registration input:focus {
@@ -416,29 +421,37 @@
 .ranked-attack-primary {
   min-height: 50px;
   margin-top: auto;
-  border-radius: 10px;
+  border-radius: 999px;
   cursor: pointer;
-  color: var(--terminal-on-accent);
+  color: #ffffff;
   font: inherit;
-  font-weight: 700;
-  text-shadow: none;
+  font-size: 14px;
+  font-weight: 600;
 }
 
 .ranked-attack-casual-button {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  border: 1px solid var(--terminal-brand-strong);
+  border: 1px solid var(--terminal-neutral-button);
+  background: var(--terminal-neutral-button);
+  box-shadow: none;
+  padding: 0 18px;
+}
+
+.ranked-attack-primary {
+  border: 1px solid var(--terminal-orange);
   background: var(--terminal-orange);
   box-shadow: none;
   padding: 0 16px;
 }
 
-.ranked-attack-primary {
-  border: 1px solid var(--terminal-brand-strong);
-  background: var(--terminal-orange);
-  box-shadow: none;
-  padding: 0 12px;
+.ranked-attack-primary:not(:disabled):hover {
+  background: var(--terminal-brand-strong);
+}
+
+.ranked-attack-casual-button:not(:disabled):hover {
+  background: var(--terminal-neutral-button-hover);
 }
 
 .ranked-attack-primary:disabled,
@@ -454,32 +467,32 @@
   place-items: center;
   align-content: center;
   gap: 8px;
-  border: 1px dashed var(--terminal-border-strong);
+  border: 1px solid var(--terminal-border);
   border-radius: 16px;
-  color: var(--terminal-info);
+  color: var(--terminal-text-muted);
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 600;
   text-align: center;
 }
 
 .ranked-attack-loading span {
   width: 22px;
   height: 22px;
-  border: 3px solid var(--terminal-info-soft);
-  border-top-color: var(--terminal-info);
+  border: 2px solid var(--terminal-border);
+  border-top-color: var(--terminal-orange);
   border-radius: 50%;
   animation: ranked-attack-spin 0.7s linear infinite;
 }
 
 .ranked-attack-error {
   margin: 0 14px 14px;
-  border: 2px solid #cf6862;
-  border-radius: 7px;
-  background: #ffe6e2;
-  color: #a22d28;
+  border: 1px solid var(--terminal-short-border);
+  border-radius: 12px;
+  background: var(--terminal-short-soft);
+  color: var(--terminal-short);
   padding: 10px 12px;
-  font-size: 11px;
-  font-weight: 850;
+  font-size: 12px;
+  font-weight: 600;
   text-align: center;
 }
 
@@ -495,8 +508,8 @@
 
   .ranked-attack-panel {
     max-height: 94vh;
-    border-width: 3px 3px 0;
-    border-radius: 8px 8px 0 0;
+    border-width: 1px 1px 0;
+    border-radius: 16px 16px 0 0;
   }
 
   .ranked-attack-panel > header {
@@ -511,7 +524,7 @@
   }
 
   .ranked-attack-panel h2 {
-    font-size: 25px;
+    font-size: 22px;
   }
 
   .ranked-attack-modes {
@@ -531,7 +544,7 @@
   }
 
   .ranked-attack-visual {
-    border-right: 3px solid #a98a58;
+    border-right: 1px solid var(--terminal-border);
     border-bottom: 0;
   }
 

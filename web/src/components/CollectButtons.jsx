@@ -6,19 +6,13 @@ import woodIcon from '../assets/resources/wood_bar.png';
 import stoneIcon from '../assets/resources/stone_bar.png';
 
 const RES_ICONS = { gold: goldIcon, wood: woodIcon, ore: stoneIcon };
-const RES_COLORS = {
-  gold: '#FFD700',
-  wood: '#8BC34A',
-  ore: '#90A4AE',
-};
 
 const CollectButton = memo(function CollectButton({ serverId, x, y, resource, amount, onCollect }) {
-  const color = RES_COLORS[resource] || '#FFD700';
   return (
     <div style={{ position: 'fixed', left: x - 24, top: y - 56, zIndex: 15, pointerEvents: 'all' }}>
       <button
         type="button"
-        style={{ ...styles.btn, borderColor: color, boxShadow: `0 4px 12px ${color}66` }}
+        style={styles.btn}
         onClick={() => onCollect(serverId)}
         aria-label={`Collect ${amount} ${resource}`}
       >
@@ -62,17 +56,14 @@ const styles = {
     flexDirection: 'column',
     alignItems: 'center',
     gap: 2,
-    background: 'rgba(0, 0, 0, 0.7)',
-    // Longhand border so the per-resource `borderColor` override on the
-    // button doesn't mix shorthand + longhand (React warns about that
-    // when the color changes between renders).
-    borderWidth: 1,
-    borderStyle: 'solid',
-    borderColor: '#FFD700',
+    minWidth: 48,
+    minHeight: 48,
+    background: 'rgba(17, 20, 27, 0.92)',
+    border: '1px solid var(--terminal-border)',
     borderRadius: 14,
     padding: '6px 10px',
     cursor: 'pointer',
-    transition: 'transform 0.1s',
+    boxShadow: 'var(--terminal-shadow-card)',
     backdropFilter: 'blur(4px)',
   },
   icon: {
@@ -83,9 +74,9 @@ const styles = {
   },
   amount: {
     fontSize: 12,
-    fontWeight: 700,
-    color: 'var(--terminal-on-accent)',
-    textShadow: 'none',
+    fontWeight: 600,
+    color: 'var(--terminal-text)',
+    fontVariantNumeric: 'tabular-nums',
   },
 };
 

@@ -41,5 +41,5 @@ test('terminal replaces the old route summary and accurately describes server-in
   assert.doesNotMatch(terminal, /IMPERIAL SMART ROUTE/);
   assert.match(terminal, /No separate wallet approval is required\./);
   assert.match(terminal, /Imperial does not require a separate per-user builder approval\./);
-  assert.match(terminal, /label: isRunning \? 'CONNECTING\.\.\.' : 'SIGN & CONNECT'/);
+  assert.match(terminal, /label: isRunning \? 'Connecting...' : 'Sign & connect'/);
 });
