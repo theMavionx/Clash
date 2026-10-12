@@ -155,6 +155,29 @@ const GODOT_PHASE_LABELS = {
 };
 const DEFAULT_LOADING_DETAIL = 'Downloading Godot runtime';
 let godotRuntimeManifestPromise = null;
+// Per-file cache-bust tokens derived from the runtime manifest (content hash).
+// The web bundle is redeployed far more often than the Godot runtime; keying
+// Work.wasm/Work.pck URLs on VITE_BUILD_ID forced every returning player to
+// re-download ~90 MB after each web-only deploy. Content hashes keep the
+// immutable HTTP cache entry valid until the runtime actually changes.
+let godotAssetVersions = null;
+
+async function resolveGodotAssetVersions() {
+  if (godotAssetVersions) return godotAssetVersions;
+  try {
+    const manifest = await loadGodotRuntimeManifest();
+    const files = manifest?.files || {};
+    const versions = {};
+    for (const [name, info] of Object.entries(files)) {
+      const hash = String(info?.sha256 || '').toLowerCase();
+      if (/^[0-9a-f]{16,}$/.test(hash)) versions[name] = hash.slice(0, 16);
+    }
+    if (Object.keys(versions).length) godotAssetVersions = versions;
+  } catch {
+    // Fall back to the build token in withGodotCacheBust.
+  }
+  return godotAssetVersions;
+}
 
 function createWebLoadingAudio() {
   if (typeof Audio === 'undefined') {
@@ -661,7 +684,8 @@ async function validateGodotAssetResponse(rawUrl, response) {
 
 function withGodotCacheBust(rawUrl) {
   const url = new URL(String(rawUrl), window.location.href);
-  url.searchParams.set('v', GODOT_BUILD_TOKEN);
+  const name = url.pathname.split('/').pop();
+  url.searchParams.set('v', godotAssetVersions?.[name] || GODOT_BUILD_TOKEN);
   return url.href;
 }
 
@@ -938,7 +962,7 @@ function loadGodotEngineScript() {
     }
 
     const cleanSrc = `${GODOT_FILES}/Work.js`;
-    const bustedSrc = `${cleanSrc}${CACHE_BUST}`;
+    const bustedSrc = withGodotCacheBust(cleanSrc);
     const appendAttempt = (src, isRetry) => {
       // A script element is "already started" after its first load, including
       // failure. Changing that same element's src does not start a new fetch.
@@ -1862,7 +1886,7 @@ function GodotCanvas({ onEngineReady }) {
         setLoadingDetail(loadingPhaseLabel('load_engine_script'));
         recordLoadingEvent('load_engine_script');
         restoreGodotFetch = installGodotFetchCacheBust();
-        return loadGodotEngineScript();
+        return resolveGodotAssetVersions().then(() => loadGodotEngineScript());
       })
       .then(() => {
         if (disposed) return;

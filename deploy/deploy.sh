@@ -1252,7 +1252,7 @@ build_frontend() {
 
     if [ "$GODOT_CHANGED" = "1" ]; then
         compress_static_file "godot/Work.pck" 9
-        compress_static_file "godot/Work.wasm" 6
+        compress_static_file "godot/Work.wasm" 11
         compress_static_file "godot/Work.js" 6
     else
         log "Skipping Godot compression because current compressed runtime was reused."
@@ -1260,7 +1260,7 @@ build_frontend() {
 
     for f in "$WEB_DIST"/assets/*.js "$WEB_DIST"/assets/*.css; do
         if [ -f "$f" ]; then
-            compress_static_file "assets/$(basename "$f")" 6
+            compress_static_file "assets/$(basename "$f")" 11
         fi
     done
 
@@ -2042,6 +2042,10 @@ server {
     location /assets/ {
         add_header Cache-Control "public, max-age=31536000, immutable";
         add_header Cross-Origin-Opener-Policy "same-origin-allow-popups" always;
+        # Serve the precompressed .br/.gz written by build_frontend instead of
+        # gzipping hashed JS/CSS on every request (brotli_static is appended
+        # after this line when the module is available).
+        gzip_static on;
     }
 
     gzip on;

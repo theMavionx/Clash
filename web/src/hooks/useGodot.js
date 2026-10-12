@@ -481,7 +481,11 @@ export function GodotProvider({ children }) {
           });
           break;
         case 'fleet_info':
-          setFleetInfo(data);
+          // Skip identical payloads: fleet_info lives in the shared UI context,
+          // so a new object re-renders every useUI() consumer.
+          setFleetInfo(prev => (
+            prev && data && JSON.stringify(prev) === JSON.stringify(data) ? prev : data
+          ));
           if (Number.isInteger(Number(data?.selected_group))) {
             setSelectedTroopIdx(Math.max(0, Number(data.selected_group)));
           }
