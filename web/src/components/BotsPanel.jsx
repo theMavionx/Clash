@@ -1385,21 +1385,6 @@ function BotCard({ bot, expanded, onToggle, onStart, onStop, onDelete }) {
           </span>
           <span style={S.expandIcon}>{expanded ? '−' : '+'}</span>
         </div>
-        <div style={S.cardProgress}>
-          <div style={S.cardProgressTop}>
-            <span style={S.cardProgressValue}>{money(bot.tradeSize)}</span>
-            <span style={S.cardProgressMeta}>
-              {Number(bot.maxPosition) > 0 ? `of ${money(bot.maxPosition)} max position` : 'No position cap'}
-            </span>
-          </div>
-          <div style={S.progressTrack}>
-            <div style={{
-              ...S.progressFill,
-              ...(isRunning ? {} : S.progressFillIdle),
-              width: `${Number(bot.maxPosition) > 0 ? Math.max(0, Math.min(100, (Number(bot.tradeSize) / Number(bot.maxPosition)) * 100)) : 0}%`,
-            }} />
-          </div>
-        </div>
         <div style={S.metricGrid}>
           <div style={S.metric}>
             <span style={S.metricLabel}>{bot.pnlLabel || 'uPnL'}</span>
@@ -1421,10 +1406,8 @@ function BotCard({ bot, expanded, onToggle, onStart, onStop, onDelete }) {
             </strong>
           </div>
           <div style={S.metric}>
-            <span style={S.metricLabel}>Fees</span>
-            <strong style={S.metricValue}>
-              {bot.sessionSummary ? money(bot.sessionSummary.feesUsd) : '—'}
-            </strong>
+            <span style={S.metricLabel}>Trade Size</span>
+            <strong style={S.metricValue}>{money(bot.tradeSize)}</strong>
           </div>
         </div>
         {!expanded && isRunning && (
