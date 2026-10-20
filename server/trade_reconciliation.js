@@ -81,8 +81,10 @@ const VERIFIED_SOURCES_BY_DEX = {
   katana: ['katana_api'],
   gmtrade: ['gmtrade_tx', 'gmtrade_position_after_tx', 'gmtrade_close_tx_client_notional'],
   flash: ['flash_tx'],
-  lighter: ['lighter_integrator'],
-  rhlighter: ['rhlighter_integrator'],
+  // *_integrator: Clash builder fills (fee revenue). *_terminal: non-builder
+  // (Standard account) fills matched to a server-signed order receipt; rewards only.
+  lighter: ['lighter_integrator', 'lighter_terminal'],
+  rhlighter: ['rhlighter_integrator', 'rhlighter_terminal'],
   bulk: ['bulk_builder_signed', 'bulk_clash_signed'],
   imperial: ['imperial_api'],
 };

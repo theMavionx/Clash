@@ -13,6 +13,7 @@ const {
   lighterBuilderFields,
   isLighterAccountTierError,
 } = require('./lighter-builder-policy');
+const lighterReceipts = require('./lighter-receipts');
 const signerQueue = createSignerQueue();
 let egress;
 function lighterEgress() { return egress ||= createLighterEgress(); }
@@ -45,6 +46,8 @@ function makeProfile(options = {}) {
     referralCode,
     referralUrl: String(options.referralUrl || '').trim(),
     signerRunner: typeof options.signerRunner === 'function' ? options.signerRunner : null,
+    receiptDb: options.receiptDb || null,
+    tradeDb: options.tradeDb || null,
   });
 }
 
@@ -1357,6 +1360,77 @@ function logSignerResult(label, data = {}) {
   }));
 }
 
+function receiptDb() {
+  return currentProfile().receiptDb || require('./db').db;
+}
+
+function receiptFor(order, { market, creds, playerId, builderFields, orderTypeName, groupRole }) {
+  return {
+    dex: currentProfile().dexId,
+    accountIndex: creds.account_index,
+    apiKeyIndex: creds.api_key_index,
+    clientOrderIndex: order.client_order_index,
+    playerId,
+    marketId: Number(market.market_id),
+    symbol: market.symbol,
+    isAsk: order.is_ask,
+    baseAmount: order.base_amount,
+    size: decimalFromInteger(order.base_amount, market.size_decimals),
+    price: order._signer_price,
+    orderType: orderTypeName,
+    reduceOnly: order.reduce_only,
+    triggerPrice: order._ui_trigger_price,
+    groupRole,
+    builderApplied: builderFields.integrator_account_index > 0,
+    integratorAccountIndex: builderFields.integrator_account_index,
+  };
+}
+
+/**
+ * Persists server-side receipts around one signer submission. Receipts are the
+ * only evidence for the <dex>_terminal reward source. A key clash refuses the
+ * order; other storage failures leave the order uncredited but do not block trading.
+ */
+async function submitWithReceipts(receipts, ctx, submit) {
+  const playerId = String(ctx?.playerId || '').trim();
+  let stored = false;
+  if (playerId && receipts.length) {
+    try {
+      lighterReceipts.recordPendingReceipts(receiptDb(), receipts.map(r => ({ ...r, playerId })));
+      stored = true;
+    } catch (err) {
+      if (/UNIQUE|constraint|already exists/iu.test(String(err?.message))) {
+        throw Object.assign(new Error('Lighter client order index already used; retry the order'), { status: 409 });
+      }
+      console.warn(`[${currentProfile().dexId}] order receipt not stored:`, err?.message || err);
+    }
+  }
+  const finalize = (status, result) => {
+    if (!stored) return;
+    try {
+      lighterReceipts.finalizeReceipts(receiptDb(), {
+        dex: receipts[0].dex,
+        accountIndex: receipts[0].accountIndex,
+        clientOrderIndexes: receipts.map(r => r.clientOrderIndex),
+        status,
+        txHash: result?.tx_hash || null,
+        response: result?.response ?? result ?? null,
+      });
+    } catch (err) {
+      console.warn(`[${currentProfile().dexId}] order receipt finalize failed:`, err?.message || err);
+    }
+  };
+  let result;
+  try {
+    result = await submit();
+  } catch (err) {
+    finalize('rejected', { error: String(err?.message || err).slice(0, 500) });
+    throw err;
+  }
+  finalize('submitted', result);
+  return result;
+}
+
 async function createGroupedOrder({
   creds,
   market,
@@ -1368,15 +1442,15 @@ async function createGroupedOrder({
   slippage,
   input = {},
   builderFields,
+  ctx = {},
 }) {
   const takeProfitUi = positiveNumberFrom(input, 'takeProfit', 'take_profit', 'tp');
   const stopLossUi = positiveNumberFrom(input, 'stopLoss', 'stop_loss', 'sl');
   const childCount = (takeProfitUi > 0 ? 1 : 0) + (stopLossUi > 0 ? 1 : 0);
   if (!childCount) return null;
 
-  const baseClientOrderIndex = Number.isInteger(Number(input.clientOrderIndex))
-    ? Number(input.clientOrderIndex)
-    : nextClientOrderIndex(0);
+  // Always server-generated: receipts must not reuse a client-chosen index.
+  const baseClientOrderIndex = nextClientOrderIndex(0);
   const entryOrder = buildSignedOrderPayload({
     market,
     clientOrderIndex: baseClientOrderIndex,
@@ -1423,12 +1497,21 @@ async function createGroupedOrder({
     ? LIGHTER_GROUPING_TYPES.one_triggers_oco
     : LIGHTER_GROUPING_TYPES.one_triggers_the_other;
   const orders = [entryOrder, ...childOrders];
-  const result = await runSigner('create_grouped_orders', {
+  const receiptBase = { market, creds, playerId: ctx.playerId, builderFields };
+  const receipts = [
+    receiptFor(entryOrder, { ...receiptBase, orderTypeName: orderType.name, groupRole: 'entry' }),
+    ...childOrders.map(child => receiptFor(child, {
+      ...receiptBase,
+      orderTypeName: child.order_type === LIGHTER_ORDER_TYPES.take_profit ? 'take_profit' : 'stop_loss',
+      groupRole: child.order_type === LIGHTER_ORDER_TYPES.take_profit ? 'take_profit' : 'stop_loss',
+    })),
+  ];
+  const result = await submitWithReceipts(receipts, ctx, () => runSigner('create_grouped_orders', {
     ...creds,
     grouping_type: groupingType,
     orders: orders.map(stripSignedOrderMeta),
     ...builderFields,
-  });
+  }));
   logSignerResult('grouped order submitted', {
     account_index: creds.account_index,
     market: market.symbol,
@@ -1465,7 +1548,7 @@ async function createGroupedOrder({
   };
 }
 
-async function createOrder(input = {}) {
+async function createOrder(input = {}, ctx = {}) {
   const creds = signerCredentials(input);
   const policy = await resolveBuilderPolicy(input);
   if (policy.builderSupported !== false) {
@@ -1473,7 +1556,7 @@ async function createOrder(input = {}) {
     try {
       return await placeOrderWithBuilder(input, creds, lighterBuilderFields(currentProfile(), {
         builderSupported: policy.builderSupported, accountIndex: creds.account_index,
-      }));
+      }), ctx);
     } catch (err) {
       // Lighter refuses integrator fees on regular accounts (21520). The order was
       // rejected (not placed), so resend once without builder fields.
@@ -1482,10 +1565,10 @@ async function createOrder(input = {}) {
       console.warn(`[${currentProfile().dexId}] account ${creds.account_index} refused integrator fee (21520); trading without builder`);
     }
   }
-  return placeOrderWithBuilder(input, creds, lighterBuilderFields(currentProfile(), { builderSupported: false }));
+  return placeOrderWithBuilder(input, creds, lighterBuilderFields(currentProfile(), { builderSupported: false }), ctx);
 }
 
-async function placeOrderWithBuilder(input, creds, builderFields) {
+async function placeOrderWithBuilder(input, creds, builderFields, ctx = {}) {
   await requireReferralForTrading({
     ...input,
     accountIndex: creds.account_index,
@@ -1519,12 +1602,11 @@ async function placeOrderWithBuilder(input, creds, builderFields) {
       slippage,
       input,
       builderFields,
+      ctx,
     });
     if (grouped) return grouped;
   }
-  const clientOrderIndex = Number.isInteger(Number(input.clientOrderIndex))
-    ? Number(input.clientOrderIndex)
-    : nextClientOrderIndex();
+  const clientOrderIndex = nextClientOrderIndex();
   const signedOrder = buildSignedOrderPayload({
     market,
     clientOrderIndex,
@@ -1536,11 +1618,14 @@ async function placeOrderWithBuilder(input, creds, builderFields) {
     triggerPriceUi,
     slippage,
   });
-  const result = await runSigner('create_order', {
+  const result = await submitWithReceipts([
+    receiptFor(signedOrder, { market, creds, playerId: ctx.playerId, builderFields, orderTypeName: orderType.name,
+      groupRole: input.reduceOnly || input.reduce_only ? 'reduce_only' : 'single' }),
+  ], ctx, () => runSigner('create_order', {
     ...creds,
     ...stripSignedOrderMeta(signedOrder),
     ...builderFields,
-  });
+  }));
   logSignerResult('order submitted', {
     account_index: creds.account_index,
     market: market.symbol,
@@ -1607,14 +1692,20 @@ async function setLeverage(input = {}) {
 }
 
 async function importFillsForPlayer(playerId, input = {}) {
-  const profile = await requireReadyIntegrator();
-  const db = require('./db');
+  // The builder source still requires a verified integrator; terminal fills
+  // (Standard accounts) only need a server receipt for this player.
+  let profile = currentProfile();
+  let builderReady = true;
+  try { profile = await requireReadyIntegrator(); } catch { builderReady = false; }
+  const db = profile.tradeDb || require('./db');
   const accountIndex = accountIndexFromInput(input);
   if (accountIndex == null) throw Object.assign(new Error('Lighter account_index required'), { status: 400 });
   const maxPages = Math.max(1, Math.min(10, Number(input.maxPages || input.max_pages || 3)));
   const pageLimit = Math.max(1, Math.min(100, Number(input.limit || 100)));
   let inserted = 0;
+  let insertedTerminal = 0;
   let skipped = 0;
+  const unmatched = {};
   let checked = 0;
   let cursor = String(input.cursor || '');
   let nextCursor = '';
@@ -1633,10 +1724,16 @@ async function importFillsForPlayer(playerId, input = {}) {
     });
     checked += result.trades.length;
     for (const trade of result.trades) {
-      if (!isOurIntegratorTrade(trade)) { skipped += 1; continue; }
-      const row = normalizeTradeForHistory(trade, accountIndex, marketById);
-      const saved = db.addTrade(playerId, row);
-      if (saved?.changes) inserted += 1;
+      if (builderReady && isOurIntegratorTrade(trade)) {
+        const row = normalizeTradeForHistory(trade, accountIndex, marketById);
+        const saved = db.addTrade(playerId, row);
+        if (saved?.changes) inserted += 1;
+        continue;
+      }
+      const terminal = importTerminalFill(db, playerId, trade, accountIndex, marketById);
+      if (terminal.inserted) { inserted += 1; insertedTerminal += 1; continue; }
+      if (!terminal.ok) unmatched[terminal.reason] = (unmatched[terminal.reason] || 0) + 1;
+      skipped += 1;
     }
     nextCursor = result.next_cursor || '';
     if (!nextCursor || result.trades.length < pageLimit) break;
@@ -1648,9 +1745,41 @@ async function importFillsForPlayer(playerId, input = {}) {
     trades_checked: checked,
     inserted,
     skipped_not_ours: skipped,
-    integrator_account_index: profile.integratorAccountIndex,
+    inserted_terminal: insertedTerminal,
+    unmatched_reasons: unmatched,
+    integrator_account_index: builderReady ? profile.integratorAccountIndex : null,
     next_cursor: nextCursor,
   };
+}
+
+/**
+ * Non-builder fill: credited as `<dex>_terminal` ONLY when it matches a receipt
+ * this server wrote when it signed and submitted the order for this player and
+ * account. Shares the builder row key, so one fill can never count twice.
+ */
+function importTerminalFill(db, playerId, trade, accountIndex, marketById) {
+  const profile = currentProfile();
+  const rdb = receiptDb();
+  const match = lighterReceipts.matchFill(rdb, { dex: profile.dexId, trade, accountIndex, playerId });
+  if (!match.ok) return match;
+  const row = normalizeTradeForHistory(trade, accountIndex, marketById);
+  const terminalRow = {
+    ...row,
+    verifiedSource: `${profile.dexId}_terminal`,
+    fee: '0', // no builder/integrator revenue on this path
+    proofJson: JSON.stringify({ source: `${profile.dexId}_server_receipt`, ...match.proof, fill: trade }),
+  };
+  let inserted = false;
+  rdb.transaction(() => {
+    const saved = db.addTrade(playerId, terminalRow);
+    if (saved?.changes) {
+      lighterReceipts.recordReceiptFill(rdb, {
+        dex: profile.dexId, tradeId: match.tradeId, accountIndex, receipt: match.receipt, playerId, size: trade?.size,
+      });
+      inserted = true;
+    }
+  })();
+  return { ok: true, inserted };
 }
 
 function config() {

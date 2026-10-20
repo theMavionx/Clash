@@ -3828,6 +3828,7 @@ function tradeSourceWhereForAnalytics(dex) {
   if (dex === 'katana') return "verified_source = 'katana_api'";
   if (dex === 'gmtrade') return "verified_source IN ('gmtrade_tx', 'gmtrade_position_after_tx', 'gmtrade_close_tx_client_notional')";
   if (dex === 'flash') return "verified_source = 'flash_tx'";
+  // Revenue analytics stay builder-only: *_terminal fills carry no integrator fee.
   if (dex === 'lighter') return "verified_source = 'lighter_integrator'";
   if (dex === 'rhlighter') return "verified_source = 'rhlighter_integrator'";
   if (dex === 'bulk') return tradeRecon.verifiedSourceClauseForDex('bulk');

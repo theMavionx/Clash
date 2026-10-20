@@ -6509,7 +6509,7 @@ function registerLighterDeploymentRoutes(prefix, adapter, label) {
   post('/approve-integrator/prepare', req => adapter.prepareIntegratorApproval(req.body || {}), `Failed to prepare ${label} integrator approval`);
   post('/approve-integrator/submit', req => adapter.submitIntegratorApproval(req.body || {}), `Failed to submit ${label} integrator approval`);
   post('/orders', req => adapter.getActiveOrders(req.body || {}), `Failed to load ${label} active orders`, 502);
-  post('/order', req => adapter.createOrder(req.body || {}), `Failed to submit ${label} order`);
+  post('/order', req => adapter.createOrder(req.body || {}, { playerId: req.playerId }), `Failed to submit ${label} order`);
   post('/order/cancel', req => adapter.cancelOrder(req.body || {}), `Failed to cancel ${label} order`);
   post('/set-leverage', req => adapter.setLeverage(req.body || {}), `Failed to update ${label} leverage`);
   post('/import-fills', async (req) => {
