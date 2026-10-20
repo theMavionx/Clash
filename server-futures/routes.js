@@ -6450,7 +6450,9 @@ function registerLighterDeploymentRoutes(prefix, adapter, label) {
     try {
       const accountIndex = req.query.account_index || req.query.accountIndex;
       const l1Address = req.query.l1_address || req.query.l1Address || req.query.address;
-      res.json(await adapter.getAccount({ accountIndex, l1Address }));
+      // Optional Lighter auth token (header, never query) lets the account read report builder applicability.
+      const authToken = String(req.get('x-lighter-auth-token') || '').trim();
+      res.json(await adapter.getAccount({ accountIndex, l1Address, authToken }));
     } catch (e) {
       console.warn(`[${tag}] account failed:`, e.message);
       res.status(e.status || 502).json({ error: `Failed to load ${label} account`, detail: e.message });
@@ -6503,6 +6505,7 @@ function registerLighterDeploymentRoutes(prefix, adapter, label) {
   post('/auth-token', req => adapter.createAuthToken(req.body || {}), `Failed to create ${label} auth token`);
   post('/referral/status', req => adapter.getReferralStatus(req.body || {}), `Failed to load ${label} referral status`);
   post('/referral/use', req => adapter.useReferralCode(req.body || {}), `Failed to accept Clash ${label} referral`);
+  post('/builder-policy', req => adapter.getBuilderPolicy(req.body || {}), `Failed to check ${label} builder applicability`, 502);
   post('/approve-integrator/prepare', req => adapter.prepareIntegratorApproval(req.body || {}), `Failed to prepare ${label} integrator approval`);
   post('/approve-integrator/submit', req => adapter.submitIntegratorApproval(req.body || {}), `Failed to submit ${label} integrator approval`);
   post('/orders', req => adapter.getActiveOrders(req.body || {}), `Failed to load ${label} active orders`, 502);

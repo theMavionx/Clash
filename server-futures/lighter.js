@@ -6,6 +6,13 @@ const path = require('path');
 const { getAddress, isAddressEqual, recoverMessageAddress } = require('viem');
 const { createLighterOnboarding } = require('./lighter-onboarding');
 const { createLighterEgress, createSignerQueue, safeSignerError } = require('./lighter-egress');
+const {
+  lighterSigningChainId,
+  lighterAccountTier,
+  lighterBuilderSupportedForTier,
+  lighterBuilderFields,
+  isLighterAccountTierError,
+} = require('./lighter-builder-policy');
 const signerQueue = createSignerQueue();
 let egress;
 function lighterEgress() { return egress ||= createLighterEgress(); }
@@ -234,6 +241,9 @@ async function runSigner(action, payload = {}) {
 
 function runSignerProcess(action, payload = {}) {
   const profile = currentProfile();
+  // Pin the L2 signing domain: lighter-sdk 1.1.1 would sign RH (466324) as 304.
+  const signingChainId = lighterSigningChainId(profile.api, profile.chainId);
+  if (signingChainId != null && payload.signing_chain_id == null) payload = { ...payload, signing_chain_id: signingChainId };
   if (profile.signerRunner) {
     return Promise.resolve(profile.signerRunner(action, payload));
   }
@@ -307,7 +317,7 @@ async function request(path, options = {}) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), LIGHTER_REQUEST_TIMEOUT_MS);
   try {
-    const res = await lighterEgress().fetch(profile, `${profile.api}${path}`, {
+    const init = {
       method,
       signal: ctrl.signal,
       headers: {
@@ -317,7 +327,18 @@ async function request(path, options = {}) {
         ...(options.headers || {}),
       },
       body: method === 'GET' ? undefined : bodyValue,
-    });
+    };
+    let res;
+    try {
+      res = await lighterEgress().fetch(profile, `${profile.api}${path}`, init);
+    } catch (transportError) {
+      // Reads (funding-rates, orderBooks, account, nextNonce, accountLimits) must
+      // not die with the shared proxy pool ("cooling down" / "transport
+      // unavailable"). Fall back to one direct IPv4 read, as ClashBot reads
+      // Robinhood Lighter directly. Writes and provider 429 cooldowns are unchanged.
+      if (method !== 'GET' || ctrl.signal.aborted || Number(transportError?.status) === 429) throw transportError;
+      res = await directLighterFetch(`${profile.api}${path}`, init);
+    }
     const text = await res.text();
     let data = null;
     try { data = text ? JSON.parse(text) : null; } catch { data = text; }
@@ -338,6 +359,22 @@ async function request(path, options = {}) {
     return data;
   } finally {
     clearTimeout(timer);
+  }
+}
+
+let directDispatcher;
+async function directLighterFetch(url, init) {
+  if (directDispatcher === undefined) {
+    try {
+      const { Agent } = require('undici');
+      directDispatcher = new Agent({ connect: { family: 4 } });
+    } catch { directDispatcher = null; }
+  }
+  try {
+    // An explicit dispatcher also bypasses the global public-read proxy wrapper.
+    return await fetch(url, { ...init, redirect: 'error', ...(directDispatcher ? { dispatcher: directDispatcher } : {}) });
+  } catch {
+    throw Object.assign(new Error('Lighter transport failed (proxy and direct)'), { status: 502 });
   }
 }
 
@@ -692,6 +729,82 @@ async function requireReadyIntegrator() {
   );
 }
 
+// Builder applicability per account (ClashBot: accountLimits.user_tier_name).
+// Known answers live 10 min, unknown answers 1 min; a 21520 refusal pins false.
+const builderPolicyCache = new Map();
+const BUILDER_POLICY_TTL_MS = 10 * 60_000;
+const BUILDER_POLICY_UNKNOWN_TTL_MS = 60_000;
+
+function builderPolicyKey(accountIndex) {
+  return `${currentProfile().api}:${accountIndex}`;
+}
+
+function cachedBuilderPolicy(accountIndex) {
+  const hit = builderPolicyCache.get(builderPolicyKey(accountIndex));
+  if (!hit) return null;
+  const ttl = hit.builderSupported == null ? BUILDER_POLICY_UNKNOWN_TTL_MS : BUILDER_POLICY_TTL_MS;
+  if (Date.now() - hit.at > ttl) return null;
+  return hit;
+}
+
+function rememberBuilderPolicy(accountIndex, tier, builderSupported, source) {
+  const value = { at: Date.now(), tier: tier || null, builderSupported, source };
+  builderPolicyCache.set(builderPolicyKey(accountIndex), value);
+  if (builderPolicyCache.size > 5000) builderPolicyCache.delete(builderPolicyCache.keys().next().value);
+  return value;
+}
+
+function publicBuilderPolicy(accountIndex, policy) {
+  const profile = currentProfile();
+  const builderSupported = policy?.builderSupported ?? null;
+  return {
+    account_index: accountIndex,
+    account_tier: policy?.tier || null,
+    builder_supported: builderSupported,
+    // Only an account known to be regular skips ApproveIntegrator entirely.
+    integrator_required: builderSupported !== false,
+    integrator_account_index: builderSupported === false ? 0 : (profile.integratorAccountIndex || null),
+    builder_fee_value: builderSupported === false ? 0 : profile.builderFeeValue,
+    source: policy?.source || 'unknown',
+  };
+}
+
+/**
+ * Resolves whether the Clash integrator (builder code) can be applied to this
+ * account. Needs a Lighter auth token: the caller's, or one minted from its API key.
+ */
+async function resolveBuilderPolicy(input = {}, { force = false } = {}) {
+  const accountIndex = accountIndexFromInput(input);
+  if (accountIndex == null) throw Object.assign(new Error('Lighter account_index required'), { status: 400 });
+  if (!force) {
+    const cached = cachedBuilderPolicy(accountIndex);
+    if (cached) return cached;
+  }
+  try {
+    let token = String(input.authToken || input.auth_token || input.readOnlyToken || input.read_only_token || '').trim();
+    if (!token && (input.apiPrivateKey || input.api_private_key)) {
+      const creds = signerCredentials(input);
+      token = String((await runSigner('auth_token', { ...creds, deadline: 600 }))?.auth_token || '').trim();
+    }
+    if (!token) return rememberBuilderPolicy(accountIndex, null, null, 'no_auth');
+    const limits = await request(`/api/v1/accountLimits?account_index=${accountIndex}`, {
+      fresh: true,
+      headers: { authorization: token },
+    });
+    const tier = lighterAccountTier(limits);
+    return rememberBuilderPolicy(accountIndex, tier, lighterBuilderSupportedForTier(tier), 'account_limits');
+  } catch (err) {
+    console.warn(`[${currentProfile().dexId}] accountLimits read failed for ${accountIndex}:`, err?.message || err);
+    return rememberBuilderPolicy(accountIndex, null, null, 'lookup_failed');
+  }
+}
+
+async function getBuilderPolicy(input = {}) {
+  const accountIndex = accountIndexFromInput(input);
+  const policy = await resolveBuilderPolicy(input, { force: input.force === true });
+  return { ok: true, ...publicBuilderPolicy(accountIndex, policy) };
+}
+
 function sameMasterAccountOwner(account, integratorAccount) {
   const accountOwner = String(account?.l1_address || account?.owner || '').trim();
   const integratorOwner = String(integratorAccount?.l1_address || integratorAccount?.owner || '').trim();
@@ -711,7 +824,7 @@ async function isSameMasterIntegratorAccount(accountIndex, profile) {
   return sameMasterAccountOwner(account, integratorAccount);
 }
 
-async function getAccount({ accountIndex, l1Address } = {}) {
+async function getAccount({ accountIndex, l1Address, authToken = '' } = {}) {
   const acct = await getAccountRecord({ accountIndex, l1Address });
   if (!acct) return { exists: false };
   const assets = rows(acct.assets);
@@ -723,7 +836,16 @@ async function getAccount({ accountIndex, l1Address } = {}) {
     .map(pos => normalizePosition(pos, marketById))
     .filter(isOpenLighterPosition);
   const integrator = integratorApprovalStatus(acct);
+  const resolvedIndex = Number(acct.account_index ?? acct.index);
+  const policy = Number.isInteger(resolvedIndex)
+    ? (authToken ? await resolveBuilderPolicy({ accountIndex: resolvedIndex, authToken }) : cachedBuilderPolicy(resolvedIndex))
+    : null;
+  const builder = publicBuilderPolicy(resolvedIndex, policy);
   return {
+    account_tier: builder.account_tier,
+    builder_supported: builder.builder_supported,
+    // null until the account tier is known (needs an auth token or a cached answer).
+    integrator_required: builder.builder_supported == null ? null : builder.integrator_required,
     exists: true,
     account_index: acct.account_index ?? acct.index,
     l1_address: acct.l1_address,
@@ -1044,9 +1166,23 @@ async function createAuthToken(input = {}) {
   return { ok: true, account_index: creds.account_index, auth_token: result.auth_token };
 }
 
+function skippedIntegratorApproval(accountIndex, policy) {
+  return {
+    ok: true,
+    skipped: true,
+    already_approved: false,
+    reason: 'builder_not_supported_for_account_tier',
+    requires_l1_signature: false,
+    ...publicBuilderPolicy(accountIndex, policy),
+  };
+}
+
 async function prepareIntegratorApproval(input = {}) {
-  const profile = await requireReadyIntegrator();
   const creds = signerCredentials(input);
+  // Regular (Standard) accounts cannot carry an integrator fee: no approval step.
+  const policy = await resolveBuilderPolicy(input, { force: true });
+  if (policy.builderSupported === false) return skippedIntegratorApproval(creds.account_index, policy);
+  const profile = await requireReadyIntegrator();
   const maxFee = Math.max(profile.builderFeeValue, Number(input.maxFeeValue || 0), 100);
   const requestedExpiry = Number(input.approvalExpiry ?? input.approval_expiry);
   const approvalExpiry = Number.isInteger(requestedExpiry) && requestedExpiry > 0
@@ -1075,8 +1211,10 @@ async function prepareIntegratorApproval(input = {}) {
 }
 
 async function submitIntegratorApproval(input = {}) {
-  const profile = await requireReadyIntegrator();
   const creds = signerCredentials(input);
+  const policy = await resolveBuilderPolicy(input);
+  if (policy.builderSupported === false) return skippedIntegratorApproval(creds.account_index, policy);
+  const profile = await requireReadyIntegrator();
   if (!input.tx_info || input.tx_type == null) throw Object.assign(new Error('Lighter approval tx_info required'), { status: 400 });
   const sameMasterAccount = await isSameMasterIntegratorAccount(creds.account_index, profile);
   if (!sameMasterAccount) {
@@ -1087,13 +1225,20 @@ async function submitIntegratorApproval(input = {}) {
       l1Signature: input.l1Signature || input.l1_signature || '',
     });
   }
-  const result = await runSigner('send_tx', {
-    ...creds,
-    tx_type: Number(input.tx_type),
-    tx_info: input.tx_info,
-    tx_hash: input.tx_hash,
-    l1_signature: input.l1Signature || input.l1_signature || '',
-  });
+  let result;
+  try {
+    result = await runSigner('send_tx', {
+      ...creds,
+      tx_type: Number(input.tx_type),
+      tx_info: input.tx_info,
+      tx_hash: input.tx_hash,
+      l1_signature: input.l1Signature || input.l1_signature || '',
+    });
+  } catch (err) {
+    if (!isLighterAccountTierError(err)) throw err;
+    const pinned = rememberBuilderPolicy(creds.account_index, policy.tier, false, 'error_21520');
+    return skippedIntegratorApproval(creds.account_index, pinned);
+  }
   return { ok: true, same_master_account: sameMasterAccount, ...result };
 }
 
@@ -1222,8 +1367,8 @@ async function createGroupedOrder({
   triggerPriceUi = 0,
   slippage,
   input = {},
+  builderFields,
 }) {
-  const profile = requireConfiguredIntegrator();
   const takeProfitUi = positiveNumberFrom(input, 'takeProfit', 'take_profit', 'tp');
   const stopLossUi = positiveNumberFrom(input, 'stopLoss', 'stop_loss', 'sl');
   const childCount = (takeProfitUi > 0 ? 1 : 0) + (stopLossUi > 0 ? 1 : 0);
@@ -1282,9 +1427,7 @@ async function createGroupedOrder({
     ...creds,
     grouping_type: groupingType,
     orders: orders.map(stripSignedOrderMeta),
-    integrator_account_index: profile.integratorAccountIndex,
-    integrator_taker_fee: profile.builderFeeValue,
-    integrator_maker_fee: profile.builderFeeValue,
+    ...builderFields,
   });
   logSignerResult('grouped order submitted', {
     account_index: creds.account_index,
@@ -1310,8 +1453,9 @@ async function createGroupedOrder({
     order_type: orderType.name,
     reduce_only: false,
     signer_price: entryOrder._signer_price,
-    builder_fee_value: profile.builderFeeValue,
-    integrator_account_index: profile.integratorAccountIndex,
+    builder_fee_value: builderFields.integrator_taker_fee,
+    integrator_account_index: builderFields.integrator_account_index,
+    builder_applied: builderFields.integrator_account_index > 0,
     attached_tpsl: true,
     grouping_type: groupingType,
     child_order_count: childOrders.length,
@@ -1322,8 +1466,26 @@ async function createGroupedOrder({
 }
 
 async function createOrder(input = {}) {
-  const profile = await requireReadyIntegrator();
   const creds = signerCredentials(input);
+  const policy = await resolveBuilderPolicy(input);
+  if (policy.builderSupported !== false) {
+    await requireReadyIntegrator();
+    try {
+      return await placeOrderWithBuilder(input, creds, lighterBuilderFields(currentProfile(), {
+        builderSupported: policy.builderSupported, accountIndex: creds.account_index,
+      }));
+    } catch (err) {
+      // Lighter refuses integrator fees on regular accounts (21520). The order was
+      // rejected (not placed), so resend once without builder fields.
+      if (!isLighterAccountTierError(err)) throw err;
+      rememberBuilderPolicy(creds.account_index, policy.tier, false, 'error_21520');
+      console.warn(`[${currentProfile().dexId}] account ${creds.account_index} refused integrator fee (21520); trading without builder`);
+    }
+  }
+  return placeOrderWithBuilder(input, creds, lighterBuilderFields(currentProfile(), { builderSupported: false }));
+}
+
+async function placeOrderWithBuilder(input, creds, builderFields) {
   await requireReferralForTrading({
     ...input,
     accountIndex: creds.account_index,
@@ -1356,6 +1518,7 @@ async function createOrder(input = {}) {
       triggerPriceUi,
       slippage,
       input,
+      builderFields,
     });
     if (grouped) return grouped;
   }
@@ -1376,9 +1539,7 @@ async function createOrder(input = {}) {
   const result = await runSigner('create_order', {
     ...creds,
     ...stripSignedOrderMeta(signedOrder),
-    integrator_account_index: profile.integratorAccountIndex,
-    integrator_taker_fee: profile.builderFeeValue,
-    integrator_maker_fee: profile.builderFeeValue,
+    ...builderFields,
   });
   logSignerResult('order submitted', {
     account_index: creds.account_index,
@@ -1403,8 +1564,9 @@ async function createOrder(input = {}) {
     order_type: orderType.name,
     reduce_only: !!input.reduceOnly || !!input.reduce_only,
     signer_price: signerPrice,
-    builder_fee_value: profile.builderFeeValue,
-    integrator_account_index: profile.integratorAccountIndex,
+    builder_fee_value: builderFields.integrator_taker_fee,
+    integrator_account_index: builderFields.integrator_account_index,
+    builder_applied: builderFields.integrator_account_index > 0,
     ...result,
   };
 }
@@ -1519,6 +1681,7 @@ const adapterFunctions = {
   recoverApiKey: input => oneTapOnboarding.recover(input),
   config,
   getIntegratorStatus,
+  getBuilderPolicy,
   getMarketInfo,
   getPrices,
   getAccount,

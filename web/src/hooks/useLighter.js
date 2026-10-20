@@ -64,6 +64,8 @@ function normalizeCredentials(value) {
     readOnlyToken: String(value?.readOnlyToken || value?.read_only_token || value?.authToken || '').trim(),
     readOnlyTokenExpiresAt: Number(value?.readOnlyTokenExpiresAt || value?.read_only_token_expires_at || 0) || 0,
     integratorApproved: value?.integratorApproved === true,
+    // false = regular (Standard) account: Lighter refuses builder fees, no approval step.
+    builderSupported: value?.builderSupported === false ? false : (value?.builderSupported === true ? true : null),
     onboardingOwner: String(value?.onboardingOwner || ''),
     onboardingPlayerId: String(value?.onboardingPlayerId || ''),
     onboardingDeployment: String(value?.onboardingDeployment || ''),
@@ -309,7 +311,9 @@ function useLighterProfile(profile) {
           () => fetchJson(`${FUTURES_API}/prices?dex=${encodeURIComponent(dexId)}`),
         ),
         credentials?.accountIndex != null && token
-          ? fetchJson(`${FUTURES_API}/${routePrefix}/account?account_index=${encodeURIComponent(credentials.accountIndex)}`, { headers })
+          ? fetchJson(`${FUTURES_API}/${routePrefix}/account?account_index=${encodeURIComponent(credentials.accountIndex)}`, {
+            headers: credentials.readOnlyToken ? { ...headers, 'x-lighter-auth-token': credentials.readOnlyToken } : headers,
+          })
           : Promise.resolve(null),
         fetchJson(`${FUTURES_API}/${routePrefix}/config`),
       ]);
@@ -317,11 +321,15 @@ function useLighterProfile(profile) {
       setPrices(Array.isArray(priceData) ? priceData : Object.values(priceData || {}));
       setAccount(accountData || null);
       setVenueConfig(configData || null);
-      if (credentials && accountData?.integrator_approved !== credentials.integratorApproved) {
+      const remoteBuilderSupported = typeof accountData?.builder_supported === 'boolean'
+        ? accountData.builder_supported : credentials?.builderSupported ?? null;
+      if (credentials && (accountData?.integrator_approved !== credentials.integratorApproved
+        || remoteBuilderSupported !== credentials.builderSupported)) {
         assertCredential(scope);
         const reconciled = await saveCredentials(storageKey, {
           ...credentials,
           integratorApproved: accountData?.integrator_approved === true,
+          builderSupported: remoteBuilderSupported,
         }, { scope });
         assertCredential(scope);
         setCredentials(reconciled);
@@ -477,6 +485,17 @@ function useLighterProfile(profile) {
       headers: { ...headers, 'content-type': 'application/json' },
       body: JSON.stringify(credentialPayload(creds)),
     });
+    if (prepared?.skipped === true && prepared?.integrator_required === false) {
+      // Regular account: the builder code cannot be applied, so there is nothing to approve.
+      assertCurrent();
+      assertCredential(scope);
+      const saved = await saveCredentials(storageKey, { ...creds, builderSupported: false }, { scope });
+      assertCredential(scope);
+      assertCurrent();
+      setCredentials(saved);
+      window.setTimeout(() => refreshLatestRef.current?.().catch(() => {}), 900);
+      return prepared;
+    }
     const message = prepared.message_to_sign || prepared.messageToSign;
     assertCurrent();
     let l1Signature = '';
@@ -497,7 +516,11 @@ function useLighterProfile(profile) {
     });
     assertCurrent();
     assertCredential(scope);
-    const saved = await saveCredentials(storageKey, { ...creds, integratorApproved: true }, { scope });
+    const saved = await saveCredentials(storageKey, {
+      ...creds,
+      integratorApproved: submitted?.skipped !== true,
+      builderSupported: submitted?.skipped === true ? false : creds.builderSupported,
+    }, { scope });
     assertCredential(scope);
     assertCurrent();
     setCredentials(saved);
@@ -620,7 +643,8 @@ function useLighterProfile(profile) {
         }
         const config = await api('/config');
         const remoteAccount = await api('/account?account_index=' + verified.accountIndex);
-        if (remoteAccount?.integrator_approved !== true && config?.integratorReady === true) {
+        if (remoteAccount?.integrator_approved !== true && remoteAccount?.integrator_required !== false
+          && config?.integratorReady === true) {
           setLighterConnectStatus('integrator');
           await approveIntegrator(verified, assertCurrent);
           assertCurrent();
@@ -925,6 +949,11 @@ function useLighterProfile(profile) {
     };
   }, [credentials?.accountIndex, isActiveDex, label, token]);
 
+  // Only a Plus/Premium (or not-yet-classified) account needs the Clash integrator approval.
+  const integratorRequired = typeof account?.integrator_required === 'boolean'
+    ? account.integrator_required
+    : credentials?.builderSupported !== false;
+
   return {
     walletAddr: evmWallet?.address || (credentials?.accountIndex != null ? `${dexId}:${credentials.accountIndex}` : ''),
     account,
@@ -940,22 +969,23 @@ function useLighterProfile(profile) {
     accountReady: credentials?.accountIndex != null,
     connected: credentials?.accountIndex != null,
     setupVerified: credentials?.accountIndex != null
-      ? venueConfig?.integratorReady === true
-        && account?.integrator_approved === true
+      ? (!integratorRequired || (venueConfig?.integratorReady === true && account?.integrator_approved === true))
         && (!referralRequired || referralStatus?.referral_satisfied === true)
       : false,
-    lighterNeedsIntegratorApproval: credentials?.accountIndex != null && account?.integrator_approved !== true,
+    lighterNeedsIntegratorApproval: credentials?.accountIndex != null && integratorRequired && account?.integrator_approved !== true,
     lighterNeedsReferral: referralRequired && credentials?.accountIndex != null && referralStatus?.referral_satisfied === false,
     lighterReferralChecking: referralRequired && credentials?.accountIndex != null && referralStatus == null,
     lighterReferralStatus: referralStatus,
     lighterVenueLabel: label,
     lighterReferralRequired: referralRequired,
-    lighterIntegratorConfigured: venueConfig?.integratorReady === true,
+    lighterIntegratorConfigured: venueConfig?.integratorReady === true || !integratorRequired,
+    lighterBuilderSupported: integratorRequired ? (credentials?.builderSupported ?? null) : false,
     lighterConfig: venueConfig,
     lighterCredentials: credentials ? {
       accountIndex: credentials.accountIndex,
       apiKeyIndex: credentials.apiKeyIndex,
       integratorApproved: credentials.integratorApproved === true,
+      builderSupported: credentials.builderSupported,
     } : null,
     connectOneTap,
     lighterConnectStatus,

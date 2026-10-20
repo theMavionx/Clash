@@ -7875,8 +7875,10 @@ function FuturesPanel() {
                     if (typeof approveIntegrator !== 'function') return;
                     setReferralLinking(true);
                     try {
-                      await approveIntegrator();
-                      setSuccessMsg(`${lighterVenueLabel || 'Lighter'} setup complete. Clash integrator fee approved.`);
+                      const approval = await approveIntegrator();
+                      setSuccessMsg(approval?.skipped
+                        ? `${lighterVenueLabel || 'Lighter'} setup complete.`
+                        : `${lighterVenueLabel || 'Lighter'} setup complete. Clash integrator fee approved.`);
                     } catch (e) {
                       setLocalAlert(e?.message || String(e));
                     } finally {
@@ -7912,8 +7914,10 @@ function FuturesPanel() {
                         setSuccessMsg(`${lighterVenueLabel || 'Lighter'} API key saved. Trading will unlock after the Clash RH integrator account is configured and approved.`);
                       } else if (typeof approveIntegrator === 'function') {
                         try {
-                          await approveIntegrator(res);
-                          setSuccessMsg(`${lighterVenueLabel || 'Lighter'} setup complete. Clash integrator fee approved.`);
+                          const approval = await approveIntegrator(res);
+                          setSuccessMsg(approval?.skipped
+                            ? `${lighterVenueLabel || 'Lighter'} setup complete.`
+                            : `${lighterVenueLabel || 'Lighter'} setup complete. Clash integrator fee approved.`);
                         } catch (approveError) {
                           setLocalAlert(approveError?.message || `${lighterVenueLabel || 'Lighter'} API key saved. Approve Clash integrator before trading.`);
                         }

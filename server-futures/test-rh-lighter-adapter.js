@@ -247,7 +247,8 @@ global.fetch = async (url) => {
     const referral = await unconfigured.requireReferralForTrading({});
     assert.deepStrictEqual(referral, { checked: true, required: false, has_referral: true });
     await assert.rejects(
-      unconfigured.createOrder({}),
+      // Unknown account tier keeps the builder path, which still requires a configured integrator.
+      unconfigured.createOrder({ accountIndex: 7, apiKeyIndex: 4, apiPrivateKey: `0x${'33'.repeat(40)}`, authToken: 'tok' }),
       error => error?.status === 503
         && error?.code === 'LIGHTER_INTEGRATOR_NOT_CONFIGURED'
         && /RH_LIGHTER_INTEGRATOR_ACCOUNT_INDEX/.test(error.message),
@@ -257,9 +258,9 @@ global.fetch = async (url) => {
     const rhSource = fs.readFileSync(path.join(__dirname, 'rh-lighter.js'), 'utf8');
     const routesSource = fs.readFileSync(path.join(__dirname, 'routes.js'), 'utf8');
     const deploySource = fs.readFileSync(path.join(__dirname, '..', 'deploy', 'deploy.sh'), 'utf8');
-    assert.match(source, /integrator_account_index:\s*profile\.integratorAccountIndex/);
-    assert.match(source, /integrator_taker_fee:\s*profile\.builderFeeValue/);
-    assert.match(source, /integrator_maker_fee:\s*profile\.builderFeeValue/);
+    const policySource = fs.readFileSync(path.join(__dirname, 'lighter-builder-policy.js'), 'utf8');
+    assert.match(policySource, /integrator_account_index: integrator, integrator_taker_fee: fee, integrator_maker_fee: fee/);
+    assert.match(source, /\.\.\.builderFields,/);
     assert.match(source, /await requireReadyIntegrator\(\)/);
     assert.match(source, /same_master_account:\s*sameMasterAccount/);
     assert.match(source, /if \(!sameMasterAccount\) \{\s*await verifyL1ApprovalSignature/);

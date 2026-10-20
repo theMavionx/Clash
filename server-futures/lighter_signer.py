@@ -75,6 +75,28 @@ def _public_error(exc):
     return text
 
 
+SIGNING_DOMAINS = {
+    "https://mainnet.zklighter.elliot.ai": 304,
+    "https://testnet.zklighter.elliot.ai": 300,
+    "https://api.rh.lighter.xyz": 466324,
+    "https://api.rh-testnet.lighter.xyz": 300,
+}
+
+
+def _signing_chain_id(url, requested):
+    known = SIGNING_DOMAINS.get(url)
+    if requested is None or requested == "":
+        return known
+    if type(requested) is not int:
+        try:
+            requested = int(str(requested))
+        except ValueError:
+            raise ValueError("Lighter signing domain must be an integer")
+    if known is not None and known != requested:
+        raise ValueError("Lighter signing domain does not match the configured endpoint")
+    return requested
+
+
 def _client(lighter, payload):
     account_index = int(payload["account_index"])
     api_key_index = int(payload["api_key_index"])
@@ -83,8 +105,21 @@ def _client(lighter, payload):
         raise ValueError("api_private_key is required")
     # clashbot: nonce reads are owned by Node egress, not SDK synchronous requests.
     from lighter import nonce_manager
-    value = lighter.SignerClient(
-        url=str(payload.get("api_url") or "https://mainnet.zklighter.elliot.ai"),
+    url = str(payload.get("api_url") or "https://mainnet.zklighter.elliot.ai").rstrip("/")
+    chain_id = _signing_chain_id(url, payload.get("signing_chain_id"))
+    signer_class = lighter.SignerClient
+    if chain_id is not None:
+        class DomainSignerClient(lighter.SignerClient):
+            # Ported from ClashBot: lighter-sdk 1.1.1 has no chain_id argument and
+            # infers 304 for every URL containing "api" (wrong for Robinhood
+            # Lighter, 466324 -> code=21120 invalid signature). Bind the domain
+            # before the first native CreateClient call.
+            def create_client(self, api_key_index):
+                self.chain_id = chain_id
+                return super().create_client(api_key_index)
+        signer_class = DomainSignerClient
+    value = signer_class(
+        url=url,
         account_index=account_index,
         api_private_keys={api_key_index: private_key},
         nonce_management_type=nonce_manager.NonceManagerType.NONE,

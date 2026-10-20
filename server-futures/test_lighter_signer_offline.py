@@ -49,5 +49,35 @@ class NativeSignerTests(unittest.TestCase):
             bridge._send_and_close, bridge._read_payload = original_send, original_read
 
 
+    def test_robinhood_signing_domain_is_pinned(self):
+        """RH must sign in chain 466324; lighter-sdk 1.1.1 alone would use 304."""
+        private_key, _, error = lighter.SignerClient.create_api_key(None)
+        self.assertIsNone(error)
+        self.assertEqual(bridge._signing_chain_id("https://api.rh.lighter.xyz", None), 466324)
+        self.assertEqual(bridge._signing_chain_id("https://mainnet.zklighter.elliot.ai", 304), 304)
+        with self.assertRaises(ValueError):
+            bridge._signing_chain_id("https://api.rh.lighter.xyz", 304)
+
+        def prepare(url, chain_id):
+            payload = dict(action='approve_integrator_prepare', api_url=url, account_index=42,
+                           api_key_index=4, api_private_key=private_key, nonce=7,
+                           integrator_account_index=3156, max_perps_taker_fee=100,
+                           max_perps_maker_fee=100, approval_expiry=1893456000000,
+                           signing_chain_id=chain_id)
+            original = bridge._read_payload
+            bridge._read_payload = lambda: payload
+            try:
+                return asyncio.run(bridge._main())
+            finally:
+                bridge._read_payload = original
+
+        rh = prepare("https://api.rh.lighter.xyz", 466324)
+        main = prepare("https://mainnet.zklighter.elliot.ai", 304)
+        self.assertTrue(rh.get('ok'), rh.get('error'))
+        self.assertTrue(main.get('ok'), main.get('error'))
+        self.assertIn(hex(466324)[2:], rh['message_to_sign'].lower())
+        self.assertNotEqual(rh['tx_hash'], main['tx_hash'])
+
+
 if __name__ == '__main__':
     unittest.main()

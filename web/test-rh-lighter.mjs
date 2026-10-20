@@ -38,5 +38,12 @@ assert.match(tournamentUtils, /rhlighter:\s*'Robinhood Lighter'/);
 assert.match(registerPanel, /cfg\.id === 'lighter' \|\| cfg\.id === 'rhlighter' \? 'Self-custody · EVM'/);
 assert.match(registerPanel, /applies CLASSHOFPERPS/);
 assert.doesNotMatch(hook, /clash_rh_lighter_credentials_v1[\s\S]{0,500}'CLASHOFPERPS'/);
+// Regular (Standard) accounts: no builder code, no integrator approval step.
+assert.match(hook, /prepared\?\.skipped === true && prepared\?\.integrator_required === false/);
+assert.match(hook, /builderSupported: false/);
+assert.match(hook, /remoteAccount\?\.integrator_required !== false/);
+assert.match(hook, /lighterNeedsIntegratorApproval: credentials\?\.accountIndex != null && integratorRequired/);
+assert.match(hook, /'x-lighter-auth-token': credentials\.readOnlyToken/);
+assert.match(panel, /approval\?\.skipped/);
 
 console.log('Robinhood Lighter browser integration source contract passed');
