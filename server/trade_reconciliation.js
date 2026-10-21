@@ -457,12 +457,23 @@ function qfexBuilderEligibilityClause() {
     trade_history.client_order_id = 'qfex:' || json_extract(proof_json, '$.account_id') || ':fill:' || json_extract(proof_json, '$.fill.id')
     AND trade_history.order_id = json_extract(proof_json, '$.fill.order_id')
     AND trade_history.symbol = json_extract(proof_json, '$.fill.symbol')
-    AND json_extract(proof_json, '$.execution.trade_id') = json_extract(proof_json, '$.fill.id')
-    AND json_extract(proof_json, '$.execution.order_id') = trade_history.order_id
-    AND json_extract(proof_json, '$.execution.symbol') = trade_history.symbol
-    AND CAST(json_extract(proof_json, '$.execution.price') AS REAL) = CAST(trade_history.price AS REAL)
-    AND abs(CAST(json_extract(proof_json, '$.execution.quantity') AS REAL)) = CAST(trade_history.amount AS REAL)
-    AND abs(unixepoch(trade_history.created_at) - CAST(json_extract(proof_json, '$.execution.timestamp') AS REAL)) < 1
+    -- Legacy rows carry a Trade-WS execution copy; current rows use the REST fill alone (as pilotbot
+    -- does). Either way the fill must belong to our own accepted, builder-coded order (below).
+    AND (CASE WHEN json_type(proof_json, '$.execution') IS NOT NULL THEN (
+      json_extract(proof_json, '$.execution.trade_id') = json_extract(proof_json, '$.fill.id')
+      AND json_extract(proof_json, '$.execution.order_id') = trade_history.order_id
+      AND json_extract(proof_json, '$.execution.symbol') = trade_history.symbol
+      AND CAST(json_extract(proof_json, '$.execution.price') AS REAL) = CAST(trade_history.price AS REAL)
+      AND abs(CAST(json_extract(proof_json, '$.execution.quantity') AS REAL)) = CAST(trade_history.amount AS REAL)
+      AND abs(unixepoch(trade_history.created_at) - CAST(json_extract(proof_json, '$.execution.timestamp') AS REAL)) < 1)
+    ELSE (
+      json_extract(proof_json, '$.fill.id') IS NOT NULL
+      AND CAST(json_extract(proof_json, '$.fill.order_timestamp') AS REAL) > 0
+      AND abs(unixepoch(trade_history.created_at) - CAST(json_extract(proof_json, '$.fill.order_timestamp') AS REAL)) < 1
+      AND abs(CAST(json_extract(proof_json, '$.fill.quantity') AS REAL))
+        <= CAST(json_extract((SELECT qp.params_json FROM qfex_action_intents qp
+          WHERE qp.account_id = json_extract(trade_history.proof_json, '$.account_id')
+            AND qp.action_id = json_extract(trade_history.proof_json, '$.action_id')), '$.quantity') AS REAL)) END)
     AND CAST(trade_history.amount AS REAL) = abs(CAST(json_extract(proof_json, '$.fill.quantity') AS REAL))
     AND CAST(trade_history.price AS REAL) = CAST(json_extract(proof_json, '$.fill.price') AS REAL)
     AND CAST(trade_history.price AS REAL) > 0 AND CAST(trade_history.amount AS REAL) > 0

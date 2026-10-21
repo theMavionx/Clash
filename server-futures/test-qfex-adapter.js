@@ -59,8 +59,14 @@ function fixture(overrides = {}) {
   };
   const fetch = async (url, options) => {
     const parsed = new URL(url); requests.push({ parsed, options });
+    if (parsed.pathname === '/user/public-accounts') return { ok: false, status: 404, headers: { get: () => 'text/plain' }, text: async () => '404 page not found' };
+    if (parsed.pathname === '/user/subaccounts/equity' && state.listingStatus) return { ok: false, status: state.listingStatus, headers: { get: () => 'application/json' }, text: async () => '{"title":"Forbidden"}' };
+    if (parsed.pathname === '/user/positions' && (state.unfunded || (state.namedPrimaryFails && options.headers['x-qfex-requested-account-id']))) {
+      return { ok: false, status: 500, headers: { get: () => 'application/json' },
+        text: async () => JSON.stringify({ title: 'Internal Server Error', status: 500, detail: 'position balance not found' }) };
+    }
     const data = { '/refdata': { data: [market] }, '/md/contracts': { data: [{ ticker_id: 'AAPL-USD', last_price: '200', index_price: '201' }] },
-      '/user/public-accounts': { accounts: [{ account_id: ACCOUNT, is_master: true }] },
+      '/user/subaccounts/equity': { accounts: [{ account_id: ACCOUNT, is_master: true }] },
       '/user/positions': { balance: { available_balance: 80, position_margin: 20, order_margin: 0 },
         positions: [{ symbol: 'AAPL-USD', position: state.position, average_price: 200, leverage: 10 }] },
       '/user/trade': { data: state.trades, count: state.trades.length } }[parsed.pathname];
@@ -91,11 +97,6 @@ function history(count, prefix = 'fill') {
   return Array.from({ length: count }, (_, index) => ({ id: `${prefix}-${index}`, order_id: ORDER,
     symbol: 'AAPL-USD', side: 'BUY', quantity: 0.001, price: 200,
     order_timestamp: 1760545414 + index, order_type: 'MARKET' }));
-}
-
-function executions(trades) {
-  return trades.map(t => ({ trade_id: t.id, order_id: t.order_id, symbol: t.symbol,
-    price: t.price, quantity: t.quantity, timestamp: t.order_timestamp + 5 }));
 }
 
 function recordingLedger() {
@@ -185,7 +186,7 @@ test('close derives side and amount from actual position and always sends reduce
   const env = fixture({ position: -2 });
   await qfex.closePosition(CREDS, { symbol: 'AAPL-USD', actionId: crypto.randomUUID() }, { playerId: 'alice' });
   const params = env.commands.find(c => c.type === 'add_order').params;
-  assert.equal(params.side, 'BUY'); assert.equal(params.quantity, 2); assert.equal(params.reduce_only, 1);
+  assert.equal(params.side, 'BUY'); assert.equal(params.quantity, 2); assert.equal(params.reduce_only, true);
 });
 
 test('cancel selects unique exchange order; leverage allowed levels and desired leverage are enforced', async () => {
@@ -263,7 +264,7 @@ test('multiple matching historical client IDs require manual review', async () =
   assert.equal(env.commands.filter(c => c.type === 'add_order').length, 1);
 });
 
-test('reduce-only close imports correct action with verified execution time', async () => {
+test('reduce-only close imports correct action with the QFEX fill time', async () => {
   const env = fixture({ position: 2 }); process.env.QFEX_BUILDER_CODE = BUILDER;
   await qfex.closePosition(CREDS, { symbol: 'AAPL-USD', actionId: crypto.randomUUID() }, { playerId: 'alice' });
   env.state.trades = [{ id: 'closing-fill', order_id: ORDER, symbol: 'AAPL-USD', side: 'SELL', quantity: 2,
@@ -271,8 +272,9 @@ test('reduce-only close imports correct action with verified execution time', as
   const rows = [];
   await qfex.importTradesForPlayer('alice', CREDS, { ledger: { upsertVerifiedTrade(player, trade) { rows.push(trade); return { inserted: 1 }; } } });
   assert.equal(rows[0].side, 'close_long');
-  assert.equal(rows[0].createdAt, new Date(1760545419 * 1000).toISOString());
-  assert.equal(JSON.parse(rows[0].proofJson).execution.timestamp, 1760545419);
+  assert.equal(rows[0].createdAt, new Date(1760545414 * 1000).toISOString());
+  const proof = JSON.parse(rows[0].proofJson);
+  assert.equal(proof.builder_code, BUILDER); assert.equal(proof.order_id, ORDER); assert.equal(proof.fill.id, 'closing-fill');
 });
 
 test('REST refuses absolute, protocol-relative and backslash paths before signing or fetching', async () => {
@@ -283,17 +285,16 @@ test('REST refuses absolute, protocol-relative and backslash paths before signin
   assert.equal(env.requests.length, 0);
 });
 
-test('import independently joins differently ordered feeds and revisits history without duplicate credits', async () => {
+test('import links REST fills to accepted orders and revisits history without duplicate credits', async () => {
   const env = fixture(); process.env.QFEX_BUILDER_CODE = BUILDER;
   await qfex.placeOrder(CREDS, input(), { playerId: 'alice' });
   env.state.trades = Array.from({ length: 205 }, (_, index) => ({ id: `fill-${index}`, order_id: ORDER,
     symbol: 'AAPL-USD', side: 'BUY', quantity: 0.001, price: 200, order_timestamp: 1760545414 + index, order_type: 'MARKET' }));
-  env.state.executions = [...env.state.trades].reverse().map(t => ({ trade_id: t.id, order_id: t.order_id,
-    symbol: t.symbol, price: t.price, quantity: t.quantity, timestamp: t.order_timestamp + 5 }));
   const ledger = recordingLedger();
   const full = await qfex.importTradesForPlayer('alice', CREDS, { ledger });
   assert.equal(full.imported, 205); assert.equal(full.has_more, false); assert.equal(full.truncated, false);
-  assert.equal(full.scanned_rest, 205); assert.equal(full.scanned_executions, 205); assert.equal(full.unmatched_executions, 0);
+  assert.equal(full.scanned_rest, 205); assert.equal(full.unmatched_executions, 0);
+  assert.equal(env.commands.filter(c => c.type === 'get_user_trades').length, 0, 'History never opens a trade socket');
   const bounded = await qfex.importTradesForPlayer('alice', CREDS, { ledger, limit: 100 });
   assert.equal(bounded.imported, 0); assert.equal(bounded.has_more, true); assert.equal(bounded.truncated, false);
   assert.equal(bounded.unmatched_executions, 0);
@@ -306,20 +307,18 @@ test('more than 1000 reverse-ordered fills resume across adapter reset and event
   const env = fixture(); process.env.QFEX_BUILDER_CODE = BUILDER;
   await qfex.placeOrder(CREDS, input(), { playerId: 'alice' });
   env.state.trades = history(2507);
-  env.state.executions = executions([...env.state.trades].reverse());
   const ledger = recordingLedger();
   const first = await qfex.importTradesForPlayer('alice', CREDS, { ledger });
   assert.equal(first.has_more, true);
-  assert.equal(first.scanned_rest, 1000); assert.equal(first.scanned_executions, 1000);
-  assert.equal(first.imported, 0, 'Disjoint initial pages cannot invent matching execution evidence');
+  assert.equal(first.scanned_rest, 1000); assert.equal(first.imported, 1000);
   const before = env.db.prepare('SELECT * FROM qfex_history_sync WHERE account_id=?').get(ACCOUNT);
-  assert.equal(before.rest_offset, 1000); assert.equal(before.execution_offset, 1000);
+  assert.equal(before.rest_offset, 1000);
   qfex.setTestDependencies(); env.install();
   const resumed = await qfex.importTradesForPlayer('alice', CREDS, { ledger });
   assert.ok(resumed.rest_offset > before.rest_offset, 'Persisted cursor survives adapter state reset');
   const rest = await drainHistory(ledger);
   for (const result of [resumed, ...rest]) {
-    assert.ok(result.scanned_rest <= 1000); assert.ok(result.scanned_executions <= 1000);
+    assert.ok(result.scanned_rest <= 1000);
     assert.equal(result.truncated, false, 'Bounded passes are resumable, not silently truncated');
   }
   assert.equal(ledger.rows.size, 2507);
@@ -329,17 +328,17 @@ test('more than 1000 reverse-ordered fills resume across adapter reset and event
   await assert.rejects(qfex.importTradesForPlayer('bob', CREDS, { ledger }), /another player/);
 });
 
-test('partial execution transport failure keeps resumable progress and recovers without double credit', async () => {
+test('partial REST transport failure keeps resumable progress and recovers without double credit', async () => {
   const env = fixture(); process.env.QFEX_BUILDER_CODE = BUILDER;
   await qfex.placeOrder(CREDS, input(), { playerId: 'alice' });
   env.state.trades = history(1207);
   const ledger = recordingLedger();
   await qfex.importTradesForPlayer('alice', CREDS, { ledger, limit: 100 });
   const before = env.db.prepare('SELECT * FROM qfex_history_sync WHERE account_id=?').get(ACCOUNT);
-  env.state.executionFailures = 1;
-  await assert.rejects(qfex.importTradesForPlayer('alice', CREDS, { ledger, limit: 100 }), /ServerError/);
+  env.state.restFailures = 1;
+  await assert.rejects(qfex.importTradesForPlayer('alice', CREDS, { ledger, limit: 100 }), /unavailable/);
   const failed = env.db.prepare('SELECT * FROM qfex_history_sync WHERE account_id=?').get(ACCOUNT);
-  assert.equal(failed.rest_offset, before.rest_offset); assert.equal(failed.execution_offset, before.execution_offset);
+  assert.equal(failed.rest_offset, before.rest_offset);
   assert.equal(failed.lease_until, 0); assert.equal(failed.last_error_code, 'QFEX_HISTORY_SYNC_FAILED');
   await drainHistory(ledger, 200);
   assert.equal(ledger.rows.size, 1207); assert.equal(ledger.calls.length, 1207);
@@ -364,54 +363,46 @@ test('account lease prevents concurrent import work while the owner finishes a b
   assert.equal(ledger.calls.length, 7);
 });
 
-test('late execution evidence is recovered on a later sweep and missing or mismatched proof is never rewarded', async () => {
+test('fills of orders not placed through Clash never wait or reward; oversize fills stay unverified', async () => {
   const env = fixture(); process.env.QFEX_BUILDER_CODE = BUILDER;
   await qfex.placeOrder(CREDS, input(), { playerId: 'alice' });
   env.state.trades = history(3);
-  env.state.executions = [];
+  env.state.trades[1].quantity = 999;
+  env.state.trades[2].order_id = 'placed-on-qfex-com';
   const ledger = recordingLedger();
-  const waiting = await qfex.importTradesForPlayer('alice', CREDS, { ledger });
-  assert.equal(waiting.imported, 0); assert.equal(waiting.unmatched_executions, 3);
-  env.state.executions = executions(env.state.trades);
-  env.state.executions[1].quantity = 999;
-  env.state.trades[2].order_id = 'unattributed-order';
-  env.state.executions[2].order_id = 'unattributed-order';
-  await drainHistory(ledger);
+  const result = (await drainHistory(ledger)).at(-1);
   assert.equal(ledger.rows.size, 1);
-  env.state.executions[1].quantity = env.state.trades[1].quantity;
+  assert.equal(result.unmatched_executions, 0, 'Nothing ever awaits a second evidence feed');
+  assert.equal(result.external_fills, 1); assert.equal(result.unverified_fills, 1);
+  env.state.trades[1].quantity = 0.001;
   await drainHistory(ledger);
   assert.equal(ledger.rows.size, 2, 'Corrected exchange evidence can be revisited, not permanently dropped');
   assert.equal(ledger.calls.length, 2);
 });
-
-test('same fill ID with mismatched execution price stays visibly unverified until corrected without rewarding twice', async () => {
+test('same fill ID with mismatched side stays visibly unverified until corrected without rewarding twice', async () => {
   const env = fixture(); process.env.QFEX_BUILDER_CODE = BUILDER;
   await qfex.placeOrder(CREDS, input(), { playerId: 'alice' });
   env.state.trades = history(1);
-  env.state.executions = executions(env.state.trades);
-  env.state.executions[0].price = 201;
+  env.state.trades[0].side = 'SELL';
   const ledger = recordingLedger();
   const mismatched = await qfex.importTradesForPlayer('alice', CREDS, { ledger });
   assert.equal(mismatched.imported, 0); assert.equal(mismatched.unverified_fills, 1);
-  assert.equal(mismatched.unmatched_executions, 0, 'Present-but-invalid evidence is not also counted as missing');
+  assert.equal(mismatched.unmatched_executions, 0);
   assert.equal(mismatched.pending_matches, 0); assert.equal(mismatched.has_more, false);
   assert.equal(mismatched.skipped, 1);
   assert.equal(Object.hasOwn(mismatched, 'rejected_ids'), false, 'Internal fill IDs are not exposed as public sync diagnostics');
   assert.equal(env.db.prepare('SELECT processed FROM qfex_history_evidence').get().processed, 2);
   qfex.setTestDependencies(); env.install();
   const repeated = await qfex.importTradesForPlayer('alice', CREDS, { ledger });
-  assert.equal(repeated.imported, 0); assert.equal(repeated.unverified_fills, 1);
-  assert.equal(repeated.unmatched_executions, 0); assert.equal(ledger.calls.length, 0);
-  env.state.executions[0].price = env.state.trades[0].price;
+  assert.equal(repeated.imported, 0); assert.equal(repeated.unverified_fills, 1); assert.equal(ledger.calls.length, 0);
+  env.state.trades[0].side = 'BUY';
   const corrected = await qfex.importTradesForPlayer('alice', CREDS, { ledger });
-  assert.equal(corrected.imported, 1); assert.equal(corrected.unverified_fills, 0);
-  assert.equal(corrected.unmatched_executions, 0); assert.equal(ledger.calls.length, 1);
+  assert.equal(corrected.imported, 1); assert.equal(corrected.unverified_fills, 0); assert.equal(ledger.calls.length, 1);
   assert.equal(env.db.prepare('SELECT processed FROM qfex_history_evidence').get().processed, 1);
   const again = await qfex.importTradesForPlayer('alice', CREDS, { ledger });
   assert.equal(again.imported, 0); assert.equal(again.unverified_fills, 0);
   assert.equal(ledger.calls.length, 1);
 });
-
 test('ledger failure after one insertion replays unmarked evidence using unique fill IDs', async () => {
   const env = fixture(); process.env.QFEX_BUILDER_CODE = BUILDER;
   await qfex.placeOrder(CREDS, input(), { playerId: 'alice' });
@@ -441,7 +432,7 @@ test('resumed scan keeps a fixed cutoff while its head refresh imports a newly i
   const resumed = await qfex.importTradesForPlayer('alice', CREDS, { ledger, limit: 100 });
   assert.equal(env.db.prepare('SELECT end_ts FROM qfex_history_sync').get().end_ts, cutoff);
   assert.ok(ledger.rows.has(`qfex:${ACCOUNT}:fill:new-head-0`), 'Live head refresh must not wait for old history backfill');
-  assert.equal(resumed.scanned_rest, 100); assert.equal(resumed.scanned_executions, 100);
+  assert.equal(resumed.scanned_rest, 100);
   await drainHistory(ledger, 100);
   assert.equal(ledger.rows.size, 251); assert.equal(ledger.calls.length, 251);
   const bounded = env.requests.filter(r => r.parsed.pathname === '/user/trade' && r.parsed.searchParams.has('end'));
@@ -513,6 +504,57 @@ test('absent action status returns verified account and explicit not-found code 
   assert.equal(env.commands.length, 0);
 });
 
+test('market order payload matches the QFEX schema: boolean reduce_only, no price, no unused TP/SL', async () => {
+  const env = fixture();
+  await qfex.placeOrder(CREDS, input(), { playerId: 'alice' });
+  const params = env.commands.find(c => c.type === 'add_order').params;
+  assert.equal(params.reduce_only, false);
+  assert.equal(typeof params.reduce_only, 'boolean');
+  for (const key of ['price', 'take_profit', 'stop_loss']) assert.equal(Object.hasOwn(params, key), false, key);
+  assert.deepEqual(Object.keys(params).sort(), ['client_order_id', 'order_time_in_force', 'order_type', 'quantity', 'reduce_only', 'side', 'symbol']);
+  await qfex.placeOrder(CREDS, input({ orderType: 'limit', price: '199.5', takeProfit: '210' }), { playerId: 'alice' });
+  const limit = env.commands.filter(c => c.type === 'add_order')[1].params;
+  assert.equal(limit.price, 199.5); assert.equal(limit.take_profit, 210); assert.equal(Object.hasOwn(limit, 'stop_loss'), false);
+  assert.equal(limit.order_time_in_force, 'GTC');
+});
+
+test('protocol err frames become readable, coded, definite rejections instead of an opaque 422', async () => {
+  const env = fixture({ errorCode: 'InvalidJSONFormat' });
+  await assert.rejects(qfex.placeOrder(CREDS, input(), { playerId: 'alice' }), error => {
+    assert.equal(error.status, 400); assert.equal(error.code, 'QFEX_ORDER_INVALID');
+    assert.equal(error.outcomeUnknown, false); assert.match(error.message, /Nothing was placed/);
+    return true;
+  });
+  assert.equal(env.db.prepare('SELECT status FROM qfex_action_intents').get().status, 'rejected');
+  env.state.errorCode = 'KycRequired';
+  await assert.rejects(qfex.placeOrder(CREDS, input(), { playerId: 'alice' }), error => error.status === 403 && error.code === 'QFEX_KYC_REQUIRED');
+});
+
+test('account resolution never calls /user/public-accounts and the primary account is never named', async () => {
+  const env = fixture({ namedPrimaryFails: true });
+  const snapshot = await qfex.getAccountSnapshot({ ...CREDS, accountId: ACCOUNT }, { playerId: 'alice' });
+  assert.equal(snapshot.account.account_id, ACCOUNT); assert.equal(snapshot.account.equity, 100);
+  assert.equal(env.requests.some(r => r.parsed.pathname === '/user/public-accounts'), false);
+  assert.ok(env.requests.every(r => !r.options.headers['x-qfex-requested-account-id']));
+  assert.ok(env.auths.every(a => !Object.hasOwn(a.params, 'account_id')));
+  await qfex.getAccountSnapshot({ ...CREDS, accountId: ACCOUNT }, { playerId: 'alice', force: true });
+  assert.equal(env.requests.filter(r => r.parsed.pathname === '/user/subaccounts/equity').length, 1, 'Account identity is cached briefly');
+});
+
+test('an unfunded account (500 "position balance not found") is an empty account, not an error', async () => {
+  const env = fixture({ unfunded: true });
+  const snapshot = await qfex.getAccountSnapshot(CREDS, { playerId: 'alice' });
+  assert.equal(snapshot.account.equity, 0); assert.equal(snapshot.account.empty_account, true);
+  assert.deepEqual(snapshot.positions, []);
+  await assert.rejects(qfex.closePosition(CREDS, { symbol: 'AAPL-USD', actionId: crypto.randomUUID() }, { playerId: 'alice' }), /No QFEX position/);
+  assert.equal(env.commands.filter(c => c.type === 'add_order').length, 0);
+});
+
+test('a key that cannot list accounts and names none gets a clear reconnect error', async () => {
+  fixture({ listingStatus: 403 });
+  await assert.rejects(qfex.getAccountSnapshot(CREDS, { playerId: 'alice' }), error => error.code === 'QFEX_ACCOUNT_UNRESOLVED' && /Reconnect/.test(error.message));
+});
+
 test('wallet registration: message uses the server builder code and the key request is HMAC-signed by the builder only', async () => {
   const builderCode = crypto.randomUUID();
   const saved = { code: process.env.QFEX_BUILDER_CODE, pub: process.env.QFEX_BUILDER_PUBLIC_KEY, secret: process.env.QFEX_BUILDER_SECRET_KEY };
@@ -522,7 +564,8 @@ test('wallet registration: message uses the server builder code and the key requ
     const wallet = '0x0000000000000000000000000000000000000001';
     const message = `www.qfex.com wants you to sign in\n${wallet}\n\nAuthorize QFEX to create a trading-only API key for builder ${builderCode} on my main account.`;
     const signature = `0x${'ab'.repeat(65)}`;
-    qfex.setTestDependencies({ fetch: async (url, options = {}) => {
+    const db = new Database(':memory:'); databases.push(db);
+    qfex.setTestDependencies({ database: db, fetch: async (url, options = {}) => {
       calls.push({ url: String(url), options });
       if (String(url).includes('/builder/web3/message')) return { ok: true, status: 200, json: async () => ({ message }) };
       return { ok: true, status: 201, json: async () => ({ user_id: ACCOUNT, account_id: ACCOUNT, public_key: 'qfex_pub_user', secret_key: 'qfex_secret_user' }) };
@@ -540,6 +583,11 @@ test('wallet registration: message uses the server builder code and the key requ
     assert.equal(JSON.stringify(Object.keys(JSON.parse(post.options.body)).sort()), JSON.stringify(['message', 'signature']));
     assert.ok(!JSON.stringify(post.options.headers).includes('builder-secret'));
     await assert.rejects(qfex.registerWalletKey({ message, signature }, { playerId: 'p2' }), error => error.status === 429);
+    const listed = calls.length;
+    const resolved = await qfex.resolveAccount({ publicKey: 'qfex_pub_user', secretKey: 'qfex_secret_user' });
+    assert.equal(resolved.accountId, ACCOUNT); assert.equal(resolved.primary, true);
+    assert.equal(calls.length, listed, 'A wallet-bound key needs no account listing');
+    await assert.rejects(qfex.resolveAccount({ publicKey: 'qfex_pub_user', secretKey: 'qfex_secret_user', accountId: BUILDER }), error => error.code === 'QFEX_ACCOUNT_MISMATCH');
   } finally {
     for (const [name, value] of Object.entries({ QFEX_BUILDER_CODE: saved.code, QFEX_BUILDER_PUBLIC_KEY: saved.pub, QFEX_BUILDER_SECRET_KEY: saved.secret })) {
       if (value === undefined) delete process.env[name]; else process.env[name] = value;

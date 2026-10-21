@@ -39,11 +39,12 @@ function sign(input, nonce = crypto.randomBytes(24).toString('hex'), unixTs = Ma
     signature: crypto.createHmac('sha256', creds.secretKey).update(`${nonce}:${unixTs}`).digest('hex') };
 }
 
+/** REST headers. The primary account is never named: QFEX answers a named primary with 500 "position balance not found". */
 function authHeaders(creds) {
   const h = sign(creds);
   return { 'x-qfex-public-key': h.public_key, 'x-qfex-nonce': h.nonce,
     'x-qfex-timestamp': String(h.unix_ts), 'x-qfex-hmac-signature': h.signature,
-    ...(creds.accountId ? { 'x-qfex-requested-account-id': creds.accountId } : {}) };
+    ...(creds.accountId && !creds.primary ? { 'x-qfex-requested-account-id': creds.accountId } : {}) };
 }
 
 /** Perform a single REST read; trading requests are never retried automatically. */
@@ -56,7 +57,7 @@ async function request(path, creds = null, query = {}) {
   for (const [key, value] of Object.entries(query)) if (value != null) url.searchParams.set(key, String(value));
   let response;
   try {
-    response = await fetchImpl(url.toString(), { headers: creds ? authHeaders(credentials(creds)) : {},
+    response = await fetchImpl(url.toString(), { headers: creds ? authHeaders({ ...credentials(creds), primary: creds.primary === true }) : {},
       signal: AbortSignal.timeout(timeoutMs), redirect: 'error' });
   } catch { throw failure('QFEX read unavailable or timed out', 502, 'QFEX_READ_FAILED'); }
   // Read text once so non-JSON upstream pages (Cloudflare/WAF/5xx HTML) can be diagnosed.
@@ -87,13 +88,22 @@ async function request(path, creds = null, query = {}) {
   return body;
 }
 
-/** Positions + balance; the primary account must omit the requested-account header per docs. */
+/**
+ * Positions + balance. QFEX answers 500 "position balance not found" for an account that
+ * has never been funded; that is an empty account, not an outage (pilotbot treats it the
+ * same way). A legacy record naming the primary account as a subaccount is retried unnamed.
+ */
 async function readPositions(creds) {
+  const empty = () => ({ balance: {}, positions: [], empty_account: true });
   try {
     return await request('/user/positions', creds);
   } catch (error) {
-    if (error?.code !== 'QFEX_NO_BALANCE' || !creds?.accountId) throw error;
-    return request('/user/positions', { ...creds, accountId: '' });
+    if (error?.code !== 'QFEX_NO_BALANCE') throw error;
+    if (!creds?.accountId || creds.primary) return empty();
+    return request('/user/positions', { ...creds, primary: true }).catch(retry => {
+      if (retry?.code === 'QFEX_NO_BALANCE') return empty();
+      throw retry;
+    });
   }
 }
 
@@ -178,6 +188,14 @@ async function registerWalletKey(input = {}, options = {}) {
   if (!UUID.test(accountId) || !body?.public_key || !body?.secret_key) {
     throw failure('QFEX returned an incomplete trading key.', 502, 'QFEX_WALLET_REGISTER');
   }
+  // Bind the issued key to the account QFEX named, so later requests never have to trust a
+  // browser-supplied account id or list accounts with a key that cannot list them.
+  try {
+    database().prepare(`INSERT INTO qfex_wallet_keys(key_hash,account_id,player_id) VALUES (?,?,?)
+      ON CONFLICT(key_hash) DO UPDATE SET account_id=excluded.account_id,player_id=excluded.player_id`)
+      .run(keyHash(String(body.public_key)), accountId, options.playerId ? String(options.playerId) : null);
+  } catch (error) { console.warn('[qfex] wallet key binding not stored', { code: String(error?.code || 'error').slice(0, 40) }); }
+  accountCache.clear();
   return { public_key: String(body.public_key), secret_key: String(body.secret_key), account_id: accountId };
 }
 
@@ -248,28 +266,59 @@ async function getCandles(symbol, options = {}) {
     open: number(c.open), high: number(c.high), low: number(c.low), close: number(c.close), volume: number(c.baseTokenVolume) }));
 }
 
-/** Resolve the real account identity; credential fingerprints cannot claim rewards. */
+const accountCache = new Map();
+const keyHash = publicKey => crypto.createHash('sha256').update(`qfex-key\0${publicKey}`).digest('hex');
+
+/** Account a wallet-registered key was issued for, recorded server-side at registration. */
+function boundAccount(publicKey) {
+  try {
+    return database().prepare('SELECT account_id FROM qfex_wallet_keys WHERE key_hash=?').get(keyHash(publicKey))?.account_id || null;
+  } catch { return null; }
+}
+
+/**
+ * Resolve the real account identity; credential fingerprints cannot claim rewards.
+ * GET /user/public-accounts does not exist on QFEX (only PUT /user/public-accounts/{id};
+ * production answers a plain-text 404), so it is never called. Evidence, in order:
+ *  1. wallet-registered key: the account QFEX returned from /builder/web3/api-key. That key
+ *     belongs to the user's primary account, which (as in pilotbot) is never named;
+ *  2. GET /user/subaccounts/equity, which lists the key's accounts with is_master;
+ *  3. legacy keys that cannot list accounts: a positions read naming the account.
+ */
 async function resolveAccount(credsInput) {
   const creds = credentials(credsInput);
-  // /user/public-accounts returns 404 on production for some keys; the equity
-  // listing documents the same account_id/is_master shape, so use it as fallback.
+  const cacheKey = credentialScope(creds);
+  const cached = accountCache.get(cacheKey);
+  if (cached && Date.now() - cached.time < 60000) return { ...creds, accountId: cached.accountId, primary: cached.primary };
+  const remember = (accountId, primary) => {
+    if (accountCache.size >= 512) accountCache.delete(accountCache.keys().next().value);
+    accountCache.set(cacheKey, { accountId, primary, time: Date.now() });
+    return { ...creds, accountId, primary };
+  };
+  const bound = boundAccount(creds.publicKey);
+  if (bound) {
+    if (creds.accountId && creds.accountId !== bound) throw failure('This QFEX key belongs to a different account. Reconnect QFEX.', 403, 'QFEX_ACCOUNT_MISMATCH');
+    return remember(bound, true);
+  }
   let result;
   try {
-    result = await request('/user/public-accounts', creds).catch(error => {
-      if (error?.code !== 'QFEX_NOT_FOUND') throw error;
-      return request('/user/subaccounts/equity', creds);
-    });
+    result = await request('/user/subaccounts/equity', { ...creds, primary: true });
   } catch (error) {
-    // Wallet-registered keys are scoped to the main account and cannot list accounts.
-    // QFEX rejects a requested account the key does not own, so a successful
-    // positions read with that account header proves ownership.
-    if (!['QFEX_FORBIDDEN', 'QFEX_NOT_FOUND'].includes(error?.code) || !UUID.test(creds.accountId)) throw error;
-    await readPositions(creds).catch(e => { if (e?.code !== 'QFEX_NO_BALANCE') throw e; });
-    return { ...creds, accountId: creds.accountId.toLowerCase() };
+    const unlisted = ['QFEX_FORBIDDEN', 'QFEX_NOT_FOUND'].includes(error?.code);
+    if (unlisted && !UUID.test(creds.accountId)) {
+      throw failure('QFEX could not identify the account for this key. Reconnect QFEX with your wallet, or add the account ID.', 403, 'QFEX_ACCOUNT_UNRESOLVED');
+    }
+    if (!unlisted) throw error;
+    // QFEX rejects a requested account the key does not own, so a positions read
+    // naming that account proves ownership.
+    try { await request('/user/positions', creds); }
+    catch (proof) { if (proof?.code !== 'QFEX_NO_BALANCE') throw proof; }
+    return remember(creds.accountId, false);
   }
-  const account = (result.accounts || []).find(a => creds.accountId ? a.account_id === creds.accountId : a.is_master === true);
-  if (!account || !UUID.test(account.account_id)) throw failure('QFEX account identity could not be verified', 403);
-  return { ...creds, accountId: account.account_id.toLowerCase() };
+  const accounts = Array.isArray(result?.accounts) ? result.accounts : Array.isArray(result?.data) ? result.data : [];
+  const account = accounts.find(a => creds.accountId ? String(a.account_id).toLowerCase() === creds.accountId : a.is_master === true);
+  if (!account || !UUID.test(String(account.account_id))) throw failure('QFEX account identity could not be verified', 403, 'QFEX_ACCOUNT_UNRESOLVED');
+  return remember(String(account.account_id).toLowerCase(), account.is_master === true);
 }
 
 function database() {
@@ -289,7 +338,10 @@ function ensureSchema(db = databaseOverride || require('./db').db) {
     builder_code TEXT, status TEXT NOT NULL, order_id TEXT, result_json TEXT, params_json TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY(account_id, player_id, action_id));
-    CREATE INDEX IF NOT EXISTS qfex_action_order ON qfex_action_intents(account_id, player_id, order_id);`);
+    CREATE INDEX IF NOT EXISTS qfex_action_order ON qfex_action_intents(account_id, player_id, order_id);
+    CREATE TABLE IF NOT EXISTS qfex_wallet_keys (
+    key_hash TEXT PRIMARY KEY, account_id TEXT NOT NULL, player_id TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP);`);
   if (!db.prepare('PRAGMA table_info(qfex_action_intents)').all().some(c => c.name === 'params_json')) {
     db.exec('ALTER TABLE qfex_action_intents ADD COLUMN params_json TEXT');
   }
@@ -329,6 +381,50 @@ function finishAction(row, status, result) {
     JSON.stringify(result), row.account_id, row.player_id, row.action_id);
 }
 
+const PROTOCOL_ERRORS = {
+  RateLimited: ['QFEX rate limited this connection. Try again in a few seconds.', 429, 'QFEX_RATE_LIMITED'],
+  PermissionDenied: ['This QFEX key is not allowed to trade. Reconnect QFEX, or use a key with the Execute orders permission.', 403, 'QFEX_PERMISSION_DENIED'],
+  KycRequired: ['QFEX requires identity verification (KYC) before this account can trade. Complete it on qfex.com.', 403, 'QFEX_KYC_REQUIRED'],
+  TncRequired: ['QFEX requires you to accept its terms before trading. Accept them on qfex.com.', 403, 'QFEX_TERMS_REQUIRED'],
+  InvalidJSONFormat: ['QFEX could not read the order request. Nothing was placed.', 400, 'QFEX_ORDER_INVALID'],
+  InvalidParameter: ['QFEX rejected an order parameter. Nothing was placed.', 400, 'QFEX_ORDER_INVALID'],
+  InvalidOrder: ['QFEX rejected the order. Nothing was placed.', 400, 'QFEX_ORDER_INVALID'],
+  InvalidOrderId: ['QFEX does not know this order.', 404, 'QFEX_ORDER_NOT_FOUND'],
+  ServerError: ['QFEX reported an internal error (ServerError). Refresh the account before trying again.', 503, 'QFEX_SERVER_ERROR'],
+};
+
+/** Protocol `err` frame to a coded, readable failure. Only ServerError leaves a write uncertain. */
+function protocolFailure(err = {}) {
+  const code = String(err.error_code || err.code || '');
+  const [message, status, errorCode] = Object.hasOwn(PROTOCOL_ERRORS, code) ? PROTOCOL_ERRORS[code]
+    : [`QFEX rejected the request${/^[A-Za-z]{3,40}$/u.test(code) ? ` (${code})` : ''}.`, 400, 'QFEX_REJECTED'];
+  return Object.assign(failure(message, status, errorCode), { definiteRejection: code !== 'ServerError', exchangeCode: code || null });
+}
+
+const REJECTIONS = {
+  FAILED_MARGIN_CHECK: 'Not enough available margin on QFEX for this order.',
+  INVALID_TICK_SIZE_PRECISION_PRICE: 'The price does not match the QFEX tick size.',
+  INVALID_TICK_SIZE_PRECISION_QUANTITY: 'The quantity does not match the QFEX lot size.',
+  QUANTITY_LESS_THAN_MIN_QUANTITY: 'The quantity is below the QFEX market minimum.',
+  REJECTED_LESS_THAN_MIN_NOTIONAL: 'The order value is below the QFEX market minimum.',
+  REJECTED_GREATER_THAN_MAX_PRICE_BAND: 'The price is above the current QFEX price band. Use a lower price.',
+  REJECTED_LESS_THAN_MIN_PRICE_BAND: 'The price is below the current QFEX price band. Use a higher price.',
+  REJECTED_MARKET_CLOSED: 'QFEX is not accepting orders in this market right now.',
+  USER_IN_LIQUIDATION: 'This QFEX account is being liquidated and cannot place orders.',
+  REJECTED_TOO_MANY_OPEN_ORDERS: 'This QFEX account has too many open orders.',
+  REJECTED_OPEN_INTEREST_LIMIT: 'The QFEX open-interest limit for this market blocks a larger position.',
+  REJECTED_TOTAL_OPEN_INTEREST_LIMIT: 'The QFEX total open-interest limit for this market has been reached.',
+  RATE_LIMITED: 'QFEX rate limited this account. Try again in a few seconds.',
+  BAD_SYMBOL: 'QFEX does not recognize this market.',
+  INVALID_TIME_IN_FORCE: 'QFEX does not allow this time in force for the order type.',
+  INVALID_CLIENT_ORDER_ID: 'QFEX rejected the order reference.',
+  INVALID_TAKE_PROFIT_PRICE: 'QFEX rejected the take-profit price.',
+  INVALID_TAKEPROFIT_PRICE: 'QFEX rejected the take-profit price.',
+  INVALID_STOP_LOSS_PRICE: 'QFEX rejected the stop-loss price.',
+  INVALID_STOPLOSS_PRICE: 'QFEX rejected the stop-loss price.',
+  NO_SUCH_ORDER: 'QFEX has no open order with this ID.',
+};
+
 function responseFor(message, type, params) {
   // Docs: {user_trades, count}; production: {user_trades_response: [...] | {user_trades, count}}.
   if (type === 'get_user_trades') {
@@ -346,14 +442,16 @@ function responseFor(message, type, params) {
   if (type === 'cancel_order' && (order.order_id !== params.order_id || order.status === 'ACK')) return null;
   if (!ACCEPTED.has(order.status)) {
     const status = /^[A-Z0-9_]{1,80}$/u.test(String(order.status)) ? order.status : 'UNKNOWN_STATUS';
-    throw failure(`QFEX rejected action: ${status}`, 422, 'QFEX_ORDER_REJECTED');
+    const text = REJECTIONS[status] || 'QFEX rejected the order. Check the account balance, market and order size.';
+    throw Object.assign(failure(`${text} (${status})`, status === 'RATE_LIMITED' ? 429 : 400, 'QFEX_ORDER_REJECTED'),
+      { definiteRejection: true, exchangeCode: status });
   }
   return order;
 }
 
 /** Authenticate, subscribe, and execute one correlated command with no reconnect/retry. */
 function credentialScope(creds) {
-  return crypto.createHash('sha256').update(`${creds.publicKey}\0${creds.secretKey}\0${creds.accountId}`).digest('hex');
+  return crypto.createHash('sha256').update(`${creds.publicKey}\0${creds.secretKey}\0${creds.accountId || ''}`).digest('hex');
 }
 
 function tradeCommand(creds, type, params, options = {}) {
@@ -387,7 +485,9 @@ function runTradeCommand(creds, type, params, options = {}) {
       console.warn('[qfex] trade socket timeout', { command: type, opened, authenticated, sent, seen: seen.slice(0, 8) });
       finish(failure('QFEX timed out; refresh account before another action', 504, 'QFEX_TIMEOUT'));
     }, timeoutMs);
-    ws.on('open', () => { opened = true; ws.send(JSON.stringify({ type: 'auth', params: { hmac: sign(creds), account_id: creds.accountId,
+    // The primary account is selected by omitting account_id (QFEX auth docs; pilotbot qfexAuthMessage).
+    ws.on('open', () => { opened = true; ws.send(JSON.stringify({ type: 'auth', params: { hmac: sign(creds),
+      ...(creds.accountId && !creds.primary ? { account_id: creds.accountId } : {}),
       ...(options.builderCode ? { builder_code: options.builderCode } : {}) } })); });
     ws.on('unexpected-response', (_request, response) => {
       const denied = response.statusCode === 401 || response.statusCode === 403;
@@ -401,9 +501,14 @@ function runTradeCommand(creds, type, params, options = {}) {
       try {
         const message = JSON.parse(raw.toString());
         seen.push(message.type || Object.keys(message).filter(key => key !== '$schema').join('+').slice(0, 60));
-        if (message.err) {
-          const error = failure(`QFEX rejected request: ${message.err.error_code || 'UnknownError'}`, 422);
-          error.definiteRejection = message.err.error_code !== 'ServerError';
+        // Both documented forms: {err:{error_code,...}} and flat {type:'Err', error_code}.
+        const err = message.err && typeof message.err === 'object' ? message.err
+          : (/^err(or)?$/iu.test(String(message.type || '')) || message.error_code ? message : null);
+        if (err) {
+          if (err.error_code === 'AlreadyAuthenticated') return;
+          const error = protocolFailure(err);
+          // Code only: never the echoed request.
+          console.warn('[qfex] trade socket error frame', { command: type, error_code: error.exchangeCode, sent });
           return finish(error);
         }
         // Docs show {type:'auth',result:'success'}; production replies {type:'authenticated'}.
@@ -421,7 +526,7 @@ function runTradeCommand(creds, type, params, options = {}) {
           else sendCommand();
         } else if (authenticated && message.subscribed === 'order_responses') sendCommand();
         else if (sent) { const result = responseFor(message, type, params); if (result != null) finish(null, result); }
-      } catch (error) { if (error.status === 422) error.definiteRejection = true; finish(error); }
+      } catch (error) { finish(error); }
     });
   });
 }
@@ -448,7 +553,7 @@ async function loadAccountSnapshot(credsInput, options) {
   const creds = await resolveAccount(credsInput);
   if (options.playerId) claimAccount(options.playerId, creds.accountId);
   const [raw, orderResult, leverage, availableLeverage, markets] = await Promise.all([
-    readPositions(creds).catch(e => { if (e?.code === 'QFEX_NO_BALANCE') return { balance: {}, positions: [] }; throw e; }), tradeCommand(creds, 'get_user_orders', { limit: 1000, offset: 0 }),
+    readPositions(creds), tradeCommand(creds, 'get_user_orders', { limit: 1000, offset: 0 }),
     tradeCommand(creds, 'get_user_leverage', { limit: 1000, offset: 0 }),
     tradeCommand(creds, 'get_available_leverage_levels', { limit: 1000, offset: 0 }), getMarkets()]);
   const balance = raw.balance || {};
@@ -460,7 +565,8 @@ async function loadAccountSnapshot(credsInput, options) {
   const equity = number(balance.available_balance) + number(balance.order_margin) + number(balance.position_margin);
   return { account: { account_id: creds.accountId, balance: number(balance.available_balance),
     usdc: number(balance.available_balance), available_to_spend: number(balance.available_balance),
-    equity, account_equity: equity, total_margin_used: number(balance.position_margin), currency: 'USD' },
+    equity, account_equity: equity, total_margin_used: number(balance.position_margin), currency: 'USD',
+    ...(raw.empty_account ? { empty_account: true } : {}) },
     positions, orders: (orderResult.orders || []).map(o => ({ ...o, id: o.order_id,
       side: o.side === 'BUY' ? 'bid' : 'ask', amount: String(o.quantity_remaining), order_type: o.type.toLowerCase() })),
     twaps: orderResult.twaps || [], leverage, available_leverage: availableLeverage,
@@ -491,15 +597,19 @@ async function orderParams(input, actionId) {
   if (!['MARKET', 'LIMIT', 'ALO'].includes(type) || !market.order_types.includes(type)) throw failure('Unsupported QFEX order type');
   const tif = String(input.timeInForce || input.time_in_force || (type === 'MARKET' ? 'IOC' : 'GTC')).toUpperCase();
   if (!market.order_time_in_force.includes(tif)) throw failure('Unsupported QFEX time in force');
-  const price = type === 'MARKET' ? 0 : exactNumber(input.price, market.tick_size, market.min_price, market.max_price, 'Price');
   const takeProfit = input.takeProfit ?? input.take_profit ?? input.tp;
   const stopLoss = input.stopLoss ?? input.stop_loss ?? input.sl;
-  return { symbol, side: ['BID', 'BUY', 'LONG'].includes(side) ? 'BUY' : 'SELL', order_type: type,
+  // Same shape as pilotbot's buildAddOrder: reduce_only is a JSON boolean (the integer 0/1
+  // is answered with err InvalidJSONFormat), a market order carries no price, and unused
+  // TP/SL fields are omitted instead of sent as 0.
+  const params = { symbol, side: ['BID', 'BUY', 'LONG'].includes(side) ? 'BUY' : 'SELL', order_type: type,
     order_time_in_force: tif, quantity: exactNumber(input.quantity ?? input.amount,
-      market.lot_size, market.min_quantity, market.max_quantity, 'Quantity'), price,
-    take_profit: takeProfit == null || Number(takeProfit) === 0 ? 0 : exactNumber(takeProfit, market.tick_size, 0, null, 'Take profit'),
-    stop_loss: stopLoss == null || Number(stopLoss) === 0 ? 0 : exactNumber(stopLoss, market.tick_size, 0, null, 'Stop loss'),
-    reduce_only: input.reduceOnly === true || input.reduce_only === true ? 1 : 0, client_order_id: actionId };
+      market.lot_size, market.min_quantity, market.max_quantity, 'Quantity'),
+    reduce_only: input.reduceOnly === true || input.reduce_only === true, client_order_id: actionId };
+  if (type !== 'MARKET') params.price = exactNumber(input.price, market.tick_size, market.min_price, market.max_price, 'Price');
+  if (takeProfit != null && Number(takeProfit) !== 0) params.take_profit = exactNumber(takeProfit, market.tick_size, 0, null, 'Take profit');
+  if (stopLoss != null && Number(stopLoss) !== 0) params.stop_loss = exactNumber(stopLoss, market.tick_size, 0, null, 'Stop loss');
+  return params;
 }
 
 async function executeAction(creds, input, options, type, params) {
@@ -660,31 +770,33 @@ async function scanPages(readPage, maximum, offset = 0) {
   return { rows, hasMore };
 }
 
+/** One REST fill page; an account QFEX has no balance record for has no fills yet. */
+function readFills(creds, query) {
+  return request('/user/trade', creds, query).catch(error => {
+    if (error?.code === 'QFEX_NO_BALANCE') return { data: [], count: 0 };
+    throw error;
+  });
+}
+
+/**
+ * Fills come from REST GET /user/trade only, as in pilotbot. The Trade-WS get_user_trades
+ * feed returned no rows in production, so requiring it left every fill unmatched, and its
+ * extra socket per page caused the import timeouts.
+ */
 async function readHistory(creds, options = {}, scan = false) {
   const maximum = Math.max(1, Math.min(1000, Math.floor(Number(options.limit) || (scan ? 1000 : 100))));
   const offset = Math.max(0, Math.floor(Number(options.offset) || 0));
-  const [raw, executions] = await Promise.all([
-    scanPages(page => request('/user/trade', creds, { ...page, start: options.start, end: options.end, symbol: options.symbol }), maximum, offset),
-    scanPages(page => tradeCommand(creds, 'get_user_trades', { ...page,
-      ...(options.start ? { start_ts: Date.parse(options.start) / 1000 } : {}),
-      ...(options.end ? { end_ts: Date.parse(options.end) / 1000 } : {}) }), maximum, offset)]);
-  const byId = new Map(executions.rows.map(t => [t.trade_id, t]));
-  const trades = raw.rows.map(t => normalizeTrade(t, byId.get(t.id)));
-  return { trades, scanned_rest: raw.rows.length, scanned_executions: executions.rows.length,
-    has_more: raw.hasMore || executions.hasMore, truncated: raw.hasMore || executions.hasMore,
-    unmatched_executions: trades.filter(t => !t._execution).length };
+  const raw = await scanPages(page => readFills(creds, { ...page, start: options.start, end: options.end, symbol: options.symbol }), maximum, offset);
+  return { trades: raw.rows.map(normalizeTrade), scanned_rest: raw.rows.length, has_more: raw.hasMore, truncated: raw.hasMore };
 }
 
-function normalizeTrade(t, candidate) {
-  const execution = candidate?.order_id === t.order_id && candidate?.symbol === t.symbol
-    && new BigNumber(candidate.price).eq(t.price) && new BigNumber(candidate.quantity).eq(t.quantity)
-    && number(candidate.timestamp) > 0 ? candidate : null;
-  const timestamp = number(execution?.timestamp, number(t.order_timestamp));
+function normalizeTrade(t) {
+  const timestamp = number(t.order_timestamp);
   return { id: t.id, order_id: t.order_id, symbol: t.symbol,
     side: t.side === 'BUY' ? 'open_long' : 'open_short', amount: String(t.quantity), price: String(t.price),
     notional_usd: new BigNumber(t.quantity).abs().times(t.price).toNumber(), pnl: t.realised_pnl_change,
     fee: t.fee, created_at: timestamp > 0 ? new Date(timestamp * 1000).toISOString() : null,
-    timestamp_kind: execution ? 'execution' : 'order', _execution: execution, _raw: t };
+    timestamp_kind: 'order', _raw: t };
 }
 
 /** Import only server-origin builder-attributed fills into the reward ledger. */
@@ -693,9 +805,8 @@ async function importTradesForPlayer(playerId, credsInput, options = {}) {
   claimAccount(playerId, creds.accountId);
   const maximum = Math.max(1, Math.min(1000, Math.floor(Number(options.limit) || 1000)));
   const result = await require('./qfex-history-sync').syncHistory({ db: database(), accountId: creds.accountId, maximum,
-    readRest: page => request('/user/trade', creds, page),
-    readExecutions: page => tradeCommand(creds, 'get_user_trades', page),
-    consume: entries => importVerifiedHistory(playerId, creds, entries.map(t => normalizeTrade(t.raw, t.execution)), options) });
+    readRest: page => readFills(creds, page),
+    consume: entries => importVerifiedHistory(playerId, creds, entries.map(t => normalizeTrade(t.raw)), options) });
   return { ok: true, account_id: creds.accountId, ...result,
     builder_configured: !!builderCode(), reward_eligible: !!builderCode() };
 }
@@ -711,10 +822,14 @@ function importVerifiedHistory(playerId, creds, trades, options) {
     const proof = database().prepare(`SELECT * FROM qfex_action_intents
       WHERE account_id=? AND player_id=? AND order_id=? AND kind='add_order' AND status='accepted'`)
       .get(creds.accountId, String(playerId), trade.order_id);
-    if (!proof?.builder_code || !UUID.test(proof.builder_code) || !trade._execution) { skipped++; rejectedIds.push(trade.id); continue; }
+    // Proof = our own accepted add_order intent (sent on a builder-coded connection, its order_id
+    // taken from QFEX's own order_response) + QFEX's REST fill of exactly that order.
+    if (!proof?.builder_code || !UUID.test(proof.builder_code)) { skipped++; rejectedIds.push(trade.id); continue; }
     if (!(trade.notional_usd > 0) || !Number.isFinite(trade.notional_usd)) { skipped++; rejectedIds.push(trade.id); continue; }
     const params = JSON.parse(proof.params_json || '{}');
     if (params.symbol !== trade.symbol || params.side !== trade._raw.side) { skipped++; rejectedIds.push(trade.id); continue; }
+    // A single fill can never exceed the order it belongs to.
+    if (!(Number(params.quantity) > 0) || new BigNumber(trade.amount).abs().gt(params.quantity)) { skipped++; rejectedIds.push(trade.id); continue; }
     const side = params.reduce_only ? (params.side === 'SELL' ? 'close_long' : 'close_short') : trade.side;
     const result = ledger.upsertVerifiedTrade(playerId, { symbol: trade.symbol, side,
       amount: trade.amount, price: trade.price, orderId: trade.order_id,
@@ -722,7 +837,7 @@ function importVerifiedHistory(playerId, creds, trades, options) {
       orderType: String(trade._raw.order_type).toLowerCase(), notional_usd: trade.notional_usd,
       verifiedSource: 'qfex_builder_api', pnl: trade.pnl, fee: trade.fee, createdAt: trade.created_at,
       proofJson: JSON.stringify({ account_id: creds.accountId, builder_code: proof.builder_code,
-        action_id: proof.action_id, params, execution: trade._execution, fill: trade._raw }) });
+        action_id: proof.action_id, order_id: proof.order_id, params, fill: trade._raw }) });
     imported += Number(result.inserted || 0); updated += Number(result.updated || 0);
   }
   return { imported, updated, skipped, total: seen.size, rejected_ids: rejectedIds };
@@ -733,7 +848,7 @@ function setTestDependencies(options = {}) {
   fetchImpl = options.fetch || ((...args) => fetch(...args));
   socketFactory = options.socketFactory || (url => new WebSocket(url, { maxPayload: 4 * 1024 * 1024 }));
   databaseOverride = options.database || null;
-  timeoutMs = options.timeoutMs || 12000; marketCache = null; snapshotCache.clear(); socketCounts.clear();
+  timeoutMs = options.timeoutMs || 12000; marketCache = null; snapshotCache.clear(); socketCounts.clear(); accountCache.clear();
 }
 
 module.exports = { getWalletMessage, registerWalletKey, credentials, sign, configStatus, request, normalizeMarket, getMarkets, getPrices,

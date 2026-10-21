@@ -47,8 +47,24 @@ async function run() {
   assert.equal(futures.upsertVerifiedTrade(player.id,fill).inserted,1);
   assert.equal(futures.upsertVerifiedTrade(player.id,fill).inserted,0);
   futures.upsertVerifiedTrade(player.id,{...fill,clientOrderId:'qfex:forged',notional_usd:1000000});
-  const eligible = futures.db.prepare(`SELECT * FROM trade_history WHERE dex='qfex' AND ${recon.verifiedSourceWhereForDex('qfex')}`).all();
+  const eligibleFor = id => futures.db.prepare(`SELECT * FROM trade_history WHERE dex='qfex' AND player_id=? AND ${recon.verifiedSourceWhereForDex('qfex')}`).all(id);
+  const eligible = eligibleFor(player.id);
   assert.equal(eligible.length,1,'source string alone cannot prove a fill');
+  // Current proof shape (pilotbot model): REST fill of our own accepted builder-coded order, no WS execution copy.
+  const restPlayer = 'qfex-rest-test', restAccount = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', restAction = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
+  const restOrder = '99999999-9999-4999-8999-999999999999', fillTime = Math.floor(Date.now()/1000)-60 + 0.25;
+  futures.db.prepare('INSERT INTO qfex_account_claims(account_id,player_id) VALUES (?,?)').run(restAccount,restPlayer);
+  futures.db.prepare("INSERT INTO qfex_action_intents(account_id,player_id,action_id,kind,payload_hash,client_order_id,builder_code,status,order_id,result_json,params_json) VALUES (?,?,?,'add_order','hash2','client2',?,'accepted',?,'{}',?)")
+    .run(restAccount,restPlayer,restAction,builder,restOrder,JSON.stringify({symbol:'BTC-USD',side:'BUY',quantity:2,reduce_only:false}));
+  const restFill = (id, quantity) => ({symbol:'BTC-USD',side:'open_long',orderType:'market',amount:String(quantity),price:'100',orderId:restOrder,
+    clientOrderId:`qfex:${restAccount}:fill:${id}`,dex:'qfex',status:'filled',notional_usd:100*quantity,verifiedSource:'qfex_builder_api',pnl:'0',
+    proofJson:JSON.stringify({account_id:restAccount,action_id:restAction,order_id:restOrder,builder_code:builder,params:{symbol:'BTC-USD',side:'BUY',quantity:2},
+      fill:{id,order_id:restOrder,symbol:'BTC-USD',quantity,price:100,side:'BUY',order_timestamp:fillTime}}),
+    createdAt:new Date(fillTime*1000).toISOString()});
+  assert.equal(futures.upsertVerifiedTrade(restPlayer,restFill('rest-ok',1)).inserted,1);
+  futures.upsertVerifiedTrade(restPlayer,restFill('rest-oversize',5));
+  futures.upsertVerifiedTrade(restPlayer,{...restFill('rest-wrong-builder',1),proofJson:restFill('rest-wrong-builder',1).proofJson.replace(builder,'00000000-0000-4000-8000-000000000000')});
+  assert.deepEqual(eligibleFor(restPlayer).map(row => row.client_order_id),[`qfex:${restAccount}:fill:rest-ok`],'REST fill proof requires our accepted order, builder code and a quantity within the order');
   const rows = await tasks.fetchWalletTrades(player,{dex:'qfex'});
   assert.equal(rows.length,1);
   const task = {id:1,type:'volume',params:JSON.stringify({target_volume:100})};
