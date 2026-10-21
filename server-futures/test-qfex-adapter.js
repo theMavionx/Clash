@@ -119,6 +119,9 @@ async function drainHistory(ledger, limit = 1000, maximumPasses = 30) {
   assert.fail(`History did not drain in ${maximumPasses} bounded passes`);
 }
 
+// QFEX client_order_id on the wire: decimal of the first 64 bits of the action UUID (pilotbot format).
+const wireClientId = actionId => BigInt('0x' + String(actionId).replace(/-/g, '').slice(0, 16)).toString(10);
+
 test('HMAC uses raw secret and seconds; REST account headers are signed without credentials in URL', async () => {
   const env = fixture();
   const signed = qfex.sign(CREDS, 'nonce', 1760545414);
@@ -247,7 +250,7 @@ test('unknown action reconciles exact historic order by client ID without resubm
   const env = fixture({ noResponse: true }); const order = input();
   await assert.rejects(qfex.placeOrder(CREDS, order, { playerId: 'alice' }), /timed out/);
   assert.equal((await qfex.getActionStatus(CREDS, order.actionId, { playerId: 'alice' })).status, 'unknown');
-  env.state.historicOrders = [{ client_order_id: order.actionId, order_id: ORDER, symbol: order.symbol,
+  env.state.historicOrders = [{ client_order_id: wireClientId(order.actionId), order_id: ORDER, symbol: order.symbol,
     side: 'BUY', type: 'MARKET', quantity: 0.123, terminal_status: 'FILLED' }];
   const result = await qfex.getActionStatus(CREDS, order.actionId, { playerId: 'alice' });
   assert.equal(result.status, 'reconciled'); assert.equal(result.result.order_id, ORDER);
@@ -259,7 +262,7 @@ test('unknown action reconciles exact historic order by client ID without resubm
 test('multiple matching historical client IDs require manual review', async () => {
   const env = fixture({ noResponse: true }); const order = input();
   await assert.rejects(qfex.placeOrder(CREDS, order, { playerId: 'alice' }), /timed out/);
-  env.state.historicOrders = [ORDER, BUILDER].map(order_id => ({ order_id, client_order_id: order.actionId }));
+  env.state.historicOrders = [ORDER, BUILDER].map(order_id => ({ order_id, client_order_id: wireClientId(order.actionId) }));
   assert.equal((await qfex.getActionStatus(CREDS, order.actionId, { playerId: 'alice' })).status, 'manual_review');
   assert.equal(env.commands.filter(c => c.type === 'add_order').length, 1);
 });
@@ -512,6 +515,7 @@ test('market order payload matches the QFEX schema: boolean reduce_only, no pric
   assert.equal(typeof params.reduce_only, 'boolean');
   for (const key of ['price', 'take_profit', 'stop_loss']) assert.equal(Object.hasOwn(params, key), false, key);
   assert.deepEqual(Object.keys(params).sort(), ['client_order_id', 'order_time_in_force', 'order_type', 'quantity', 'reduce_only', 'side', 'symbol']);
+  assert.match(params.client_order_id, /^\d{1,20}$/u, 'QFEX client_order_id must be a decimal string like pilotbot sends');
   await qfex.placeOrder(CREDS, input({ orderType: 'limit', price: '199.5', takeProfit: '210' }), { playerId: 'alice' });
   const limit = env.commands.filter(c => c.type === 'add_order')[1].params;
   assert.equal(limit.price, 199.5); assert.equal(limit.take_profit, 210); assert.equal(Object.hasOwn(limit, 'stop_loss'), false);

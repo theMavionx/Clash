@@ -587,6 +587,15 @@ function exactNumber(value, step, minimum, maximum, label) {
   return result;
 }
 
+// QFEX rejects a dashed UUID client_order_id with InvalidJSONFormat. pilotbot (which
+// trades on QFEX in production) sends a decimal string of at most 20 digits; derive one
+// deterministically from the action UUID so retries and recovery lookups stay stable.
+function qfexClientOrderId(actionId) {
+  const hex = String(actionId || '').replace(/-/g, '').slice(0, 16);
+  if (!/^[0-9a-f]{16}$/i.test(hex)) throw failure('A stable actionId UUID is required');
+  return BigInt(`0x${hex}`).toString(10);
+}
+
 async function orderParams(input, actionId) {
   const symbol = symbolOf(input.symbol);
   const market = (await getMarkets({ force: true })).find(m => m.symbol === symbol);
@@ -605,7 +614,7 @@ async function orderParams(input, actionId) {
   const params = { symbol, side: ['BID', 'BUY', 'LONG'].includes(side) ? 'BUY' : 'SELL', order_type: type,
     order_time_in_force: tif, quantity: exactNumber(input.quantity ?? input.amount,
       market.lot_size, market.min_quantity, market.max_quantity, 'Quantity'),
-    reduce_only: input.reduceOnly === true || input.reduce_only === true, client_order_id: actionId };
+    reduce_only: input.reduceOnly === true || input.reduce_only === true, client_order_id: qfexClientOrderId(actionId) };
   if (type !== 'MARKET') params.price = exactNumber(input.price, market.tick_size, market.min_price, market.max_price, 'Price');
   if (takeProfit != null && Number(takeProfit) !== 0) params.take_profit = exactNumber(takeProfit, market.tick_size, 0, null, 'Take profit');
   if (stopLoss != null && Number(stopLoss) !== 0) params.stop_loss = exactNumber(stopLoss, market.tick_size, 0, null, 'Stop loss');
