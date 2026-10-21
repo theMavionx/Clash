@@ -14,6 +14,7 @@ async function run() {
     getMarkets:async()=>[{symbol:'BTC-USD'}],
     getAccountSnapshot:async()=>({account:{account_id:'verified'},positions:[],orders:[]}),
     placeOrder:async(creds,input,context)=>{calls.push({creds,input,context});return {success:true,action_id:input.actionId};},
+    setTpsl:async(creds,input,context)=>{calls.push({kind:'tpsl',creds,input,context});return {success:true,symbol:input.symbol};},
     importTradesForPlayer:async(playerId)=>({player_id:playerId,imported:1}),
     getActionStatus:async(_creds,id)=>{
       if(id==='missing')throw Object.assign(new Error('QFEX action not found'),{status:404,code:'QFEX_ACTION_NOT_FOUND',account_id:'verified-account'});
@@ -39,6 +40,9 @@ async function run() {
     const result=await fetch(url+'/orders',{method:'POST',headers,body:JSON.stringify({actionId:'uuid-fixture',playerId:'forged-player',symbol:'BTC-USD'})});
     assert.equal(result.status,200);assert.equal(calls[0].context.playerId,'trusted-player');
     assert.equal(calls[0].input.actionId,'uuid-fixture');
+    const tpsl=await fetch(url+'/positions/AAPL-USD/tpsl',{method:'POST',headers:{...headers,'x-idempotency-key':'tpsl-key'},body:JSON.stringify({takeProfit:'250',playerId:'forged-player'})});
+    assert.equal(tpsl.status,200);const tpslCall=calls.find(c=>c.kind==='tpsl');
+    assert.equal(tpslCall.input.symbol,'AAPL-USD');assert.equal(tpslCall.input.actionId,'tpsl-key');assert.equal(tpslCall.context.playerId,'trusted-player');
     const imported=await fetch(url+'/import-trades',{method:'POST',headers,body:'{"playerId":"forged-player"}'});
     assert.equal((await imported.json()).player_id,'trusted-player');
     const error=await fetch(url+'/actions/id',{headers});

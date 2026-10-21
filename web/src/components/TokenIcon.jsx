@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { canonTokenSymbol, tokenFallbackColor, tokenLogoSources } from '../lib/tokenLogos';
+import { canonTokenSymbol, tokenFallbackColor, tokenLabelSymbol, tokenLogoSources } from '../lib/tokenLogos';
 
+// v16 = adds the EQ: equity namespace and /tokens/equity artwork (QFEX).
 // v15 = stable generated stock/ETF badges are no longer treated as failed
 //       logos, and the letter fallback stays visible while image probes load.
 // v14 = fixes FX pair normalization/placeholders (USD/JPY, USD/CAD, etc.).
@@ -25,7 +26,7 @@ import { canonTokenSymbol, tokenFallbackColor, tokenLogoSources } from '../lib/t
 // v4 = invalidated entries from before we added local SKR.
 // v3 invalidated MSATS / MET / SYRUP / BRENTOIL aliases. Bump
 // whenever new local /tokens/* are added so users force a fresh probe.
-const LOGO_CACHE_KEY = 'clash_token_logos_v15';
+const LOGO_CACHE_KEY = 'clash_token_logos_v16';
 const LOGO_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 const logoCache = new Map();
@@ -65,7 +66,8 @@ function persistLogoCache() {
 export default function TokenIcon({ sym, size = 20, fallbackColor, style }) {
   const canon = canonTokenSymbol(sym);
   const bg = fallbackColor || tokenFallbackColor(canon);
-  const fallbackLabel = canon.length <= 5 ? canon : canon.slice(0, 5);
+  const label = tokenLabelSymbol(canon);
+  const fallbackLabel = label.length <= 5 ? label : label.slice(0, 5);
   const fallbackFontSize = size * (fallbackLabel.length <= 2 ? 0.5 : fallbackLabel.length <= 4 ? 0.38 : 0.32);
   const cached = logoCache.get(canon);
   const allSources = useMemo(() => tokenLogoSources(canon), [canon]);

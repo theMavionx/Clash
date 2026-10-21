@@ -96,7 +96,47 @@ const COINGECKO_LOGOS = {
   ZORA: 'https://coin-images.coingecko.com/coins/images/54693/large/zora.jpg',
 };
 
+// Equity namespace for venues that list stocks, ETFs, indices and commodities by
+// plain ticker (QFEX). Many such tickers collide with crypto tokens (SOPH, ZETA,
+// PURR, BB...), so an `EQ:` symbol never borrows a crypto logo: it uses local
+// company/asset artwork from /tokens/equity (same sources as pilotbot: Lighter
+// RWA token list, Hyperliquid builder coin library, Copybot library), a short
+// allow-list of shared local files, then a generated ticker badge. No remote probes.
+export const EQUITY_PREFIX = 'EQ:';
+const EQUITY_LOGOS = {
+  AAOI: 'svg', AMD: 'svg', AVGO: 'svg', BABA: 'png', BB: 'png', BE: 'png', BMNR: 'png', BX: 'svg',
+  CIEN: 'svg', COHR: 'svg', COST: 'svg', CRDO: 'svg', CRWD: 'svg', CRWV: 'png', CXMT: 'png', DELL: 'png', DRAM: 'png',
+  GLW: 'svg', HIMS: 'svg', HYUNDAI: 'png', IBM: 'png', KIOXIA: 'svg', KOSPI: 'svg', LITE: 'png', LRCX: 'svg', MRNA: 'png',
+  MRVL: 'png', MSTR: 'png', NBIS: 'png', NCLD: 'svg', NET: 'svg', NFLX: 'svg', NIKKEI: 'svg', NOK: 'svg', NOW: 'png',
+  OPENAI: 'png', ORCL: 'svg', OURA: 'svg', RDDT: 'svg', RKLB: 'png', SHAZ: 'svg', SKHY: 'png', SMH: 'svg', SOFTBANK: 'svg',
+  SOXL: 'png', SOXS: 'png', STRC: 'png', TLT: 'svg', TTWO: 'png', UNITREE: 'png', URANIUM: 'svg', US100: 'png',
+  US500: 'png', VST: 'svg', WDC: 'png', XLE: 'svg', ZHIPU: 'png', ZM: 'svg',
+};
+// Existing /tokens artwork that shows the same company/asset (never a crypto homonym).
+const EQUITY_SHARED_LOCAL = new Set([
+  'AAPL', 'AMZN', 'CBRS', 'CL', 'COIN', 'COPPER', 'CRCL', 'GOLD', 'GOOGL', 'HOOD', 'INTC', 'IREN', 'LLY', 'META',
+  'MSFT', 'MU', 'NATGAS', 'NVDA', 'PLTR', 'QCOM', 'SAMSUNG', 'SILVER', 'SKHYNIX', 'SNDK', 'SPCX', 'TSLA',
+]);
+
+/** Icon symbol for an equity-style market base (QFEX); '' for FX/fiat bases. */
+export function equityIconSymbol(base) {
+  const s = canonTokenSymbol(base);
+  if (s.startsWith(EQUITY_PREFIX)) return s;
+  if (!s || FIAT_SYMBOLS.has(s) || FX_SYMBOLS.has(s)) return '';
+  return EQUITY_PREFIX + s;
+}
+
+/** Visible ticker without the equity namespace. */
+export function tokenLabelSymbol(sym) {
+  return canonTokenSymbol(sym).replace(/^EQ:/u, '');
+}
+
 export function canonTokenSymbol(sym) {
+  const text = String(sym || '').trim();
+  if (/^EQ:/iu.test(text)) {
+    const inner = canonTokenSymbol(text.slice(3)).replace(/^EQ:/u, '');
+    return inner ? EQUITY_PREFIX + inner : '';
+  }
   const raw = String(sym || '')
     .toUpperCase()
     .trim()
@@ -112,6 +152,8 @@ export function canonTokenSymbol(sym) {
     .replace(/\/USDT-P$/u, '')
     .replace(/[/_-]PERP$/u, '')
     .replace(/[/_-]USD[TC]?$/u, '')
+    // QFEX quotes some stocks in local currency (SAMSUNG-KRW, KIOXIA-JPY, ZHIPU-HKD).
+    .replace(/^([A-Z0-9.]{2,})-(?:KRW|JPY|HKD|CNY|SEK)$/u, (all, base) => (FIAT_SYMBOLS.has(base) ? all : base))
     .replace(/[^A-Z0-9]/g, '');
   if (FX_SYMBOLS.has(s)) return s;
   for (const quote of QUOTE_SUFFIXES) {
@@ -147,7 +189,7 @@ function fxPairDataUri(sym) {
 }
 
 function generatedTokenDataUri(sym) {
-  const s = canonTokenSymbol(sym);
+  const s = tokenLabelSymbol(sym);
   if (!s) return null;
   const bg = tokenFallbackColor(s, '#475569');
   const label = s.length <= 5 ? s : s.slice(0, 5);
@@ -165,7 +207,7 @@ function commodityCandidates(sym) {
 }
 
 export function tokenFallbackColor(sym, fallback = '#a3906a') {
-  const s = canonTokenSymbol(sym);
+  const s = tokenLabelSymbol(sym);
   return TOKEN_COLORS[s] || TOKEN_COLORS[(LOCAL_ALIASES[s] || [])[0]] || fallback;
 }
 
@@ -173,6 +215,18 @@ export function tokenLogoSources(sym) {
   const s = canonTokenSymbol(sym);
   if (!s) return [];
   const srcs = [];
+  if (s.startsWith(EQUITY_PREFIX)) {
+    const base = s.slice(EQUITY_PREFIX.length);
+    if (Object.hasOwn(EQUITY_LOGOS, base)) srcs.push(`/tokens/equity/${base}.${EQUITY_LOGOS[base]}`);
+    if (EQUITY_SHARED_LOCAL.has(base)) {
+      for (const candidate of COMMODITY_SYMBOLS.has(base) ? commodityCandidates(base) : localCandidates(base)) {
+        srcs.push(`/tokens/${candidate}.svg`, `/tokens/${candidate}.png`);
+      }
+    }
+    const badge = generatedTokenDataUri(base);
+    if (badge) srcs.push(badge);
+    return uniq(srcs);
+  }
   const fxBadge = fxPairDataUri(s);
   if (fxBadge) return [fxBadge];
   const generated = generatedTokenDataUri(s);

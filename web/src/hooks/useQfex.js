@@ -1,14 +1,21 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
 import { useCredentialOperationScope } from './useCredentialOperationScope';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { getAddress } from 'viem';
+import { equityIconSymbol } from '../lib/tokenLogos';
 import { beginQfexAction, finishQfexAction, pendingQfexAction, mayResendQfexAction, clearQfexCredentials, fetchQfexJson, normalizeQfexCredentials, readQfexCredentials, saveQfexCredentials } from '../lib/qfexClient';
 
 const API = '/api/futures/qfex';
 const emptySnapshot = () => ({ account: null, positions: [], orders: [], markets: [], prices: [] });
 const rows = value => Array.isArray(value) ? value : Array.isArray(value?.data) ? value.data : [];
+// QFEX lists stocks, ETFs, indices and commodities by plain ticker; the EQ: icon namespace
+// keeps them on company/asset artwork instead of a same-ticker crypto logo.
+export const withQfexIcons = markets => rows(markets).map(market => {
+  const icon = equityIconSymbol(market?.base_asset || market?.symbol);
+  return icon && !market?.icon_symbol ? { ...market, icon_symbol: icon } : market;
+});
 
 /** Adapt authenticated QFEX accounts to the shared trading terminal contract. */
 export function useQfex() {
@@ -83,10 +90,15 @@ export function useQfex() {
     if (!active || !token) return undefined;
     let cancelled = false;
     request('/config', { credentials: null }).then(value => { if (!cancelled) setConfig(value); }).catch(() => {});
-    if (!credentials) request('/markets', { credentials: null }).then(value => {
+    const loadMarkets = () => request('/markets', { credentials: null }).then(value => {
       if (!cancelled) setSnapshot(previous => ({ ...previous, markets: rows(value) }));
     }).catch(() => {});
-    return () => { cancelled = true; };
+    let timer = null;
+    if (!credentials) {
+      loadMarkets();
+      timer = window.setInterval(() => { if (document.visibilityState === 'visible') loadMarkets(); }, 30_000);
+    }
+    return () => { cancelled = true; if (timer) window.clearInterval(timer); };
   }, [active, credentials, token, request]);
 
   useEffect(() => {
@@ -199,9 +211,14 @@ export function useQfex() {
       const result = await request(path, { method: 'POST', body: { ...body, actionId: action.actionId } });
       finishQfexAction(actionScope, action.actionId);
       assert(scope);
-      await refresh();
-      if (path !== '/leverage') await claimGold();
-      assert(scope);
+      if (path === '/leverage' && version === generation.current) {
+        // The next order checks leverageSettings right away; record the accepted value now.
+        const symbol = String(body?.symbol || ''), leverage = Number(body?.leverage);
+        setSnapshot(previous => ({ ...previous, leverage: [...rows(previous?.leverage).filter(row => row.symbol !== symbol), { symbol, leverage }] }));
+      } else {
+        // Refresh and reward sync run in the background: the confirmation returns as soon as QFEX answers.
+        refresh().then(() => claimGold()).catch(() => {});
+      }
       return { ...result, info: result?.info || 'QFEX accepted the request. Check positions and orders for execution.' };
     } catch (reason) {
       if (action && !action.resumed && reason.status && !reason.outcomeUnknown && reason.status < 500 && !['QFEX_ACTION_CONFLICT', 'QFEX_ACTION_UNKNOWN', 'QFEX_ACTION_PENDING'].includes(reason.code)) finishQfexAction(actionScope, action.actionId);
@@ -220,7 +237,21 @@ export function useQfex() {
   const placeLimitOrder = useCallback((symbol, side, price, amount, timeInForce, leverage, options = {}) => {
     return runAction('/orders', { symbol, side, price, amount, timeInForce, leverage, orderType: 'limit', takeProfit: options.takeProfit, stopLoss: options.stopLoss });
   }, [runAction]);
-  const cancelOrder = useCallback((symbol, orderId) => runAction('/orders/cancel', { symbol, orderId }), [runAction]);
+  const cancelOrder = useCallback((symbol, orderId) => {
+    // Standalone TP/SL stops are cancelled with cancel_stop_order through the TP/SL route.
+    const stop = rows(snapshot?.orders).find(order => order?.is_stop && String(order.id) === String(orderId));
+    if (stop) return runAction('/tpsl', { symbol, [stop.order_type === 'take_profit' ? 'takeProfit' : 'stopLoss']: null });
+    return runAction('/orders/cancel', { symbol, orderId });
+  }, [runAction, snapshot?.orders]);
+  // Terminal contract: (symbol, closeSide, takeProfit, stopLoss, ...). A null leg is unchanged.
+  const setTpsl = useCallback((symbol, _closeSide, takeProfit, stopLoss) => {
+    const body = { symbol };
+    if (takeProfit != null && takeProfit !== '') body.takeProfit = String(takeProfit);
+    if (stopLoss != null && stopLoss !== '') body.stopLoss = String(stopLoss);
+    if (!body.takeProfit && !body.stopLoss) return Promise.resolve({ error: 'Change TP or SL before setting.' });
+    return runAction('/tpsl', body).then(result => (result?.error ? result
+      : { ...result, info: 'QFEX TP/SL set. They close the position at market when the mark price reaches them.' }));
+  }, [runAction]);
   const closePosition = useCallback((symbol, side, amount, _pair, _trade, fullClose = false) => runAction('/positions/close', { symbol, side, ...(fullClose ? {} : { amount }), fullClose }), [runAction]);
   const setLeverage = useCallback((symbol, leverage) => runAction('/leverage', { symbol, leverage }), [runAction]);
   const fetchTradeHistory = useCallback((options = {}) => request(`/history?limit=${encodeURIComponent(options.limit || 100)}`, { signal: options.signal }).then(rows), [request]);
@@ -237,10 +268,11 @@ export function useQfex() {
   }, [actionScope, assert, capture]);
 
   const account = snapshot?.account || null;
+  const markets = useMemo(() => withQfexIcons(snapshot?.markets), [snapshot?.markets]);
   const ready = !!credentials && !!account;
   return {
     dex: 'qfex', walletAddr, connected: !!token, hasWallet: !!token, walletMismatch: false,
-    account, positions: rows(snapshot?.positions), orders: rows(snapshot?.orders), markets: rows(snapshot?.markets), prices: rows(snapshot?.prices),
+    account, positions: rows(snapshot?.positions), orders: rows(snapshot?.orders), markets, prices: rows(snapshot?.prices),
     balance: Number(account?.account_equity ?? account?.equity ?? account?.balance ?? 0),
     freeCollateral: Number(account?.available_to_spend ?? account?.free_collateral ?? account?.balance ?? 0),
     walletUsdc: 0, spotUsdc: 0,
@@ -249,8 +281,7 @@ export function useQfex() {
     dataReady: ready, accountReady: ready, isReady: ready, setupVerified: ready,
     inviteStatus: config, pendingAction, reconcilePending, loading: loading || (active && !loaded), error, clearError: () => setError(''),
     activate, connectWithWallet, walletRegistration: config?.wallet_registration === true, evmAddress: evmWallet?.address || '', disconnect, refresh, fetchAccount: refresh, fetchPositions: refresh, fetchOrders: refresh,
-    placeMarketOrder, placeLimitOrder, cancelOrder, closePosition, setLeverage, fetchTradeHistory, fetchCandles,
-    setTpsl: async () => ({ error: 'Manage QFEX TP/SL directly in QFEX.' }),
+    placeMarketOrder, placeLimitOrder, cancelOrder, closePosition, setLeverage, setTpsl, fetchTradeHistory, fetchCandles,
     depositToPacifica: async () => ({ error: 'Manage funding directly in QFEX.' }),
     withdraw: async () => ({ error: 'Manage withdrawals directly in QFEX.' }),
     claimGold, syncStatus, goldEarned, clearGoldEarned: () => setGoldEarned(null),

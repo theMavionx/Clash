@@ -17,6 +17,7 @@ let socketFactory = url => new WebSocket(url, { maxPayload: 4 * 1024 * 1024 });
 let databaseOverride = null;
 let timeoutMs = Math.max(2000, Math.min(30000, Number(process.env.QFEX_TIMEOUT_MS) || 12000));
 let marketCache = null;
+let dayStatsEnabled = !/^(?:0|false|off)$/iu.test(String(process.env.QFEX_DAY_STATS || ''));
 const initialized = new WeakSet();
 const snapshotCache = new Map();
 const socketCounts = new Map();
@@ -214,34 +215,84 @@ function configStatus() {
 
 function number(value, fallback = 0) { return Number.isFinite(Number(value)) ? Number(value) : fallback; }
 
-/** Normalize exchange reference data and live prices for the trading UI. */
-function normalizeMarket(raw, contract = {}) {
-  return { ...raw, symbol: raw.symbol, display_symbol: raw.symbol, name: raw.base_asset,
+function positive(value) { const n = Number(value); return Number.isFinite(n) && n > 0 ? n : null; }
+
+/**
+ * Normalize exchange reference data and live prices for the trading UI.
+ * /md/contracts has last_price and index_price but no mark price and no 24h change
+ * (refdata's price_change_24h is always ""); the change comes from dayStats (hourly
+ * candles). An unknown change is omitted, never sent as "" (which the UI reads as 0).
+ */
+function normalizeMarket(raw, contract = {}, day = null) {
+  const { price_change_24h: _blankChange, underlier_price: _blankUnderlier, ...ref } = raw;
+  const last = positive(contract.last_price), index = positive(contract.index_price);
+  const mark = last ?? index;
+  const open24h = positive(day?.open);
+  const change = mark != null && open24h != null ? ((mark - open24h) / open24h) * 100 : null;
+  return { ...ref, symbol: raw.symbol, display_symbol: raw.symbol, name: raw.base_asset,
     dex: 'qfex', max_leverage: number(raw.default_max_leverage, 1),
     min_order_size: raw.min_quantity, min_quantity: raw.min_quantity,
-    min_notional_usd: number(raw.min_quantity) * number(contract.last_price),
+    min_notional_usd: number(raw.min_quantity) * (mark ?? 0),
     price: String(contract.last_price || contract.index_price || '0'),
     mark_price: String(contract.index_price || contract.last_price || '0'),
+    // Fields the shared terminal reads (picker PRICE column, header, 24H change).
+    ...(mark != null ? { mark, last_price: last ?? mark } : {}), ...(index != null ? { oracle: index, index_price: index } : {}),
+    ...(change != null && Number.isFinite(change) ? { price_change_24h: Number(change.toFixed(4)), price_24h_ago: open24h } : {}),
+    ...(day ? { high_24h: day.high, low_24h: day.low } : {}),
+    open_interest_usd: String(contract.open_interest_usd || '0'),
     volume_24h: String(contract.target_volume || '0'), funding_rate: String(contract.funding_rate || '0'),
     is_paused: raw.status !== 'ACTIVE', tick_size: raw.tick_size, lot_size: raw.lot_size };
 }
 
-/** Read mandatory trading precision and contract metadata. */
+// 24h open/high/low per symbol from 1HOUR candles (pilotbot qfexDayStats). There is no
+// bulk 24h endpoint, so a bounded background pass refreshes them every few minutes; the
+// market list never waits for it.
+const DAY_STATS_TTL_MS = 5 * 60000;
+const dayStats = new Map();
+let dayStatsRun = null, dayStatsTime = 0;
+async function readDayStats(symbol, nowMs) {
+  const raw = await request(`/candles/${encodeURIComponent(symbol)}`, null, { resolution: '1HOUR',
+    fromISO: new Date(nowMs - 25 * 3600000).toISOString(), toISO: new Date(nowMs).toISOString() });
+  const day = (raw.candles || []).map(c => ({ time: Date.parse(c.startedAt), open: positive(c.open), high: positive(c.high), low: positive(c.low) }))
+    .filter(c => Number.isFinite(c.time) && c.time >= nowMs - 24 * 3600000 && c.open != null).sort((a, b) => a.time - b.time);
+  if (!day.length) return null;
+  return { open: day[0].open, high: Math.max(...day.map(c => c.high ?? c.open)), low: Math.min(...day.map(c => c.low ?? c.open)), time: nowMs };
+}
+function refreshDayStats(symbols) {
+  if (dayStatsRun || Date.now() - dayStatsTime < DAY_STATS_TTL_MS || !symbols.length) return dayStatsRun;
+  const queue = [...symbols], nowMs = Date.now();
+  dayStatsRun = Promise.all(Array.from({ length: Math.min(6, queue.length) }, async () => {
+    while (queue.length) {
+      const symbol = queue.shift();
+      try { const stats = await readDayStats(symbol, nowMs); if (stats) dayStats.set(symbol, stats); else dayStats.delete(symbol); }
+      catch { /* keep the previous value; the next pass retries */ }
+    }
+  })).then(() => { dayStatsTime = Date.now(); if (marketCache) marketCache.time = 0; }).finally(() => { dayStatsRun = null; });
+  return dayStatsRun;
+}
+
+let marketLoad = null;
+/** Read mandatory trading precision and contract metadata (15 s cache, one shared upstream read). */
 async function getMarkets(options = {}) {
   if (!options.force && marketCache && Date.now() - marketCache.time < 15000) return marketCache.rows;
-  const [refs, contracts] = await Promise.all([request('/refdata'), request('/md/contracts')]);
-  if (!Array.isArray(refs.data) || !Array.isArray(contracts.data)) throw failure('Invalid QFEX market response', 502);
-  const prices = new Map(contracts.data.map(row => [row.ticker_id, row]));
-  const rows = refs.data.map(row => normalizeMarket(row, prices.get(row.symbol)));
-  marketCache = { rows, time: Date.now() };
-  return rows;
+  if (marketLoad) return marketLoad;
+  marketLoad = (async () => {
+    const [refs, contracts] = await Promise.all([request('/refdata'), request('/md/contracts')]);
+    if (!Array.isArray(refs.data) || !Array.isArray(contracts.data)) throw failure('Invalid QFEX market response', 502);
+    const prices = new Map(contracts.data.map(row => [row.ticker_id, row]));
+    const rows = refs.data.map(row => normalizeMarket(row, prices.get(row.symbol), dayStats.get(row.symbol)));
+    marketCache = { rows, time: Date.now() };
+    if (dayStatsEnabled) refreshDayStats(rows.filter(row => prices.has(row.symbol)).map(row => row.symbol));
+    return rows;
+  })().finally(() => { marketLoad = null; });
+  return marketLoad;
 }
 
 /** Return current normalized prices. */
 async function getPrices() {
-  return (await getMarkets({ force: true })).map(m => ({ symbol: m.symbol, price: m.price,
+  return (await getMarkets()).map(m => ({ symbol: m.symbol, price: m.price, mark: m.mark,
     mark_price: m.mark_price, oracle_price: m.mark_price, funding_rate: m.funding_rate,
-    volume_24h: m.volume_24h, change_24h: number(m.price_change_24h) }));
+    volume_24h: m.volume_24h, ...(m.price_change_24h != null ? { change_24h: m.price_change_24h } : {}) }));
 }
 
 function symbolOf(value) {
@@ -430,6 +481,15 @@ const REJECTIONS = {
   NO_SUCH_ORDER: 'QFEX has no open order with this ID.',
 };
 
+const STOP_TYPES = new Set(['TAKE_PROFIT', 'STOP_LOSS']);
+/** Stop-order frame in any of the shapes pilotbot accepts (stop_order_response / stop_order). */
+function stopFrame(message) {
+  for (const key of ['stop_order_response', 'stop_order']) {
+    if (message[key] && typeof message[key] === 'object' && !Array.isArray(message[key])) return message[key];
+  }
+  return null;
+}
+
 function responseFor(message, type, params) {
   // Docs: {user_trades, count}; production: {user_trades_response: [...] | {user_trades, count}}.
   if (type === 'get_user_trades') {
@@ -447,11 +507,24 @@ function responseFor(message, type, params) {
     if (message.ack && (!incoming || incoming.type === 'set_user_leverage')) return { success: true };
     return null;
   }
-  const order = message.order_response;
+  if (type === 'cancel_stop_order') {
+    // Reply shape UNCONFIRMED (pilotbot normalises stop frames to order responses): accept an
+    // ack naming this request, or a stop/order frame for this stop id in a terminal state.
+    const incoming = message.ack?.incoming_message;
+    if (message.ack_response === true || (message.ack && (!incoming || incoming.type === 'cancel_stop_order'))) return { success: true, stop_order_id: params.stop_order_id };
+    const stop = stopFrame(message) || message.order_response;
+    if (!stop || (stop.stop_order_id ?? stop.order_id) !== params.stop_order_id) return null;
+    const status = String(stop.status ?? '').toUpperCase();
+    if (REJECTION_STATUS.test(status)) throw Object.assign(failure(`${REJECTIONS[status] || 'QFEX rejected the stop cancellation.'} (${status})`, 400, 'QFEX_ORDER_REJECTED'), { definiteRejection: true, exchangeCode: status });
+    return !status || CANCEL_DONE.test(status) ? { success: true, stop_order_id: params.stop_order_id, status: status || 'CANCELLED' } : null;
+  }
+  const stop = STOP_TYPES.has(params.order_type) ? stopFrame(message) : null;
+  const order = stop ? { ...stop, order_id: stop.order_id ?? stop.stop_order_id, status: stop.status ?? 'ACK' } : message.order_response;
   if (!order || order.symbol !== params.symbol) return null;
   // Compare as strings: a decimal client id may be echoed as a JSON number (pilotbot does the same).
   if (params.client_order_id && String(order.client_order_id ?? '') !== String(params.client_order_id)) return null;
   const rawStatus = String(order.status ?? '').toUpperCase();
+  // Another order's rejection on the same symbol must not fail this cancel.
   if (type === 'cancel_order' && order.order_id !== params.order_id) return null;
   if (!rawStatus || REJECTION_STATUS.test(rawStatus)) {
     const status = /^[A-Z0-9_]{1,80}$/u.test(rawStatus) ? rawStatus : 'UNKNOWN_STATUS';
@@ -464,118 +537,267 @@ function responseFor(message, type, params) {
   return order;
 }
 
-/** Authenticate, subscribe, and execute one correlated command with no reconnect/retry. */
+/** Stable, secret-free scope id for one credential set and account. */
 function credentialScope(creds) {
   return crypto.createHash('sha256').update(`${creds.publicKey}\0${creds.secretKey}\0${creds.accountId || ''}`).digest('hex');
 }
 
-function tradeCommand(creds, type, params, options = {}) {
-  const key = credentialScope(creds);
-  const count = socketCounts.get(key) || 0;
-  if (count >= 4) return Promise.reject(failure('Too many concurrent QFEX requests', 429));
-  socketCounts.set(key, count + 1);
-  return runTradeCommand(creds, type, params, options).finally(() => {
-    const remaining = (socketCounts.get(key) || 1) - 1;
-    if (remaining) socketCounts.set(key, remaining); else socketCounts.delete(key);
-  });
+// ---------------------------------------------------------------- persistent trade session
+// One authenticated Trade-WebSocket per (credentials, account scope, builder code), reused
+// across requests like pilotbot's qfex-session: auth (with the builder code) and the
+// order_responses subscription happen once, so a warm order is a single frame round trip.
+// QFEX replies carry no request id, so every request registers a waiter matched by
+// client_order_id / order_id (orders) or reply type (queries); queries and leverage/stop
+// changes, whose replies cannot be told apart, are serialized. A write is never retried.
+const SESSION_IDLE_MS = 60000, SESSION_PING_MS = 25000, SESSION_PONG_MS = 10000, SESSION_MAX_INFLIGHT = 6;
+const sessions = new Map();
+const SERIAL_COMMANDS = new Set(['get_user_orders', 'get_user_leverage', 'get_available_leverage_levels', 'get_user_trades', 'set_user_leverage', 'cancel_stop_order']);
+
+function frameShape(message) { return message.type || Object.keys(message).filter(key => key !== '$schema').join('+').slice(0, 60); }
+
+function errorFrame(message) {
+  return message.err && typeof message.err === 'object' ? message.err
+    : (/^err(or)?$/iu.test(String(message.type || '')) || message.error_code ? message : null);
 }
 
-function runTradeCommand(creds, type, params, options = {}) {
-  return new Promise((resolve, reject) => {
-    let sent = false, settled = false, authenticated = false, opened = false;
-    const seen = []; // message shapes only (no payload), for timeout diagnostics
-    const ws = socketFactory(`${TRADE_ORIGIN}?api_key=${encodeURIComponent(creds.publicKey)}`);
-    const finish = (error, result) => {
-      if (settled) return;
-      settled = true; clearTimeout(timer); clearTimeout(probe);
-      if (error) error.outcomeUnknown = sent && !error.definiteRejection;
-      ws.close(); error ? reject(error) : resolve(result);
-    };
-    const sendCommand = () => {
-      if (sent) return;
-      sent = true;
-      ws.send(JSON.stringify({ type, params }), error => { if (error) finish(failure('QFEX command delivery uncertain', 502)); });
-    };
-    let probe = null, subscribeSent = false;
-    const subscribe = () => {
-      if (subscribeSent) return;
-      subscribeSent = true;
-      ws.send(JSON.stringify({ type: 'subscribe', params: { channels: ['order_responses'] } }));
-    };
-    const timer = setTimeout(() => {
-      console.warn('[qfex] trade socket timeout', { command: type, opened, authenticated, sent, seen: seen.slice(0, 8) });
-      finish(failure('QFEX timed out; refresh account before another action', 504, 'QFEX_TIMEOUT'));
-    }, timeoutMs);
-    // The primary account is selected by omitting account_id (QFEX auth docs; pilotbot qfexAuthMessage).
-    ws.on('open', () => { opened = true; ws.send(JSON.stringify({ type: 'auth', params: { hmac: sign(creds),
-      ...(creds.accountId && !creds.primary ? { account_id: creds.accountId } : {}),
-      ...(options.builderCode ? { builder_code: options.builderCode } : {}) } }));
-      // pilotbot: with no explicit auth reply, subscribing probes the session; the
-      // subscription ack proves authentication.
-      probe = setTimeout(() => { if (!authenticated && !settled) subscribe(); }, Math.min(2500, Math.floor(timeoutMs / 3)));
-    });
-    ws.on('unexpected-response', (_request, response) => {
-      const denied = response.statusCode === 401 || response.statusCode === 403;
-      console.warn('[qfex] trade socket handshake rejected', { command: type, status: response.statusCode });
-      finish(failure(denied ? 'QFEX rejected the API key for trading. Check that it has the Execute orders permission and the right account.'
-        : 'QFEX connection failed', denied ? 401 : 502, 'QFEX_TRADE_REJECTED'));
-    });
-    ws.on('error', error => { console.warn('[qfex] trade socket error', { command: type, message: String(error?.message || '').slice(0, 120) }); finish(failure('QFEX connection failed', 502)); });
-    ws.on('close', () => finish(failure('QFEX connection closed before confirmation', 502)));
-    ws.on('message', raw => {
-      try {
-        const message = JSON.parse(raw.toString());
-        seen.push(message.type || Object.keys(message).filter(key => key !== '$schema').join('+').slice(0, 60));
-        // Both documented forms: {err:{error_code,...}} and flat {type:'Err', error_code}.
-        const err = message.err && typeof message.err === 'object' ? message.err
-          : (/^err(or)?$/iu.test(String(message.type || '')) || message.error_code ? message : null);
+/** Request named by an err frame's incoming_message (type + correlation fields only). */
+function incomingOf(err, message) {
+  const incoming = err.incoming_message ?? message.incoming_message;
+  try {
+    const parsed = typeof incoming === 'string' ? JSON.parse(incoming) : incoming;
+    return parsed && typeof parsed === 'object'
+      ? { type: parsed.type || null, params: parsed.params && typeof parsed.params === 'object' ? parsed.params : null }
+      : { type: null, params: null };
+  } catch { return { type: typeof incoming === 'string' ? 'unparsed' : null, params: null }; }
+}
+
+function createTradeSession(key, creds, code) {
+  const session = { key, ws: null, ready: false, connecting: null, waiters: new Set(), serial: Promise.resolve(),
+    idleTimer: null, pingTimer: null, pongTimer: null, lastUse: Date.now(), seen: [] };
+
+  function dispose(reason) {
+    if (sessions.get(key) === session) sessions.delete(key);
+    clearTimeout(session.idleTimer); clearInterval(session.pingTimer); clearTimeout(session.pongTimer);
+    const ws = session.ws; session.ws = null; session.ready = false;
+    if (ws) { try { ws.close(); } catch { /* already closed */ } }
+    for (const waiter of [...session.waiters]) waiter.fail(failure(reason || 'QFEX connection closed before confirmation', 502));
+  }
+  session.dispose = dispose;
+
+  function touch() {
+    session.lastUse = Date.now();
+    clearTimeout(session.idleTimer);
+    session.idleTimer = setTimeout(() => {
+      if (session.waiters.size || Date.now() - session.lastUse < SESSION_IDLE_MS) return touch();
+      dispose('QFEX session closed while idle');
+    }, SESSION_IDLE_MS);
+    session.idleTimer.unref?.();
+  }
+
+  function startHeartbeat(ws) {
+    if (typeof ws.ping !== 'function') return;
+    session.pingTimer = setInterval(() => {
+      if (session.ws !== ws) return;
+      try { ws.ping(); } catch { return; }
+      clearTimeout(session.pongTimer);
+      session.pongTimer = setTimeout(() => {
+        console.warn('[qfex] trade socket heartbeat lost');
+        try { ws.terminate?.(); } catch { /* gone */ }
+        dispose('QFEX connection lost');
+      }, SESSION_PONG_MS);
+      session.pongTimer.unref?.();
+    }, SESSION_PING_MS);
+    session.pingTimer.unref?.();
+    ws.on('pong', () => clearTimeout(session.pongTimer));
+  }
+
+  function route(message) {
+    const err = errorFrame(message);
+    if (err) {
+      if (err.error_code === 'AlreadyAuthenticated') return;
+      const error = protocolFailure(err);
+      const incoming = incomingOf(err, message);
+      console.warn('[qfex] trade socket error frame', { error_code: error.exchangeCode, incoming_type: incoming.type,
+        incoming_fields: incoming.params ? Object.keys(incoming.params).sort() : null,
+        detail: String(err.message || err.error || err.detail || '').slice(0, 200) });
+      if (incoming.type === 'subscribe') return;
+      const sent = [...session.waiters].filter(w => w.sent);
+      const matches = incoming.type && incoming.type !== 'unparsed' ? sent.filter(w => w.type === incoming.type
+        && (!incoming.params?.client_order_id || String(incoming.params.client_order_id) === String(w.params.client_order_id ?? ''))
+        && (!incoming.params?.order_id || incoming.params.order_id === w.params.order_id)) : sent;
+      // Only an unambiguous error is attributed; otherwise the request times out as unknown.
+      if (matches.length === 1) matches[0].fail(error);
+      else console.warn('[qfex] unattributed trade socket error', { error_code: error.exchangeCode, candidates: matches.length });
+      return;
+    }
+    for (const waiter of [...session.waiters]) {
+      if (!waiter.sent) continue;
+      let result;
+      try { result = responseFor(message, waiter.type, waiter.params); } catch (error) { waiter.fail(error); continue; }
+      if (result != null) waiter.done(result);
+    }
+  }
+
+  function connect() {
+    return new Promise((resolve, reject) => {
+      let settled = false, authenticated = false, subscribeSent = false, opened = false, probe = null, grace = null;
+      const ws = socketFactory(`${TRADE_ORIGIN}?api_key=${encodeURIComponent(creds.publicKey)}`);
+      session.ws = ws;
+      const finish = error => {
+        if (settled) return;
+        settled = true; clearTimeout(timer); clearTimeout(probe); clearTimeout(grace);
+        if (error) { if (session.ws === ws) session.ws = null; try { ws.close(); } catch { /* closed */ } reject(error); return; }
+        session.ready = true; startHeartbeat(ws); touch(); resolve();
+      };
+      const subscribe = () => {
+        if (subscribeSent) return;
+        subscribeSent = true;
+        ws.send(JSON.stringify({ type: 'subscribe', params: { channels: ['order_responses', 'stop_orders'] } }));
+      };
+      const timer = setTimeout(() => {
+        console.warn('[qfex] trade socket auth timeout', { opened, authenticated, seen: session.seen.slice(-8) });
+        finish(failure('QFEX timed out; refresh account before another action', 504, 'QFEX_TIMEOUT'));
+      }, timeoutMs);
+      // The primary account is selected by omitting account_id (QFEX auth docs; pilotbot qfexAuthMessage).
+      // The builder code rides on the session's auth frame, so every order sent on it is attributed.
+      ws.on('open', () => {
+        opened = true;
+        ws.send(JSON.stringify({ type: 'auth', params: { hmac: sign(creds),
+          ...(creds.accountId && !creds.primary ? { account_id: creds.accountId } : {}),
+          ...(code ? { builder_code: code } : {}) } }));
+        // pilotbot: with no explicit auth reply, subscribing probes the session; its ack proves authentication.
+        probe = setTimeout(() => { if (!settled) subscribe(); }, Math.min(2500, Math.floor(timeoutMs / 3)));
+      });
+      ws.on('unexpected-response', (_request, response) => {
+        const denied = response.statusCode === 401 || response.statusCode === 403;
+        console.warn('[qfex] trade socket handshake rejected', { status: response.statusCode });
+        finish(failure(denied ? 'QFEX rejected the API key for trading. Check that it has the Execute orders permission and the right account.'
+          : 'QFEX connection failed', denied ? 401 : 502, 'QFEX_TRADE_REJECTED'));
+      });
+      ws.on('error', error => {
+        console.warn('[qfex] trade socket error', { message: String(error?.message || '').slice(0, 120) });
+        if (!settled) finish(failure('QFEX connection failed', 502));
+        else if (session.ws === ws) dispose('QFEX connection failed');
+      });
+      ws.on('close', () => {
+        if (!settled) finish(failure('QFEX connection closed before confirmation', 502));
+        else if (session.ws === ws) dispose('QFEX connection closed before confirmation');
+      });
+      ws.on('message', raw => {
+        let message;
+        try { message = JSON.parse(raw.toString()); } catch { return; }
+        session.seen.push(frameShape(message)); if (session.seen.length > 16) session.seen.shift();
+        if (settled) { if (session.ws === ws) route(message); return; }
+        const err = errorFrame(message);
         if (err) {
           if (err.error_code === 'AlreadyAuthenticated') return;
-          const error = protocolFailure(err);
-          // QFEX echoes the request an error answers in incoming_message; log only its
-          // type and field names (never values: the auth frame carries the HMAC).
-          const incoming = err.incoming_message ?? message.incoming_message;
-          let incomingType = null, incomingFields = null;
-          try {
-            const parsed = typeof incoming === 'string' ? JSON.parse(incoming) : incoming;
-            incomingType = parsed?.type || null;
-            incomingFields = parsed?.params && typeof parsed.params === 'object' ? Object.keys(parsed.params).sort() : null;
-          } catch { incomingType = typeof incoming === 'string' ? 'unparsed' : null; }
-          console.warn('[qfex] trade socket error frame', { command: type, error_code: error.exchangeCode, sent,
-            incoming_type: incomingType, incoming_fields: incomingFields,
-            detail: String(err.message || err.error || err.detail || '').slice(0, 200) });
-          // An error answering our subscribe probe does not reject the trading command.
-          if (incomingType === 'subscribe') return;
-          return finish(error);
+          if (incomingOf(err, message).type === 'subscribe') return;
+          console.warn('[qfex] trade socket auth error frame', { error_code: String(err.error_code || err.code || '').slice(0, 40) });
+          return finish(protocolFailure(err));
         }
-        // Docs show {type:'auth',result:'success'}; production replies {type:'authenticated'}.
+        // Docs show {type:'auth',result:'success'}; production replies {type:'authenticated'} / {authenticated:...}.
         if (!message.type && Object.hasOwn(message, 'authenticated')) {
           const value = message.authenticated;
-          console.warn('[qfex] trade socket auth reply', { value_type: typeof value, value: typeof value === 'object' ? Object.keys(value || {}).slice(0, 8) : value });
           if (value === false || value?.success === false || value?.error) return finish(failure('QFEX authentication rejected', 401));
           message.type = 'authenticated';
         }
         if (message.type === 'auth' || message.type === 'authenticated') {
           if (message.type === 'auth' && message.result !== 'success') return finish(failure('QFEX authentication rejected', 401));
           if (message.success === false || message.error) return finish(failure('QFEX authentication rejected', 401));
-          if (authenticated) return; authenticated = true;
-          if (type === 'add_order' || type === 'cancel_order') { if (!subscribeSent) subscribe(); }
-          else sendCommand();
+          if (authenticated) return;
+          authenticated = true; subscribe();
+          grace = setTimeout(() => finish(null), 1500); // the subscription ack is expected; never hang without one
         } else if (subscribeSent && (message.subscribed === 'order_responses'
           || (message.type === 'subscribed' && !Array.isArray(message.contents) && (message.channel == null || message.channel === 'order_responses')))) {
-          authenticated = true; sendCommand();
+          authenticated = true; finish(null);
         }
-        else if (sent) { const result = responseFor(message, type, params); if (result != null) finish(null, result); }
-      } catch (error) { finish(error); }
+      });
     });
+  }
+
+  session.ensureReady = () => {
+    if (session.ready && session.ws) return Promise.resolve();
+    if (!session.connecting) {
+      session.connecting = connect().finally(() => { session.connecting = null; });
+      // A refused session is dropped so the next request authenticates afresh.
+      session.connecting.catch(() => { if (!session.ready) dispose(); });
+    }
+    return session.connecting;
+  };
+
+  session.send = (type, params) => {
+    const run = async () => {
+      await session.ensureReady();
+      const ws = session.ws;
+      if (!ws || !session.ready) throw failure('QFEX connection failed', 502);
+      touch();
+      return new Promise((resolve, reject) => {
+        const waiter = { type, params, sent: false, settled: false };
+        const settle = (fn, value) => {
+          if (waiter.settled) return;
+          waiter.settled = true; clearTimeout(waiter.timer); session.waiters.delete(waiter); touch(); fn(value);
+        };
+        waiter.done = value => settle(resolve, value);
+        waiter.fail = error => { error.outcomeUnknown = waiter.sent && !error.definiteRejection; settle(reject, error); };
+        waiter.timer = setTimeout(() => {
+          console.warn('[qfex] trade socket timeout', { command: type, sent: waiter.sent, seen: session.seen.slice(-8) });
+          waiter.fail(failure('QFEX timed out; refresh account before another action', 504, 'QFEX_TIMEOUT'));
+        }, timeoutMs);
+        session.waiters.add(waiter);
+        try {
+          ws.send(JSON.stringify({ type, params }), error => { if (error) waiter.fail(failure('QFEX command delivery uncertain', 502)); });
+          waiter.sent = true;
+        } catch { waiter.fail(failure('QFEX connection failed', 502)); }
+      });
+    };
+    if (!SERIAL_COMMANDS.has(type)) return run();
+    const queued = session.serial.then(run, run);
+    session.serial = queued.catch(() => {});
+    return queued;
+  };
+  return session;
+}
+
+function tradeSession(creds, code) {
+  const key = `${credentialScope(creds)}|${creds.primary ? 'primary' : 'named'}|${code || ''}`;
+  let session = sessions.get(key);
+  if (!session) {
+    if (sessions.size >= 256) {
+      const idle = [...sessions.values()].find(item => !item.waiters.size);
+      if (!idle) throw failure('QFEX trading is busy. Try again shortly.', 429, 'QFEX_RATE_LIMITED');
+      idle.dispose('QFEX session evicted');
+    }
+    session = createTradeSession(key, creds, code);
+    sessions.set(key, session);
+  }
+  return session;
+}
+
+/** Send one correlated command on the warm per-credential session (never retried). */
+function tradeCommand(creds, type, params, options = {}) {
+  const key = credentialScope(creds);
+  const count = socketCounts.get(key) || 0;
+  if (count >= SESSION_MAX_INFLIGHT) return Promise.reject(failure('Too many concurrent QFEX requests', 429));
+  let session;
+  try {
+    // Reads use the configured builder code too, so reads and orders share one warm session.
+    session = tradeSession(creds, Object.hasOwn(options, 'builderCode') ? options.builderCode : builderCode());
+  } catch (error) { return Promise.reject(error); }
+  socketCounts.set(key, count + 1);
+  return session.send(type, params).finally(() => {
+    const remaining = (socketCounts.get(key) || 1) - 1;
+    if (remaining) socketCounts.set(key, remaining); else socketCounts.delete(key);
   });
 }
+
+function closeTradeSessions() { for (const session of [...sessions.values()]) session.dispose('QFEX session closed'); }
+
 
 /** Return account positions, balances, orders, and available leverage settings. */
 async function getAccountSnapshot(credsInput, options = {}) {
   const key = `${String(options.playerId || '')}:${credentialScope(credentials(credsInput))}`;
   const existing = snapshotCache.get(key);
-  if (existing && (existing.pending || Date.now() - existing.time < 2000)) return existing.promise;
+  if (existing && (existing.pending || (!options.force && Date.now() - existing.time < 4000))) return existing.promise;
   if (snapshotCache.size >= 128) {
     const evict = [...snapshotCache].find(([, entry]) => !entry.pending);
     if (!evict) throw failure('QFEX account reads are busy', 429);
@@ -589,29 +811,97 @@ async function getAccountSnapshot(credsInput, options = {}) {
   return entry.promise;
 }
 
+const LEVERAGE_TTL_MS = 60000, LEVELS_TTL_MS = 5 * 60000;
+const leverageCache = new Map(), levelsCache = new Map();
+function remember(map, key, rows) {
+  if (map.size >= 512) map.delete(map.keys().next().value);
+  map.set(key, { rows, time: Date.now() });
+  return rows;
+}
+/** Current per-symbol leverage; cached briefly and updated by our own leverage changes. */
+async function readLeverage(creds, options = {}) {
+  const key = credentialScope(creds), hit = leverageCache.get(key);
+  if (!options.force && hit && Date.now() - hit.time < LEVERAGE_TTL_MS) return hit.rows;
+  const rows = await tradeCommand(creds, 'get_user_leverage', { limit: 1000, offset: 0 });
+  return remember(leverageCache, key, Array.isArray(rows) ? rows : []);
+}
+async function readLeverageLevels(creds, options = {}) {
+  const key = credentialScope(creds), hit = levelsCache.get(key);
+  if (!options.force && hit && Date.now() - hit.time < LEVELS_TTL_MS) return hit.rows;
+  const rows = await tradeCommand(creds, 'get_available_leverage_levels', { limit: 1000, offset: 0 });
+  return remember(levelsCache, key, Array.isArray(rows) ? rows : []);
+}
+function rememberLeverage(creds, symbol, leverage) {
+  const key = credentialScope(creds), hit = leverageCache.get(key);
+  if (!hit) return;
+  hit.rows = [...hit.rows.filter(row => row.symbol !== symbol), { symbol, leverage }];
+}
+
+/**
+ * Stop orders from get_user_orders: QFEX includes them in orders[] (type TAKE_PROFIT /
+ * STOP_LOSS / STOP_MARKET) and/or a stop_orders[] list (StopOrder: stop_order_id, price,
+ * quantity, direction, stop_order_type). Both shapes are accepted.
+ */
+function splitOrders(orderResult = {}) {
+  const orders = [], stops = [];
+  const stopKind = row => {
+    const value = String(row.stop_order_type ?? row.type ?? row.order_type ?? '').toUpperCase().replace(/^STOP_ORDER_TYPE_/u, '');
+    return value === 'TAKE_PROFIT' ? 'TAKE_PROFIT' : value === 'STOP_LOSS' || value === 'STOP_MARKET' ? 'STOP_LOSS' : null;
+  };
+  const toStop = row => {
+    const kind = stopKind(row);
+    const id = row.stop_order_id ?? row.order_id;
+    const side = String(row.side ?? row.direction ?? '').toUpperCase();
+    if (!kind || !id || !row.symbol) return null;
+    return { stop_order_id: String(id), symbol: row.symbol, kind, side: side === 'BUY' || side === 'BID' || side === 'LONG' ? 'BUY' : 'SELL',
+      price: number(row.price ?? row.trigger_price), quantity: number(row.quantity ?? row.quantity_remaining ?? row.remaining_quantity),
+      client_order_id: row.client_order_id ?? null, _raw: row };
+  };
+  for (const row of orderResult.orders || []) { const stop = stopKind(row) ? toStop(row) : null; if (stop) stops.push(stop); else orders.push(row); }
+  for (const row of orderResult.stop_orders || []) { const stop = toStop(row); if (stop && !stops.some(s => s.stop_order_id === stop.stop_order_id)) stops.push(stop); }
+  return { orders, stops };
+}
+
+/** Terminal TP/SL fields for one position from its closing-side stops. */
+function positionStops(stops) {
+  const tp = stops.find(stop => stop.kind === 'TAKE_PROFIT'), sl = stops.find(stop => stop.kind === 'STOP_LOSS');
+  return { take_profit: tp ? String(tp.price) : null, stop_loss: sl ? String(sl.price) : null,
+    tp_price: tp ? tp.price : null, sl_price: sl ? sl.price : null,
+    tp_order_id: tp?.stop_order_id || null, sl_order_id: sl?.stop_order_id || null };
+}
+
 async function loadAccountSnapshot(credsInput, options) {
   const creds = await resolveAccount(credsInput);
   if (options.playerId) claimAccount(options.playerId, creds.accountId);
   const [raw, orderResult, leverage, availableLeverage, markets] = await Promise.all([
     readPositions(creds), tradeCommand(creds, 'get_user_orders', { limit: 1000, offset: 0 }),
-    tradeCommand(creds, 'get_user_leverage', { limit: 1000, offset: 0 }),
-    tradeCommand(creds, 'get_available_leverage_levels', { limit: 1000, offset: 0 }), getMarkets()]);
+    readLeverage(creds), readLeverageLevels(creds, { force: true }), getMarkets()]);
+  const { orders: plainOrders, stops } = splitOrders(orderResult);
+  const stopsFor = (symbol, side) => stops.filter(stop => stop.symbol === symbol && stop.side === side);
   const balance = raw.balance || {};
   const positions = (raw.positions || []).filter(p => number(p.position) !== 0).map(p => ({
     symbol: p.symbol, position_id: p.symbol, side: number(p.position) > 0 ? 'bid' : 'ask',
     amount: String(Math.abs(number(p.position))), entry_price: String(p.average_price),
     leverage: p.leverage, margin: Math.abs(number(p.position) * number(p.average_price)) / Math.max(1, number(p.leverage, 1)), unrealized_pnl: p.unrealised_pnl,
-    realised_pnl: p.realised_pnl, _raw: p }));
+    realised_pnl: p.realised_pnl,
+    // Standalone stops close the position, so they sit on the opposite side.
+    ...positionStops(stopsFor(p.symbol, number(p.position) > 0 ? 'SELL' : 'BUY')), _raw: p }));
   const equity = number(balance.available_balance) + number(balance.order_margin) + number(balance.position_margin);
   return { account: { account_id: creds.accountId, balance: number(balance.available_balance),
     usdc: number(balance.available_balance), available_to_spend: number(balance.available_balance),
     equity, account_equity: equity, total_margin_used: number(balance.position_margin), currency: 'USD',
     ...(raw.empty_account ? { empty_account: true } : {}) },
-    positions, orders: (orderResult.orders || []).map(o => ({ ...o, id: o.order_id,
-      side: o.side === 'BUY' ? 'bid' : 'ask', amount: String(o.quantity_remaining), order_type: o.type.toLowerCase() })),
+    positions, orders: [...plainOrders.map(o => ({ ...o, id: o.order_id,
+      side: o.side === 'BUY' ? 'bid' : 'ask', amount: String(o.quantity_remaining ?? o.quantity), order_type: String(o.type || '').toLowerCase() })),
+    ...stops.map(stop => ({ ...stop._raw, id: stop.stop_order_id, order_id: stop.stop_order_id, stop_order_id: stop.stop_order_id,
+      symbol: stop.symbol, side: stop.side === 'BUY' ? 'bid' : 'ask', amount: String(stop.quantity), price: String(stop.price),
+      trigger_price: String(stop.price), stop_price: String(stop.price), reduce_only: true, is_stop: true,
+      order_type: stop.kind === 'TAKE_PROFIT' ? 'take_profit' : 'stop_loss' }))],
+    stop_orders: stops.map(({ _raw, ...stop }) => stop),
     twaps: orderResult.twaps || [], leverage, available_leverage: availableLeverage,
     orders_truncated: (orderResult.orders || []).length >= 1000, markets,
-    prices: markets.map(m => ({ symbol: m.symbol, price: m.price, mark_price: m.mark_price })) };
+    prices: markets.map(m => ({ symbol: m.symbol, price: m.price, mark: m.mark, mark_price: m.mark_price,
+      ...(m.price_change_24h != null ? { price_change_24h: m.price_change_24h } : {}) })) };
 }
 
 function exactNumber(value, step, minimum, maximum, label) {
@@ -638,7 +928,8 @@ function qfexClientOrderId(actionId) {
 
 async function orderParams(input, actionId) {
   const symbol = symbolOf(input.symbol);
-  const market = (await getMarkets({ force: true })).find(m => m.symbol === symbol);
+  // 15 s cached refdata: precision rarely changes and QFEX validates every order anyway.
+  const market = (await getMarkets()).find(m => m.symbol === symbol);
   if (!market || market.is_paused) throw failure('QFEX market is unavailable', 409);
   const side = String(input.side || '').toUpperCase();
   if (!['BID', 'ASK', 'BUY', 'SELL', 'LONG', 'SHORT'].includes(side)) throw failure('Invalid order side');
@@ -756,9 +1047,9 @@ async function placeOrder(credsInput, input = {}, options = {}) {
   const creds = await resolveAccount(credsInput);
   const params = await orderParams(input, input.actionId || input.idempotencyKey);
   if (input.leverage != null) {
-    const current = await tradeCommand(creds, 'get_user_leverage', { limit: 1000, offset: 0 });
-    const setting = current.find(row => row.symbol === params.symbol);
-    if (!setting || number(setting.leverage) !== Number(input.leverage)) {
+    const matches = rows => rows.some(row => row.symbol === params.symbol && number(row.leverage) === Number(input.leverage));
+    // Cached read first; a mismatch is re-checked live before refusing.
+    if (!matches(await readLeverage(creds)) && !matches(await readLeverage(creds, { force: true }))) {
       throw failure('Set the requested QFEX leverage before submitting the order', 409, 'QFEX_LEVERAGE_MISMATCH');
     }
   }
@@ -792,11 +1083,89 @@ async function setLeverage(credsInput, input = {}, options = {}) {
   const creds = await resolveAccount(credsInput);
   const symbol = symbolOf(input.symbol);
   const leverage = Number(input.leverage);
-  const levels = await tradeCommand(creds, 'get_available_leverage_levels', { limit: 1000, offset: 0 });
+  const levels = await readLeverageLevels(creds);
   if (!Number.isFinite(leverage) || !levels.some(l => l.symbol === symbol && Number(l.leverage) === leverage)) {
     throw failure('The requested QFEX leverage is not available');
   }
-  return executeAction(creds, input, options, 'set_user_leverage', { symbol, leverage });
+  // Already at this leverage (as last read or set): nothing to send.
+  const current = leverageCache.get(credentialScope(creds));
+  if (current && Date.now() - current.time < LEVERAGE_TTL_MS && current.rows.some(row => row.symbol === symbol && Number(row.leverage) === leverage)) {
+    return { success: true, unchanged: true, symbol, leverage, account_id: creds.accountId, action_id: input.actionId || input.idempotencyKey || null };
+  }
+  const result = await executeAction(creds, input, options, 'set_user_leverage', { symbol, leverage });
+  rememberLeverage(creds, symbol, leverage);
+  return result;
+}
+
+/**
+ * Set, replace or clear take-profit / stop-loss on an open position. Each leg is a
+ * standalone reduce-only QFEX stop (add_order TAKE_PROFIT/STOP_LOSS, price = trigger,
+ * closing side, position quantity, GTC, decimal client_order_id); replacing or clearing
+ * cancels the existing stop first with cancel_stop_order {stop_order_id}. Every exchange
+ * write goes through its own durable intent (derived action ids), like other actions.
+ */
+async function setTpsl(credsInput, input = {}, options = {}) {
+  const creds = await resolveAccount(credsInput);
+  const actionId = String(input.actionId || input.idempotencyKey || '');
+  if (!UUID.test(actionId)) throw failure('A stable actionId UUID is required');
+  const symbol = symbolOf(input.symbol || input.positionId);
+  const [raw, orderResult, markets] = await Promise.all([readPositions(creds),
+    tradeCommand(creds, 'get_user_orders', { symbol, limit: 1000, offset: 0 }), getMarkets()]);
+  const position = (raw.positions || []).find(p => p.symbol === symbol && number(p.position) !== 0);
+  if (!position) throw failure('No QFEX position exists for this symbol', 409, 'QFEX_NO_POSITION');
+  const market = markets.find(m => m.symbol === symbol);
+  if (!market) throw failure('QFEX market is unavailable', 409);
+  const long = number(position.position) > 0, closeSide = long ? 'SELL' : 'BUY';
+  const quantity = exactNumber(String(Math.abs(number(position.position))), market.lot_size, null, null, 'Position size');
+  const entry = number(position.average_price);
+  const mark = number(market.mark) || number(market.price) || entry;
+  const existing = splitOrders(orderResult).stops.filter(stop => stop.symbol === symbol && stop.side === closeSide);
+  const wanted = {};
+  for (const [kind, keys] of [['TAKE_PROFIT', ['takeProfit', 'take_profit', 'tp']], ['STOP_LOSS', ['stopLoss', 'stop_loss', 'sl']]]) {
+    const key = keys.find(name => Object.hasOwn(input, name));
+    if (key === undefined) continue; // leg not mentioned: leave it untouched
+    const value = input[key];
+    if (value == null || value === '' || Number(value) === 0) { wanted[kind] = null; continue; }
+    const label = kind === 'TAKE_PROFIT' ? 'Take profit' : 'Stop loss';
+    const price = exactNumber(value, market.tick_size, null, null, label);
+    const reference = entry > 0 ? entry : mark;
+    if (kind === 'TAKE_PROFIT' && (long ? price <= reference : price >= reference)) {
+      throw failure(`Take profit must be ${long ? 'above' : 'below'} the entry price (${reference}) for a ${long ? 'long' : 'short'} position.`, 400, 'QFEX_TPSL_INVALID');
+    }
+    if (kind === 'STOP_LOSS' && (long ? price >= reference : price <= reference)) {
+      throw failure(`Stop loss must be ${long ? 'below' : 'above'} the entry price (${reference}) for a ${long ? 'long' : 'short'} position.`, 400, 'QFEX_TPSL_INVALID');
+    }
+    if (kind === 'STOP_LOSS' && mark > 0 && (long ? price >= mark : price <= mark)) {
+      throw failure(`Stop loss must be ${long ? 'below' : 'above'} the current price (${mark}).`, 400, 'QFEX_TPSL_INVALID');
+    }
+    wanted[kind] = price;
+  }
+  if (!Object.keys(wanted).length) throw failure('Enter a take-profit or stop-loss price', 400, 'QFEX_TPSL_INVALID');
+  const results = {};
+  let step = 0;
+  for (const [kind, price] of Object.entries(wanted)) {
+    const current = existing.filter(stop => stop.kind === kind);
+    if (price != null && current.length === 1 && current[0].price === price && current[0].quantity === quantity) {
+      results[kind] = { unchanged: true, stop_order_id: current[0].stop_order_id }; continue;
+    }
+    for (const stop of current) {
+      await executeAction(creds, { ...input, actionId: deriveActionId(actionId, ++step) }, options, 'cancel_stop_order', { stop_order_id: stop.stop_order_id });
+    }
+    if (price == null) { results[kind] = { cleared: true }; continue; }
+    const legId = deriveActionId(actionId, ++step);
+    results[kind] = await executeAction(creds, { ...input, actionId: legId }, options, 'add_order', {
+      symbol, side: closeSide, order_type: kind, order_time_in_force: 'GTC', quantity, price,
+      reduce_only: true, client_order_id: qfexClientOrderId(legId) });
+  }
+  snapshotCache.clear();
+  return { success: true, symbol, account_id: creds.accountId, action_id: actionId,
+    take_profit: results.TAKE_PROFIT || null, stop_loss: results.STOP_LOSS || null };
+}
+
+/** Deterministic per-leg action id, so a repeated TP/SL request replays instead of resending. */
+function deriveActionId(actionId, step) {
+  const hex = crypto.createHash('sha256').update(`qfex-tpsl\0${actionId}\0${step}`).digest('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
 /** Read verified fills; each exchange fill ID remains distinct. */
@@ -901,9 +1270,11 @@ function setTestDependencies(options = {}) {
   fetchImpl = options.fetch || ((...args) => fetch(...args));
   socketFactory = options.socketFactory || (url => new WebSocket(url, { maxPayload: 4 * 1024 * 1024 }));
   databaseOverride = options.database || null;
-  timeoutMs = options.timeoutMs || 12000; marketCache = null; snapshotCache.clear(); socketCounts.clear(); accountCache.clear();
+  timeoutMs = options.timeoutMs || 12000; marketCache = null; marketLoad = null; snapshotCache.clear(); socketCounts.clear(); accountCache.clear();
+  closeTradeSessions(); leverageCache.clear(); levelsCache.clear();
+  dayStats.clear(); dayStatsTime = 0; dayStatsRun = null; dayStatsEnabled = options.dayStats === true;
 }
 
 module.exports = { getWalletMessage, registerWalletKey, credentials, sign, configStatus, request, normalizeMarket, getMarkets, getPrices,
   getOrderbook, getCandles, resolveAccount, getAccountSnapshot, getTradeHistory, placeOrder,
-  cancelOrder, closePosition, setLeverage, importTradesForPlayer, setTestDependencies, exactNumber, ensureSchema, getActionStatus };
+  cancelOrder, closePosition, setLeverage, setTpsl, importTradesForPlayer, closeTradeSessions, refreshDayStats, setTestDependencies, exactNumber, ensureSchema, getActionStatus };

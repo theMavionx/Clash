@@ -3072,7 +3072,7 @@ const PositionsList = memo(function PositionsList({
                 features are deliberately stripped from the simplified UX. */}
             <div style={{display: 'flex', gap: 6, marginTop: 4}}>
               <button style={S.btnRed} aria-haspopup="dialog" onClick={() => { setLocalAlert(''); clearError?.(); setClosePct(100); setExpandedPos(expanded === 'close' ? null : `${posKey}:close`); }}>{isDust ? 'Clean up' : 'Close'}</button>
-              {!isDust && !isBasic && dex !== 'qfex' && (
+              {!isDust && !isBasic && (
                 <button style={S.btnBlue} onClick={() => {
                   setLocalAlert(''); clearError?.();
                   if (expanded === 'tpsl') {
@@ -3130,7 +3130,7 @@ const PositionsList = memo(function PositionsList({
 
             {/* TP/SL panel — same isBasic gate so the inputs never reach
                 the DOM in Basic mode (and never get accidentally fired). */}
-            {!isDust && !isBasic && dex !== 'qfex' && expanded === 'tpsl' && (
+            {!isDust && !isBasic && expanded === 'tpsl' && (
               <PositionActionDialog title={`${pos.symbol} · Take profit / Stop loss`} onClose={() => setExpandedPos(null)} feedback={localAlert || error}>
               <TpslEditor
                 mode={tpslInputMode}
@@ -3397,7 +3397,7 @@ const BottomPanel = memo(function BottomPanel({
                             setExpandedPositionAction(expanded === 'close' ? null : `${rowKey}:close`);
                           }}
                         >{pendingClose ? <ClosingButtonLabel text="" /> : 'Close'}</button>
-                        {!isDust && dex !== 'qfex' && (
+                        {!isDust && (
                           <button
                             type="button"
                             style={S.tblRiskBtn}
@@ -3470,7 +3470,7 @@ const BottomPanel = memo(function BottomPanel({
                           </button>
                     </PositionActionDialog>
                   )}
-                  {!isDust && dex !== 'qfex' && expanded === 'tpsl' && (
+                  {!isDust && expanded === 'tpsl' && (
                     <PositionActionDialog title={`${p.symbol} · Take profit / Stop loss`} onClose={() => setExpandedPositionAction(null)} feedback={localAlert || error}>
                           <TpslEditor
                             mode={tpslInputMode}
@@ -10285,7 +10285,7 @@ function FuturesPanel() {
                   consistency. */}
               <div style={{display: 'flex', gap: 6, marginTop: 4}}>
                 <button style={S.btnRed} aria-haspopup="dialog" onClick={() => { setLocalAlert(''); clearError?.(); setClosePct(100); setExpandedPos(expanded === 'close' ? null : `${posKey}:close`); }}>{isDust ? 'Clean up' : 'Close'}</button>
-                {!isDust && !isBasic && dex !== 'qfex' && (
+                {!isDust && !isBasic && (
                   <button style={S.btnBlue} onClick={() => {
                     setLocalAlert(''); clearError?.();
                     if (expanded === 'tpsl') {
@@ -10355,7 +10355,7 @@ function FuturesPanel() {
               )}
 
               {/* TP/SL panel — gated on Basic mode (button is hidden too). */}
-              {!isDust && !isBasic && dex !== 'qfex' && expanded === 'tpsl' && (
+              {!isDust && !isBasic && expanded === 'tpsl' && (
                 <PositionActionDialog title={`${pos.symbol} · Take profit / Stop loss`} onClose={() => setExpandedPos(null)} feedback={localAlert || error}>
                 <TpslEditor
                   mode={tpslInputMode}

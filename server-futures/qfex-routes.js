@@ -49,6 +49,8 @@ function attachQfexRoutes(router, auth, adapter = require('./qfex')) {
   route('delete', 'orders/:orderId', (req, creds) => adapter.cancelOrder(creds, { ...input(req), orderId: req.params.orderId }, context(req)));
   route('post', 'positions/close', (req, creds) => adapter.closePosition(creds, input(req), context(req)));
   route('post', 'positions/:positionId/close', (req, creds) => adapter.closePosition(creds, { ...input(req), positionId: req.params.positionId }, context(req)));
+  route('post', 'tpsl', (req, creds) => adapter.setTpsl(creds, input(req), context(req)));
+  route('post', 'positions/:positionId/tpsl', (req, creds) => adapter.setTpsl(creds, { ...input(req), symbol: req.body?.symbol || req.params.positionId }, context(req)));
   route('post', 'leverage', (req, creds) => adapter.setLeverage(creds, input(req), context(req)));
   route('post', 'import-trades', (req, creds) => adapter.importTradesForPlayer(req.playerId, creds, { limit: req.body?.limit }));
 }

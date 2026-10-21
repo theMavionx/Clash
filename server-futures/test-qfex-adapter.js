@@ -46,6 +46,7 @@ function fixture(overrides = {}) {
             && (message.params.end_ts == null || t.timestamp <= message.params.end_ts));
           return emit({ user_trades: executions.slice(message.params.offset, message.params.offset + message.params.limit), count: executions.length });
         }
+        if (message.type === 'cancel_stop_order') return emit({ ack_response: true });
         if (message.type === 'set_user_leverage') return state.noResponse ? undefined : emit(state.genericAck ? { ack: { incoming_message: message } } : { ack_response: true });
         if (state.noResponse) return;
         if (state.errorCode) return emit({ err: { error_code: state.errorCode, incoming_message: message } });
@@ -71,6 +72,7 @@ function fixture(overrides = {}) {
       '/user/positions': { balance: { available_balance: 80, position_margin: 20, order_margin: 0 },
         positions: [{ symbol: 'AAPL-USD', position: state.position, average_price: 200, leverage: 10 }] },
       '/user/trade': { data: state.trades, count: state.trades.length } }[parsed.pathname];
+    if (parsed.pathname.startsWith('/candles/')) return { ok: true, status: 200, json: async () => ({ candles: state.candles || [] }) };
     if (parsed.pathname === '/user/historic-orders') return { ok: true, status: 200,
       json: async () => ({ data: (state.historicOrders || []).slice(Number(parsed.searchParams.get('offset') || 0),
         Number(parsed.searchParams.get('offset') || 0) + Number(parsed.searchParams.get('limit') || 100)), count: (state.historicOrders || []).length }) };
@@ -174,7 +176,8 @@ test('internal server errors remain unknown; authentication failure sends no tra
   const env = fixture({ errorCode: 'ServerError' });
   await assert.rejects(qfex.placeOrder(CREDS, input(), { playerId: 'alice' }), /ServerError/);
   assert.equal(env.db.prepare('SELECT status FROM qfex_action_intents').get().status, 'unknown');
-  env.state.authFail = true;
+  // Sessions persist; a fresh connection whose authentication fails sends nothing.
+  qfex.closeTradeSessions(); env.state.authFail = true;
   await assert.rejects(qfex.placeOrder(CREDS, input(), { playerId: 'alice' }), /authentication/);
   assert.equal(env.commands.filter(c => c.type === 'add_order').length, 1);
 });
@@ -646,4 +649,88 @@ test('set_user_leverage accepts the generic {ack:{incoming_message}} acknowledge
   const result = await qfex.setLeverage(CREDS, { symbol: 'AAPL-USD', leverage: 10, actionId: crypto.randomUUID() }, { playerId: 'alice' });
   assert.equal(result.success, true);
   assert.equal(env.commands.filter(c => c.type === 'set_user_leverage').length, 1);
+});
+
+test('one warm authenticated session serves reads, leverage and repeated orders', async () => {
+  const env = fixture();
+  await qfex.getAccountSnapshot(CREDS, { playerId: 'alice' });
+  await qfex.placeOrder(CREDS, input({ leverage: 10 }), { playerId: 'alice' });
+  await qfex.placeOrder(CREDS, input(), { playerId: 'alice' });
+  assert.equal(env.auths.length, 1, 'auth handshake happens once per credential session');
+  assert.equal(env.commands.filter(c => c.type === 'subscribe').length, 1);
+  assert.equal(env.commands.filter(c => c.type === 'add_order').length, 2);
+  assert.equal(env.commands.filter(c => c.type === 'get_user_leverage').length, 1, 'order leverage check uses the cached read');
+  assert.equal(env.requests.filter(r => r.parsed.pathname === '/refdata').length, 1, 'orders reuse cached market refdata');
+});
+
+test('setting the leverage the account already has sends nothing', async () => {
+  const env = fixture();
+  await qfex.getAccountSnapshot(CREDS, { playerId: 'alice' });
+  const result = await qfex.setLeverage(CREDS, { actionId: crypto.randomUUID(), symbol: 'AAPL-USD', leverage: 10 }, { playerId: 'alice' });
+  assert.equal(result.unchanged, true);
+  assert.equal(env.commands.filter(c => c.type === 'set_user_leverage').length, 0);
+});
+
+test('markets expose mark price and a candle-derived 24h change; blank refdata change is dropped', async () => {
+  const env = fixture();
+  let [row] = await qfex.getMarkets();
+  assert.equal(row.mark, 200); assert.equal(row.oracle, 201);
+  assert.equal(Object.hasOwn(row, 'price_change_24h'), false, 'unknown change is omitted, never ""');
+  const now = Date.now();
+  env.state.candles = [{ startedAt: new Date(now - 3600000).toISOString(), open: '190', high: '205', low: '188', close: '200' },
+    { startedAt: new Date(now - 23 * 3600000).toISOString(), open: '160', high: '170', low: '150', close: '165' },
+    { startedAt: new Date(now - 30 * 3600000).toISOString(), open: '1', high: '1', low: '1', close: '1' }];
+  await qfex.refreshDayStats(['AAPL-USD']);
+  [row] = await qfex.getMarkets();
+  assert.equal(row.price_24h_ago, 160);
+  assert.equal(row.price_change_24h, 25);
+  assert.equal(row.high_24h, 205); assert.equal(row.low_24h, 150);
+  assert.equal((await qfex.getPrices())[0].change_24h, 25);
+});
+
+test('TP/SL on an open long: closing-side reduce-only stops with trigger price, direction checked', async () => {
+  const env = fixture({ position: 2 });
+  await assert.rejects(qfex.setTpsl(CREDS, { actionId: crypto.randomUUID(), symbol: 'AAPL-USD', takeProfit: '150' }, { playerId: 'alice' }), /above the entry/);
+  await assert.rejects(qfex.setTpsl(CREDS, { actionId: crypto.randomUUID(), symbol: 'AAPL-USD', stopLoss: '250' }, { playerId: 'alice' }), /below the entry/);
+  assert.equal(env.commands.filter(c => c.type === 'add_order').length, 0);
+  const actionId = crypto.randomUUID();
+  const result = await qfex.setTpsl(CREDS, { actionId, symbol: 'AAPL-USD', takeProfit: '250', stopLoss: '180' }, { playerId: 'alice' });
+  assert.equal(result.success, true);
+  const stops = env.commands.filter(c => c.type === 'add_order').map(c => c.params);
+  assert.deepEqual(stops.map(p => p.order_type), ['TAKE_PROFIT', 'STOP_LOSS']);
+  for (const p of stops) {
+    assert.equal(p.side, 'SELL'); assert.equal(p.quantity, 2); assert.equal(p.reduce_only, true);
+    assert.equal(p.order_time_in_force, 'GTC'); assert.match(p.client_order_id, /^\d{1,20}$/);
+  }
+  assert.deepEqual(stops.map(p => p.price), [250, 180]);
+  // Repeating the same request replays the recorded intents instead of resending.
+  await qfex.setTpsl(CREDS, { actionId, symbol: 'AAPL-USD', takeProfit: '250', stopLoss: '180' }, { playerId: 'alice' });
+  assert.equal(env.commands.filter(c => c.type === 'add_order').length, 2);
+});
+
+test('replacing and clearing TP/SL cancels the existing stop; snapshot shows stops on the position and in orders', async () => {
+  const STOP = '44444444-4444-4444-8444-444444444444';
+  const env = fixture({ position: 2, openOrders: [{ order_id: STOP, symbol: 'AAPL-USD', type: 'TAKE_PROFIT', side: 'SELL', price: 240, quantity: 2 }] });
+  const snapshot = await qfex.getAccountSnapshot(CREDS, { playerId: 'alice' });
+  assert.equal(snapshot.positions[0].take_profit, '240');
+  assert.equal(snapshot.positions[0].tp_order_id, STOP);
+  assert.equal(snapshot.positions[0].stop_loss, null);
+  assert.ok(snapshot.orders.some(o => o.is_stop && o.order_type === 'take_profit' && o.trigger_price === '240'));
+  await qfex.setTpsl(CREDS, { actionId: crypto.randomUUID(), symbol: 'AAPL-USD', takeProfit: '260' }, { playerId: 'alice' });
+  assert.deepEqual(env.commands.filter(c => ['cancel_stop_order', 'add_order'].includes(c.type)).map(c => c.type), ['cancel_stop_order', 'add_order']);
+  assert.equal(env.commands.find(c => c.type === 'cancel_stop_order').params.stop_order_id, STOP);
+  await qfex.setTpsl(CREDS, { actionId: crypto.randomUUID(), symbol: 'AAPL-USD', takeProfit: null }, { playerId: 'alice' });
+  assert.equal(env.commands.filter(c => c.type === 'cancel_stop_order').length, 2);
+  assert.equal(env.commands.filter(c => c.type === 'add_order').length, 1, 'clearing never adds an order');
+});
+
+test('fills of our own builder-attributed stop import like a reduce-only close', async () => {
+  const env = fixture({ position: 2 }); process.env.QFEX_BUILDER_CODE = BUILDER;
+  await qfex.setTpsl(CREDS, { actionId: crypto.randomUUID(), symbol: 'AAPL-USD', takeProfit: '250' }, { playerId: 'alice' });
+  env.state.trades = [{ id: 'tp-fill', order_id: ORDER, symbol: 'AAPL-USD', side: 'SELL', quantity: 2, price: 250,
+    order_timestamp: 1760545414, order_type: 'MARKET', realised_pnl_change: 100, fee: 0.1 }];
+  const ledger = recordingLedger();
+  const result = await qfex.importTradesForPlayer('alice', CREDS, { ledger });
+  assert.equal(result.imported, 1);
+  assert.equal(ledger.calls[0].trade.side, 'close_long');
 });
