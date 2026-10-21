@@ -6,7 +6,12 @@ const BigNumber = require('bignumber.js');
 const API_ORIGIN = 'https://api.qfex.com';
 const TRADE_ORIGIN = 'wss://trade.qfex.com';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
-const ACCEPTED = new Set(['ACK', 'FILLED', 'IOC_PARTIALLY_FILLED', 'IOC_CANCELLED', 'CANCELLED', 'CANCELLED_STP']);
+// Same rule as pilotbot (qfex-mapping isRejectionStatus): only these status families are
+// rejections. Any other status (ACK, FILLED, PARTIALLY_FILLED, MODIFIED, IOC_*, ...) means
+// QFEX took the order; treating an unlisted status as a rejection would mark a live order
+// rejected and drop its fills from accounting.
+const REJECTION_STATUS = /^(?:FAILED_|INVALID_|REJECTED|BAD_|QUANTITY_LESS|USER_IN_LIQUIDATION|RATE_LIMITED|CANNOT_MODIFY|NO_SUCH_ORDER)/u;
+const CANCEL_DONE = /^(?:CANCELLED|CANCELED|IOC_CANCELLED|IOC_PARTIALLY_FILLED|FILLED|TERMINATED|CANCELLED_[A-Z_]+)$/u;
 let fetchImpl = (...args) => fetch(...args);
 let socketFactory = url => new WebSocket(url, { maxPayload: 4 * 1024 * 1024 });
 let databaseOverride = null;
@@ -435,17 +440,27 @@ function responseFor(message, type, params) {
   if (type === 'get_user_orders') return message.all_orders_response;
   if (type === 'get_user_leverage') return message.user_leverage_response;
   if (type === 'get_available_leverage_levels') return message.available_leverage_levels_response;
-  if (type === 'set_user_leverage') return message.ack_response === true ? { success: true } : null;
+  if (type === 'set_user_leverage') {
+    // Docs: {ack_response:true}; trade-yaml generic form: {ack:{incoming_message}} (pilotbot handles both).
+    if (message.ack_response === true) return { success: true };
+    const incoming = message.ack?.incoming_message;
+    if (message.ack && (!incoming || incoming.type === 'set_user_leverage')) return { success: true };
+    return null;
+  }
   const order = message.order_response;
   if (!order || order.symbol !== params.symbol) return null;
-  if (params.client_order_id && order.client_order_id !== params.client_order_id) return null;
-  if (type === 'cancel_order' && (order.order_id !== params.order_id || order.status === 'ACK')) return null;
-  if (!ACCEPTED.has(order.status)) {
-    const status = /^[A-Z0-9_]{1,80}$/u.test(String(order.status)) ? order.status : 'UNKNOWN_STATUS';
+  // Compare as strings: a decimal client id may be echoed as a JSON number (pilotbot does the same).
+  if (params.client_order_id && String(order.client_order_id ?? '') !== String(params.client_order_id)) return null;
+  const rawStatus = String(order.status ?? '').toUpperCase();
+  if (type === 'cancel_order' && order.order_id !== params.order_id) return null;
+  if (!rawStatus || REJECTION_STATUS.test(rawStatus)) {
+    const status = /^[A-Z0-9_]{1,80}$/u.test(rawStatus) ? rawStatus : 'UNKNOWN_STATUS';
     const text = REJECTIONS[status] || 'QFEX rejected the order. Check the account balance, market and order size.';
     throw Object.assign(failure(`${text} (${status})`, status === 'RATE_LIMITED' ? 429 : 400, 'QFEX_ORDER_REJECTED'),
       { definiteRejection: true, exchangeCode: status });
   }
+  // A cancel is confirmed only by a terminal status; ACK or a partial fill keeps waiting.
+  if (type === 'cancel_order' && !CANCEL_DONE.test(rawStatus)) return null;
   return order;
 }
 
@@ -472,7 +487,7 @@ function runTradeCommand(creds, type, params, options = {}) {
     const ws = socketFactory(`${TRADE_ORIGIN}?api_key=${encodeURIComponent(creds.publicKey)}`);
     const finish = (error, result) => {
       if (settled) return;
-      settled = true; clearTimeout(timer);
+      settled = true; clearTimeout(timer); clearTimeout(probe);
       if (error) error.outcomeUnknown = sent && !error.definiteRejection;
       ws.close(); error ? reject(error) : resolve(result);
     };
@@ -481,6 +496,12 @@ function runTradeCommand(creds, type, params, options = {}) {
       sent = true;
       ws.send(JSON.stringify({ type, params }), error => { if (error) finish(failure('QFEX command delivery uncertain', 502)); });
     };
+    let probe = null, subscribeSent = false;
+    const subscribe = () => {
+      if (subscribeSent) return;
+      subscribeSent = true;
+      ws.send(JSON.stringify({ type: 'subscribe', params: { channels: ['order_responses'] } }));
+    };
     const timer = setTimeout(() => {
       console.warn('[qfex] trade socket timeout', { command: type, opened, authenticated, sent, seen: seen.slice(0, 8) });
       finish(failure('QFEX timed out; refresh account before another action', 504, 'QFEX_TIMEOUT'));
@@ -488,7 +509,11 @@ function runTradeCommand(creds, type, params, options = {}) {
     // The primary account is selected by omitting account_id (QFEX auth docs; pilotbot qfexAuthMessage).
     ws.on('open', () => { opened = true; ws.send(JSON.stringify({ type: 'auth', params: { hmac: sign(creds),
       ...(creds.accountId && !creds.primary ? { account_id: creds.accountId } : {}),
-      ...(options.builderCode ? { builder_code: options.builderCode } : {}) } })); });
+      ...(options.builderCode ? { builder_code: options.builderCode } : {}) } }));
+      // pilotbot: with no explicit auth reply, subscribing probes the session; the
+      // subscription ack proves authentication.
+      probe = setTimeout(() => { if (!authenticated && !settled) subscribe(); }, Math.min(2500, Math.floor(timeoutMs / 3)));
+    });
     ws.on('unexpected-response', (_request, response) => {
       const denied = response.statusCode === 401 || response.statusCode === 403;
       console.warn('[qfex] trade socket handshake rejected', { command: type, status: response.statusCode });
@@ -522,9 +547,12 @@ function runTradeCommand(creds, type, params, options = {}) {
           if (message.type === 'auth' && message.result !== 'success') return finish(failure('QFEX authentication rejected', 401));
           if (message.success === false || message.error) return finish(failure('QFEX authentication rejected', 401));
           if (authenticated) return; authenticated = true;
-          if (type === 'add_order' || type === 'cancel_order') ws.send(JSON.stringify({ type: 'subscribe', params: { channels: ['order_responses'] } }));
+          if (type === 'add_order' || type === 'cancel_order') { if (!subscribeSent) subscribe(); }
           else sendCommand();
-        } else if (authenticated && message.subscribed === 'order_responses') sendCommand();
+        } else if (subscribeSent && (message.subscribed === 'order_responses'
+          || (message.type === 'subscribed' && !Array.isArray(message.contents) && (message.channel == null || message.channel === 'order_responses')))) {
+          authenticated = true; sendCommand();
+        }
         else if (sent) { const result = responseFor(message, type, params); if (result != null) finish(null, result); }
       } catch (error) { finish(error); }
     });
@@ -692,7 +720,7 @@ async function reconcileOrder(creds, row) {
     request('/user/historic-orders', creds, { symbol: params.symbol, client_order_id: row.client_order_id, limit: 2 }),
     tradeCommand(creds, 'get_user_orders', { symbol: params.symbol, limit: 1000, offset: 0 })]);
   const matches = new Map([...(history.data || []), ...(open.orders || [])]
-    .filter(o => o.client_order_id === row.client_order_id).map(o => [o.order_id, o]));
+    .filter(o => String(o.client_order_id ?? '') === String(row.client_order_id)).map(o => [o.order_id, o]));
   const response = { action_id: row.action_id, account_id: creds.accountId, status: 'unknown', can_resubmit: false };
   if (number(history.count) > 1 || matches.size > 1) return { ...response, status: 'manual_review', reason: 'Multiple orders share this client ID' };
   if (matches.size !== 1) return response;

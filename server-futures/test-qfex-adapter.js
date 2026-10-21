@@ -32,8 +32,8 @@ function fixture(overrides = {}) {
       queueMicrotask(() => {
         if (callback) callback();
         const emit = frame => socket.emit('message', Buffer.from(JSON.stringify(frame)));
-        if (message.type === 'auth') { auths.push(message); return emit({ type: 'auth', result: state.authFail ? 'failed' : 'success' }); }
-        if (message.type === 'subscribe') return emit({ subscribed: 'order_responses' });
+        if (message.type === 'auth') { auths.push(message); if (state.silentAuth) return; return emit({ type: 'auth', result: state.authFail ? 'failed' : 'success' }); }
+        if (message.type === 'subscribe') return emit(state.subscribedEnvelope ? { type: 'subscribed', channel: 'order_responses' } : { subscribed: 'order_responses' });
         if (message.type === 'get_user_leverage') return emit({ user_leverage_response: [{ symbol: 'AAPL-USD', leverage: state.leverage || '10' }] });
         if (message.type === 'get_available_leverage_levels') return emit({ available_leverage_levels_response: [{ symbol: 'AAPL-USD', leverage: '10' }] });
         if (message.type === 'get_user_orders') return emit({ all_orders_response: { orders: state.openOrders || [], twaps: [] } });
@@ -46,10 +46,11 @@ function fixture(overrides = {}) {
             && (message.params.end_ts == null || t.timestamp <= message.params.end_ts));
           return emit({ user_trades: executions.slice(message.params.offset, message.params.offset + message.params.limit), count: executions.length });
         }
-        if (message.type === 'set_user_leverage') return state.noResponse ? undefined : emit({ ack_response: true });
+        if (message.type === 'set_user_leverage') return state.noResponse ? undefined : emit(state.genericAck ? { ack: { incoming_message: message } } : { ack_response: true });
         if (state.noResponse) return;
         if (state.errorCode) return emit({ err: { error_code: state.errorCode, incoming_message: message } });
         if (state.unrelatedFirst) emit({ order_response: { ...message.params, order_id: ORDER, client_order_id: 'unrelated', status: 'ACK' } });
+        if (state.cancelAckFirst && message.type === 'cancel_order') emit({ order_response: { ...message.params, order_id: ORDER, status: 'ACK' } });
         emit({ order_response: { ...message.params, order_id: ORDER,
           status: state.orderStatus || (message.type === 'cancel_order' ? 'CANCELLED' : 'ACK') } });
       });
@@ -609,4 +610,39 @@ test('wallet registration stays disabled and reveals no secrets without builder 
     if (saved.pub !== undefined) process.env.QFEX_BUILDER_PUBLIC_KEY = saved.pub;
     if (saved.secret !== undefined) process.env.QFEX_BUILDER_SECRET_KEY = saved.secret;
   }
+});
+
+test('any non-rejection order status is an accepted order (pilotbot rule), so its fills stay provable', async () => {
+  process.env.QFEX_BUILDER_CODE = BUILDER;
+  for (const status of ['PARTIALLY_FILLED', 'MODIFIED', 'IOC_PARTIALLY_FILLED']) {
+    const env = fixture({ orderStatus: status });
+    const result = await qfex.placeOrder(CREDS, input(), { playerId: 'alice' });
+    assert.equal(result.status, status);
+    assert.equal(env.db.prepare('SELECT status FROM qfex_action_intents').get().status, 'accepted');
+    qfex.setTestDependencies(); env.db.close(); databases = databases.filter(db => db !== env.db);
+  }
+  const env = fixture({ orderStatus: 'REJECTED_SOMETHING_NEW' });
+  await assert.rejects(qfex.placeOrder(CREDS, input(), { playerId: 'alice' }), error => error.code === 'QFEX_ORDER_REJECTED' && error.definiteRejection);
+  assert.equal(env.db.prepare('SELECT status FROM qfex_action_intents').get().status, 'rejected');
+});
+
+test('cancel waits past an ACK for the terminal cancellation', async () => {
+  const env = fixture({ cancelAckFirst: true });
+  const result = await qfex.cancelOrder(CREDS, { symbol: 'AAPL-USD', orderId: ORDER, actionId: crypto.randomUUID() }, { playerId: 'alice' });
+  assert.equal(result.status, 'CANCELLED');
+  assert.equal(env.commands.filter(c => c.type === 'cancel_order').length, 1);
+});
+
+test('no auth reply: a subscribe probe and its {type:"subscribed"} ack authenticate the session', async () => {
+  const env = fixture({ silentAuth: true, subscribedEnvelope: true });
+  const result = await qfex.placeOrder(CREDS, input(), { playerId: 'alice' });
+  assert.equal(result.order_id, ORDER);
+  assert.deepEqual(env.commands.map(c => c.type), ['auth', 'subscribe', 'add_order']);
+});
+
+test('set_user_leverage accepts the generic {ack:{incoming_message}} acknowledgement', async () => {
+  const env = fixture({ genericAck: true });
+  const result = await qfex.setLeverage(CREDS, { symbol: 'AAPL-USD', leverage: 10, actionId: crypto.randomUUID() }, { playerId: 'alice' });
+  assert.equal(result.success, true);
+  assert.equal(env.commands.filter(c => c.type === 'set_user_leverage').length, 1);
 });
