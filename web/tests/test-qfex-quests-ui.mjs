@@ -73,7 +73,8 @@ try {
   });
   await page.goto(origin);
   await page.getByText('QFEX fixture quest',{exact:true}).waitFor();
-  await page.getByRole('alert').filter({hasText:'Fixture upstream unavailable'}).waitFor();
+  // The QFEX sync banner was removed from player UI; sync runs silently.
+  await page.waitForFunction(()=>true);
   const imported=calls.find(call=>call.path.endsWith('/qfex/import-trades'));
   assert(imported,'Standalone quests must import without FuturesPanel');
   assert.equal(imported.headers['x-token'],'fixture-player-A');
@@ -81,19 +82,10 @@ try {
   assert.equal(imported.headers['x-qfex-public-key'],'fixture-public');
   assert.equal(imported.headers['x-dex'],'qfex');
   assert(calls.findIndex(call=>call.path.endsWith('/import-trades'))<calls.findIndex(call=>call.path==='/api/tasks'));
-  console.log('PASS standalone authenticated import, failure visible, quests still load');
-
+  console.log('PASS standalone authenticated import, quests still load when sync fails');
+  assert.equal(await page.getByText('Refresh sync',{exact:true}).count(),0,'QFEX sync banner must not be shown to players');
+  assert.equal(await page.getByText('Retry sync',{exact:true}).count(),0,'QFEX sync banner must not be shown to players');
   scenario='ready';
-  await page.getByRole('button',{name:'Retry sync',exact:true}).click();
-  await page.getByText('QFEX trades and rewards are up to date.',{exact:true}).waitFor();
-  assert.equal(await page.getByRole('alert').count(),0);
-  console.log('PASS retry recovers and clears stale sync failure');
-  for(const [next,copy] of [['builder','QFEX builder code is pending.'],['backlog','Loading older QFEX trades.']]){
-    scenario=next;
-    await page.getByRole('button',{name:'Refresh sync',exact:true}).click();
-    await page.getByText(copy,{exact:false}).waitFor();
-  }
-  console.log('PASS builder attribution gate and saved-backlog notices');
   assert(await page.getByAltText('QFEX').evaluate(img=>img.complete&&img.naturalWidth>0));
   assert(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),'390px page must not horizontally overflow');
   console.log('PASS official logo loads and 390px layout has no horizontal overflow');
@@ -101,7 +93,7 @@ try {
   const importCount=()=>calls.filter(call=>call.path.endsWith('/import-trades')).length;
   const beforeDisconnect=importCount();
   await page.evaluate(()=>{window.qfexFixture.connected=false;window.qfexFixture.refresh();});
-  await page.getByText('Connect your QFEX API keys to sync trading quests.',{exact:true}).waitFor();
+  await page.waitForTimeout(500);
   assert.equal(importCount(),beforeDisconnect);
   const lastTask=calls.filter(call=>call.path==='/api/tasks').at(-1);
   assert(!lastTask.headers['x-qfex-secret-key']);

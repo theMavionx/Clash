@@ -508,14 +508,15 @@ test('absent action status returns verified account and explicit not-found code 
   assert.equal(env.commands.length, 0);
 });
 
-test('market order payload matches the QFEX schema: boolean reduce_only, no price, no unused TP/SL', async () => {
+test('market order payload matches the QFEX schema: boolean reduce_only, price 0, no unused TP/SL', async () => {
   const env = fixture();
   await qfex.placeOrder(CREDS, input(), { playerId: 'alice' });
   const params = env.commands.find(c => c.type === 'add_order').params;
   assert.equal(params.reduce_only, false);
   assert.equal(typeof params.reduce_only, 'boolean');
-  for (const key of ['price', 'take_profit', 'stop_loss']) assert.equal(Object.hasOwn(params, key), false, key);
-  assert.deepEqual(Object.keys(params).sort(), ['client_order_id', 'order_time_in_force', 'order_type', 'quantity', 'reduce_only', 'side', 'symbol']);
+  for (const key of ['take_profit', 'stop_loss']) assert.equal(Object.hasOwn(params, key), false, key);
+  assert.deepEqual(Object.keys(params).sort(), ['client_order_id', 'order_time_in_force', 'order_type', 'price', 'quantity', 'reduce_only', 'side', 'symbol']);
+  assert.equal(params.price, 0, 'QFEX requires price on add_order; market orders send 0');
   assert.match(params.client_order_id, /^\d{1,20}$/u, 'QFEX client_order_id must be a decimal string like pilotbot sends');
   await qfex.placeOrder(CREDS, input({ orderType: 'limit', price: '199.5', takeProfit: '210' }), { playerId: 'alice' });
   const limit = env.commands.filter(c => c.type === 'add_order')[1].params;

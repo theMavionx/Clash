@@ -2,7 +2,6 @@ import { Fragment, useState, memo, useCallback, useMemo, useRef, useEffect, useI
 import LighterOneTapConnect from './LighterOneTapConnect';
 import EtoroSetupGuide from './trading/EtoroSetupGuide';
 import QfexSetup from './trading/QfexSetup';
-import QfexSyncStatus from './trading/QfexSyncStatus';
 import { useQfex } from '../hooks/useQfex';
 import ImperialRouteCard from './trading/ImperialRouteCard';
 import PositionActionDialog from './trading/PositionActionDialog';
@@ -12284,7 +12283,6 @@ function FuturesPanel() {
           </div>
         )}
         <main className="futures-panel-body futures-terminal-body" style={S.body}>
-          {dex === 'qfex' && activeTab !== 'Quests' && <QfexSyncStatus status={qfexHook.syncStatus} onRetry={qfexHook.claimGold} />}
           <div key={activeTab} style={{
             animation: 'fadeIn 0.25s ease-out',
             display: 'flex',

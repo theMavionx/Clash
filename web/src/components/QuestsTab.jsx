@@ -14,7 +14,6 @@ import { listStoredPacificaMasters, readPacificaAgent } from '../lib/pacificaAge
 import { nftRarityCardStyle, normalizeNftRarity } from '../lib/nftV3Client';
 import { uiButton } from '../styles/theme';
 import { readQfexTaskHeaders, fetchQfexJson } from '../lib/qfexClient';
-import QfexSyncStatus from './trading/QfexSyncStatus';
 
 
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
@@ -855,7 +854,6 @@ function QuestsTab({ markets = [] }) {
   if (!visibleTasks.length) {
     return (
       <div style={S.empty}>
-        {dex === 'qfex' && <QfexSyncStatus status={qfexSync} onRetry={() => fetchTasks(token)} />}
         <div style={S.emptyIcon}>⚔️</div>
         <div style={S.emptyTitle}>{tasks.length ? 'No quests for this DEX' : 'No quests available'}</div>
         <div style={S.emptyDesc}>{tasks.length ? 'Switch DEX or check back later.' : 'Check back later for new quests from the admin.'}</div>
@@ -865,7 +863,6 @@ function QuestsTab({ markets = [] }) {
 
   return (
     <div style={S.wrap}>
-      {dex === 'qfex' && <QfexSyncStatus status={qfexSync} onRetry={() => fetchTasks(token)} />}
       {flash && (
         <GoldRewardToast
           amount={flash.amount}
