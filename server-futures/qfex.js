@@ -532,8 +532,20 @@ function runTradeCommand(creds, type, params, options = {}) {
         if (err) {
           if (err.error_code === 'AlreadyAuthenticated') return;
           const error = protocolFailure(err);
-          // Code only: never the echoed request.
-          console.warn('[qfex] trade socket error frame', { command: type, error_code: error.exchangeCode, sent });
+          // QFEX echoes the request an error answers in incoming_message; log only its
+          // type and field names (never values: the auth frame carries the HMAC).
+          const incoming = err.incoming_message ?? message.incoming_message;
+          let incomingType = null, incomingFields = null;
+          try {
+            const parsed = typeof incoming === 'string' ? JSON.parse(incoming) : incoming;
+            incomingType = parsed?.type || null;
+            incomingFields = parsed?.params && typeof parsed.params === 'object' ? Object.keys(parsed.params).sort() : null;
+          } catch { incomingType = typeof incoming === 'string' ? 'unparsed' : null; }
+          console.warn('[qfex] trade socket error frame', { command: type, error_code: error.exchangeCode, sent,
+            incoming_type: incomingType, incoming_fields: incomingFields,
+            detail: String(err.message || err.error || err.detail || '').slice(0, 200) });
+          // An error answering our subscribe probe does not reject the trading command.
+          if (incomingType === 'subscribe') return;
           return finish(error);
         }
         // Docs show {type:'auth',result:'success'}; production replies {type:'authenticated'}.
