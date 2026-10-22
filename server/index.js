@@ -5676,6 +5676,27 @@ server.listen(PORT, '127.0.0.1', () => {
     }
   }
 
+  // QFEX fills from server-stored keys, so a close placed right before the
+  // in-game import (QFEX indexes fills a few seconds later) is still credited.
+  //   QFEX_VAULT_SYNC=0                     → disable
+  //   QFEX_VAULT_SYNC_INTERVAL_MS=300000     → run interval (default 5 min)
+  if (process.env.QFEX_VAULT_SYNC !== '0') {
+    try {
+      const { createTradingCredentialVault } = require('./trading_credential_vault');
+      const { createQfexVaultSync } = require('./qfex_vault_sync');
+      const tradeRecon = require('./trade_reconciliation');
+      const playerById = clashDb.db.prepare('SELECT * FROM players WHERE id = ?');
+      createQfexVaultSync({
+        db: clashDb.db,
+        vault: createTradingCredentialVault({ db: clashDb.db, catalog: require('./trading_credential_catalog') }),
+        getPlayer: playerId => playerById.get(playerId),
+        reconcile: (player, opts) => tradeRecon.reconcileTradesForPlayer(player, opts),
+      }).start({ intervalMs: Math.max(60 * 1000, Number(process.env.QFEX_VAULT_SYNC_INTERVAL_MS) || 5 * 60 * 1000) });
+    } catch (error) {
+      console.warn('[qfex-vault-sync] disabled:', error?.message || error);
+    }
+  }
+
   // Marketplace event indexer. Polls each chain for Listed/Cancelled/Sold
   // events and writes them into marketplace_listings.
   //
