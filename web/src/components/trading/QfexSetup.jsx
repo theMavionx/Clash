@@ -1,12 +1,23 @@
 import { useState } from 'react';
 
 /** Connect QFEX with one wallet signature, or fall back to an existing trading API key. */
-export default function QfexSetup({ activate, loading, error, onClose, walletRegistration = false, connectWithWallet, evmAddress = '' }) {
+export default function QfexSetup({ activate, loading, restoring = false, error, onClose, walletRegistration = false, connectWithWallet, evmAddress = '' }) {
   const [publicKey, setPublicKey] = useState('');
   const [secretKey, setSecretKey] = useState('');
   const [accountId, setAccountId] = useState('');
   const [failure, setFailure] = useState('');
   const [showKeys, setShowKeys] = useState(!walletRegistration);
+  if (restoring) {
+    return <section aria-label="Connect QFEX" aria-busy="true" style={{ padding: 24, margin: 'auto', maxWidth: 480, color: 'var(--terminal-text)', textAlign: 'center' }}>
+      <style>{'@keyframes qfex-restore-spin{to{transform:rotate(360deg)}}'}</style>
+      <div role="status" aria-live="polite" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14, padding: '40px 0' }}>
+        <span aria-hidden="true" style={{ width: 28, height: 28, borderRadius: 999, border: '3px solid var(--terminal-border)',
+          borderTopColor: 'var(--terminal-orange)', animation: 'qfex-restore-spin 0.8s linear infinite' }} />
+        <span style={{ fontSize: 14, fontWeight: 600 }}>Loading your QFEX account…</span>
+        <span style={{ fontSize: 12, color: 'var(--terminal-text-muted)' }}>Restoring your saved connection.</span>
+      </div>
+    </section>;
+  }
   const inputStyle = { width: '100%', boxSizing: 'border-box', padding: 12, marginTop: 6, background: 'var(--terminal-surface)', color: 'var(--terminal-text)', border: '1px solid var(--terminal-border)', borderRadius: 8 };
   const submit = async (event) => {
     event.preventDefault();

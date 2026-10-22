@@ -270,6 +270,9 @@ export function useQfex() {
   const account = snapshot?.account || null;
   const markets = useMemo(() => withQfexIcons(snapshot?.markets), [snapshot?.markets]);
   const ready = !!credentials && !!account;
+  // Saved keys are still being read, or they exist and the first account read is in
+  // flight: show a loading state instead of the connect form (which then vanished).
+  const restoring = !!active && !!token && !error && (!loaded || (!!credentials && !account));
   return {
     dex: 'qfex', walletAddr, connected: !!token, hasWallet: !!token, walletMismatch: false,
     account, positions: rows(snapshot?.positions), orders: rows(snapshot?.orders), markets, prices: rows(snapshot?.prices),
@@ -278,7 +281,7 @@ export function useQfex() {
     walletUsdc: 0, spotUsdc: 0,
     leverageSettings: Object.fromEntries(rows(snapshot?.leverage).map(row => [row.symbol, Number(row.leverage)])),
     marginModes: {},
-    dataReady: ready, accountReady: ready, isReady: ready, setupVerified: ready,
+    dataReady: ready, accountReady: ready, isReady: ready, setupVerified: ready, restoring,
     inviteStatus: config, pendingAction, reconcilePending, loading: loading || (active && !loaded), error, clearError: () => setError(''),
     activate, connectWithWallet, walletRegistration: config?.wallet_registration === true, evmAddress: evmWallet?.address || '', disconnect, refresh, fetchAccount: refresh, fetchPositions: refresh, fetchOrders: refresh,
     placeMarketOrder, placeLimitOrder, cancelOrder, closePosition, setLeverage, setTpsl, fetchTradeHistory, fetchCandles,
