@@ -438,10 +438,11 @@ export const DEX_CONFIG = {
 };
 
 export const DEX_ORDER = [
+  'rhlighter',
+  'gmx',
   'imperial',
   'bulk',
   'lighter',
-  'rhlighter',
   'flash',
   'gmtrade',
   'katana',
@@ -462,7 +463,6 @@ export const DEX_ORDER = [
   'etoro',
   'qfex', 'throne',
   'ostium',
-  'gmx',
   'monad',
 ];
 
