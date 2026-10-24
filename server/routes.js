@@ -27942,6 +27942,15 @@ try {
   console.warn('[admin-phantom-bots] failed to mount:', err?.message || err);
 }
 
+// ClashBot copy trading analytics (leaderboard, venue freshness, trader
+// analysis). Read-only GET allowlist, player auth required.
+try {
+  const { mountClashbotCopyProxy } = require('./clashbot_copy_proxy');
+  mountClashbotCopyProxy(router, { auth });
+} catch (err) {
+  console.warn('[clashbot-copy] failed to mount proxy:', err?.message || err);
+}
+
 router.use('/v1/strategies', auth, proxyToBot);
 router.use('/v1/bot', auth, proxyToBot);
 router.use('/v1/portfolio', auth, proxyToBot);

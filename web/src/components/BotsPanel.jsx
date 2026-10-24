@@ -1,4 +1,4 @@
-import { memo, useCallback, useMemo, useState, useEffect, useRef } from 'react';
+import { lazy, memo, Suspense, useCallback, useMemo, useState, useEffect, useRef } from 'react';
 import { useLayout } from '../hooks/useIsMobile';
 import { uiButton, uiIconButton, rangeProgress } from '../styles/theme';
 import { colors, shared } from './basic/styles';
@@ -58,6 +58,19 @@ import {
   planCalmFromBalance,
 } from '../lib/calmVolumePlan';
 import buttonBg from '../assets/resources/file_00000000a6f87246844c6271b76cd436.png';
+import clashbotLogo from '../assets/resources/clashbot-logo.svg';
+
+// ClashBot copy trading lives in its own lazily loaded chunk.
+const CopyTradingSection = lazy(() => import('./copytrading/CopyTradingSection'));
+const PANEL_SECTION_KEY = 'clash.botsPanel.section.v1';
+
+function readPanelSection() {
+  try {
+    return globalThis.localStorage?.getItem(PANEL_SECTION_KEY) === 'mm' ? 'mm' : 'copy';
+  } catch {
+    return 'copy';
+  }
+}
 import { keccak256 } from 'js-sha3';
 
 function keccak256Array(key) {
@@ -1684,6 +1697,11 @@ function BotsPanel({ onClose }) {
     aptosWalletAddress,
   ]);
 
+  const [panelSection, setPanelSectionState] = useState(readPanelSection);
+  const setPanelSection = useCallback((next) => {
+    setPanelSectionState(next);
+    try { globalThis.localStorage?.setItem(PANEL_SECTION_KEY, next); } catch { /* storage optional */ }
+  }, []);
   const [view, setView] = useState('dashboard');
   const [step, setStep] = useState('exchange');
   const [history, setHistory] = useState(DEFAULT_HISTORY);
@@ -4904,22 +4922,48 @@ function BotsPanel({ onClose }) {
   );
 
   return (
-    <div className="bots-panel" style={{ ...S.panel, ...(isMobile ? S.panelMobile : {}) }}>
+    <div className="bots-panel" style={{ ...S.panel, ...(panelSection === 'copy' ? S.panelWide : {}), ...(isMobile ? S.panelMobile : {}) }}>
       <style>{STYLE}</style>
       <div style={S.header}>
         <div style={S.headerBrand}>
-          <RobotButtonMark size={46} />
+          <img src={clashbotLogo} alt="" aria-hidden="true" width={40} height={40} style={S.headerLogo} />
           <div>
-            <div style={S.headerTitle}>Bots</div>
-            <div style={S.headerSub}>MM Bot control room</div>
+            <div style={S.headerTitle}>ClashBot</div>
+            {!isMobile && <div style={S.headerSub}>{panelSection === 'copy' ? 'Copy trading' : 'MM Bot control room'}</div>}
           </div>
         </div>
-        <button type="button" style={S.closeButton} onClick={onClose} aria-label="Close Bots panel">
+        <div className="bots-segment" style={{ ...S.segment, ...S.sectionSwitch }} role="tablist" aria-label="ClashBot section">
+          {[['copy', isMobile ? 'Copy' : 'Copy trading'], ['mm', isMobile ? 'MM bots' : 'Market making']].map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              role="tab"
+              aria-selected={panelSection === key}
+              className="bots-segment-button"
+              style={{ ...S.segmentButton, ...(panelSection === key ? S.segmentActive : {}) }}
+              onClick={() => setPanelSection(key)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <button type="button" style={S.closeButton} onClick={onClose} aria-label="Close ClashBot panel">
           x
         </button>
       </div>
       <div style={S.body}>
-        {view === 'launch'
+        {panelSection === 'copy' ? (
+          <Suspense
+            fallback={(
+              <div style={S.dashboardLoading} role="status" aria-live="polite">
+                <span className="bots-spinner" style={S.loadingSpinner} aria-hidden="true" />
+                <strong>Loading copy trading…</strong>
+              </div>
+            )}
+          >
+            <CopyTradingSection player={player} />
+          </Suspense>
+        ) : view === 'launch'
           ? renderLaunch()
           : view === 'history'
             ? renderHistory()
@@ -5070,6 +5114,22 @@ const S = {
     boxShadow: 'var(--cb-shadow-dialog)',
     fontFamily: 'inherit',
     boxSizing: 'border-box',
+  },
+  panelWide: {
+    width: 'min(1120px, calc(100vw - 32px))',
+  },
+  headerLogo: {
+    width: 40,
+    height: 40,
+    objectFit: 'contain',
+    flexShrink: 0,
+  },
+  sectionSwitch: {
+    marginLeft: 'auto',
+    marginRight: 12,
+    flexShrink: 1,
+    minWidth: 0,
+    overflowX: 'auto',
   },
   panelMobile: {
     inset: 0,
