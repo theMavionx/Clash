@@ -101,14 +101,30 @@ export function signOrderlyRequest(orderlySecret, { timestamp, method, path, bod
   return btoa(binary).replace(/\+/gu, '-').replace(/\//gu, '_').replace(/=+$/u, '');
 }
 
-/** Pick the EIP-712 signing chain: Robinhood Chain when Orderly supports it for throne, else the wallet's chain if supported. */
+/**
+ * Pick the EIP-712 signing chain from GET /v1/public/chain_info?broker_id=throne: the wallet's
+ * current chain when the broker supports it (no network switch prompt), else Robinhood Chain,
+ * else Arbitrum, else the first listed chain.
+ */
 export function chooseSigningChain(supportedChains = [], walletChainId = null) {
   const ids = supportedChains.map(row => Number(row?.chain_id ?? row)).filter(Number.isSafeInteger);
+  const wallet = Number(walletChainId);
+  if (Number.isSafeInteger(wallet) && wallet > 0 && ids.includes(wallet)) return wallet;
   if (ids.includes(ROBINHOOD_CHAIN_ID)) return ROBINHOOD_CHAIN_ID;
-  if (ids.includes(Number(walletChainId))) return Number(walletChainId);
   if (ids.includes(42161)) return 42161;
   if (!ids.length) throw new Error('Orderly did not list a supported chain for Throne.');
   return ids[0];
+}
+
+/**
+ * User-facing outcome of a Throne order response: `info` for the success toast and `warning`
+ * when the ticket's TP/SL could not be attached (the order itself was still accepted).
+ */
+export function throneOrderNotice(result = {}) {
+  if (result?.tpsl_error) return { info: 'Throne accepted the order.', warning: String(result.tpsl_error) };
+  if (result?.bracket) return { info: 'Throne limit order placed with TP/SL. They become the position TP/SL when the order fills and replace any existing position TP/SL.', warning: '' };
+  if (result?.tpsl) return { info: 'Throne accepted the order and set TP/SL on the position.', warning: '' };
+  return { info: 'Throne accepted the request. Check positions and orders for execution.', warning: '' };
 }
 
 /**

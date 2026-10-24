@@ -34,6 +34,16 @@ test('standing card renders nothing without an address and a loading state with 
   assert.match(html, /Loading standing/u);
 });
 
+test('Throne ticket relies on server TP/SL attach, shows tpsl_error and offers a pending-action way out', () => {
+  const panel = readFileSync(new URL('./src/components/FuturesPanel.jsx', import.meta.url), 'utf8');
+  assert.match(panel, /OPEN_TPSL_NATIVE_ORDER_ATTACH_DEXES = new Set\(\['throne',/u);
+  assert.match(panel, /result\.tpsl_error/u);
+  assert.match(panel, /throneHook\.dismissPendingAction\(\)/u);
+  const hook = readFileSync(new URL('./src/hooks/useThrone.js', import.meta.url), 'utf8');
+  assert.doesNotMatch(hook, /before disconnecting/u);
+  assert.match(hook, /is_bracket && order\.bracket_algo_order_id/u);
+});
+
 test('Throne is registered as a venue with its local logo', async () => {
   const source = readFileSync(new URL('./src/contexts/DexContext.jsx', import.meta.url), 'utf8');
   assert.match(source, /throne: \{\s*id: 'throne', label: 'Throne'/u);

@@ -449,6 +449,9 @@ async function buildSnapshot(player, task, opts = {}) {
     ).get(player.id);
     snap.wins_start = winsRow ? winsRow.c : 0;
   }
+  if (task.type === 'throne_quest') {
+    snap.throne_traded_start = await throneTradedBaseline(player, task, opts.fetchImpl);
+  }
   if (task.type === 'daily_trade_gold') {
     const windowH = Number(p.window_hours) > 0 ? Number(p.window_hours) : 24;
     const cutoff = new Date(Date.now() - windowH * 3600 * 1000).toISOString().replace('T', ' ').split('.')[0];
@@ -1231,6 +1234,16 @@ const throneCache = new Map();
 
 function playerEvmWallets(player) {
   const out = new Set();
+  // The address bound to the player's Throne (Orderly broker "throne") account comes first:
+  // it is the wallet that actually trades on Throne from Clash (server-futures/throne.js).
+  try {
+    const fdb = futuresDbReadonly();
+    for (const row of fdb ? fdb.prepare(
+      `SELECT address FROM throne_account_claims WHERE player_id = ? AND broker_id = 'throne' ORDER BY created_at ASC`
+    ).all(String(player?.id || '')) : []) {
+      if (isEvmWallet(row.address)) out.add(String(row.address).toLowerCase());
+    }
+  } catch { /* throne_account_claims not created yet */ }
   if (isEvmWallet(player?.wallet)) out.add(String(player.wallet).toLowerCase());
   try {
     for (const row of db.db.prepare(
@@ -1242,10 +1255,11 @@ function playerEvmWallets(player) {
   return [...out].slice(0, 5);
 }
 
-async function fetchThroneQuest(wallet, minVolume, fetchImpl) {
+async function fetchThroneQuest(wallet, minVolume, fetchImpl, { fresh = false } = {}) {
   const useCache = !fetchImpl;
   const key = `${wallet}:${minVolume}`;
-  const cached = useCache ? throneCache.get(key) : null;
+  // Baselines read fresh: a cached (older, lower) value would count pre-start volume.
+  const cached = useCache && !fresh ? throneCache.get(key) : null;
   if (cached && Date.now() - cached.at < THRONE_CACHE_MS) return cached.data;
   fetchImpl = fetchImpl || fetch;
   const url = `${THRONE_QUEST_URL}?wallet=${encodeURIComponent(wallet)}${minVolume > 0 ? `&min=${minVolume}` : ''}`;
@@ -1258,11 +1272,31 @@ async function fetchThroneQuest(wallet, minVolume, fetchImpl) {
   return data;
 }
 
-async function verifyThroneQuest(player, task, _snap, opts = {}) {
+// Throne's `traded` is lifetime volume, so the quest snapshot stores each wallet's `traded`
+// at quest start (throne_traded_start) and progress is the increase since then, like the
+// trade_id_start baseline of the volume tasks.
+async function throneTradedBaseline(player, task, fetchImpl) {
+  const minVolume = Math.max(0, Number(parseParams(task.params).min_volume) || 0);
+  const baseline = {};
+  for (const wallet of playerEvmWallets(player)) {
+    try {
+      const status = await fetchThroneQuest(wallet, minVolume, fetchImpl, { fresh: true });
+      baseline[wallet] = Math.max(0, Number(status?.traded) || 0);
+    } catch (e) {
+      console.warn(`[tasks] throne quest baseline failed player=${player?.name || player?.id}:`, e.message);
+    }
+  }
+  return baseline;
+}
+
+async function verifyThroneQuest(player, task, snap, opts = {}) {
   const p = parseParams(task.params);
   const minVolume = Math.max(0, Number(p.min_volume) || 0);
   const requireFlag = THRONE_FLAGS.has(p.require) ? p.require : 'pass';
   const wallets = playerEvmWallets(player);
+  const state = snap && typeof snap === 'object' ? snap : {};
+  const baseline = state.throne_traded_start && typeof state.throne_traded_start === 'object' ? state.throne_traded_start : {};
+  const fresh = {};
   let best = { progress_value: 0, target_value: minVolume, completed: false };
   for (const wallet of wallets) {
     let status;
@@ -1272,14 +1306,31 @@ async function verifyThroneQuest(player, task, _snap, opts = {}) {
       console.warn(`[tasks] throne quest read failed player=${player?.name || player?.id}:`, e.message);
       continue;
     }
-    const traded = Math.max(0, Number(status?.traded) || 0);
+    const lifetime = Math.max(0, Number(status?.traded) || 0);
+    // A wallet without a start value (bound after the quest started, or Throne unreachable
+    // at start) is baselined now: its earlier volume never counts and it cannot complete
+    // in the same check that sets its baseline.
+    const known = Number.isFinite(Number(baseline[wallet]));
+    if (!known) fresh[wallet] = lifetime;
+    const traded = known ? Math.max(0, lifetime - Number(baseline[wallet])) : 0;
     const flagged = !!(status?.flags?.[requireFlag] ?? status?.[requireFlag]);
-    const completed = flagged && traded >= minVolume;
+    const completed = known && flagged && traded >= minVolume;
     const target = minVolume || Math.max(0, Number(status?.floorUsd) || 0);
-    if (completed || traded > best.progress_value) {
+    if (completed || traded > best.progress_value || (!best.throne_wallet && target > 0)) {
       best = { progress_value: traded, target_value: target, completed, throne_wallet: wallet, throne_flag: requireFlag };
     }
     if (completed) break;
+  }
+  if (Object.keys(fresh).length) {
+    state.throne_traded_start = { ...baseline, ...fresh };
+    if (player?.id != null && task?.id != null) {
+      try {
+        db.db.prepare('UPDATE player_tasks SET snapshot = ? WHERE player_id = ? AND task_id = ? AND claimed_at IS NULL')
+          .run(JSON.stringify(state), player.id, task.id);
+      } catch (e) {
+        console.warn(`[tasks] throne quest baseline save failed player=${player?.name || player?.id}:`, e.message);
+      }
+    }
   }
   return best;
 }

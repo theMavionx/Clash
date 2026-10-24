@@ -6,6 +6,7 @@ import { useEvmWallet } from '../contexts/EvmWalletContext';
 import {
   beginThroneAction, finishThroneAction, pendingThroneAction, mayResendThroneAction, clearThroneCredentials,
   fetchThroneJson, normalizeThroneCredentials, readThroneCredentials, saveThroneCredentials, onboardThrone, THRONE_APP_URL,
+  throneOrderNotice,
 } from '../lib/throneClient';
 
 const API = '/api/futures/throne';
@@ -63,7 +64,7 @@ export function useThrone() {
     const result = await request(`/actions/${encodeURIComponent(intent.actionId)}`);
     assert(scope);
     if (['accepted', 'reconciled', 'rejected'].includes(result?.status)) { finishThroneAction(actionScope, intent.actionId); setPendingAction(null); }
-    else setPendingAction({ ...intent, status: result?.status || 'unknown' });
+    else setPendingAction({ ...intent, status: result?.status || 'unknown', ...(result?.reason ? { reason: String(result.reason) } : {}) });
     return result;
   }, [actionScope, assert, capture, request]);
 
@@ -221,7 +222,9 @@ export function useThrone() {
         const symbol = String(body?.symbol || ''), leverage = Number(body?.leverage);
         setSnapshot(previous => ({ ...previous, leverage: { ...(previous?.leverage || {}), [`PERP_${throneBase(symbol)}_USDC`]: leverage } }));
       } else refresh().then(() => claimGold()).catch(() => {});
-      return { ...result, info: result?.info || 'Throne accepted the request. Check positions and orders for execution.' };
+      // tpsl_error stays on the result: the ticket shows it as a warning next to the success.
+      const notice = throneOrderNotice(path === '/orders' ? result : {});
+      return { ...result, info: result?.info || notice.info };
     } catch (reason) {
       if (action && !action.resumed && reason.status && !reason.outcomeUnknown && reason.status < 500 && !['THRONE_ACTION_CONFLICT', 'THRONE_ACTION_UNKNOWN', 'THRONE_ACTION_PENDING'].includes(reason.code)) finishThroneAction(actionScope, action.actionId);
       else if (action && version === generation.current) setPendingAction(action);
@@ -238,8 +241,10 @@ export function useThrone() {
   const placeLimitOrder = useCallback((symbol, side, price, amount, timeInForce, leverage, options = {}) =>
     runAction('/orders', { symbol, side, price, amount, timeInForce, leverage, orderType: 'limit', takeProfit: options.takeProfit, stopLoss: options.stopLoss }), [runAction]);
   const cancelOrder = useCallback((symbol, orderId) => {
-    const stop = rows(snapshot?.orders).find(order => order?.is_stop && String(order.id) === String(orderId));
-    if (stop) return runAction('/tpsl', { symbol, [stop.order_type === 'take_profit' ? 'takeProfit' : 'stopLoss']: null });
+    const order = rows(snapshot?.orders).find(row => String(row?.id) === String(orderId));
+    if (order?.is_stop) return runAction('/tpsl', { symbol, [order.order_type === 'take_profit' ? 'takeProfit' : 'stopLoss']: null });
+    // A limit order with TP/SL is a BRACKET algo order: cancel the root so its TP/SL leg goes too.
+    if (order?.is_bracket && order.bracket_algo_order_id) return runAction('/orders/cancel', { symbol, orderId: order.bracket_algo_order_id, algo: true });
     return runAction('/orders/cancel', { symbol, orderId });
   }, [runAction, snapshot?.orders]);
   const setTpsl = useCallback((symbol, _closeSide, takeProfit, stopLoss) => {
@@ -258,13 +263,29 @@ export function useThrone() {
     const query = new URLSearchParams({ symbol, interval: options.interval || '5m', limit: String(options.limit || 500) });
     return request(`/candles?${query}`, { signal: options.signal, credentials: null }).then(rows);
   }, [request]);
+  // Escape hatch for an action whose outcome cannot be confirmed (unknown / manual_review):
+  // re-read the account first so the user sees the real positions and orders, then stop
+  // blocking new actions. Nothing is resent; a new action always gets a new id.
+  const dismissPendingAction = useCallback(async () => {
+    const intent = pendingThroneAction(actionScope);
+    if (!intent) { setPendingAction(null); return { dismissed: false }; }
+    const known = await reconcilePending().catch(() => null);
+    if (!pendingThroneAction(actionScope)) return { dismissed: true, status: known?.status || 'settled' };
+    const next = await request('/account-snapshot');
+    finishThroneAction(actionScope, intent.actionId);
+    setPendingAction(null);
+    if (next) setSnapshot(next);
+    return { dismissed: true, status: known?.status || 'unknown' };
+  }, [actionScope, reconcilePending, request]);
+
+  // Disconnecting never resends anything, so it is allowed with a pending action; the pending
+  // marker stays in this session and still blocks actions if the same account reconnects.
   const disconnect = useCallback(async () => {
-    if (pendingThroneAction(actionScope)) throw new Error('Confirm the pending Throne action outcome before disconnecting.');
     const scope = capture();
     await clearThroneCredentials({ scope });
     assert(scope); generation.current += 1;
-    setCredentials(null); setSnapshot(emptySnapshot()); setError(''); setSyncStatus(null);
-  }, [actionScope, assert, capture]);
+    setCredentials(null); setSnapshot(emptySnapshot()); setError(''); setSyncStatus(null); setPendingAction(null);
+  }, [assert, capture]);
 
   const account = snapshot?.account || null;
   const markets = useMemo(() => withThroneBase(snapshot?.markets), [snapshot?.markets]);
@@ -283,7 +304,7 @@ export function useThrone() {
     leverageSettings,
     marginModes: {},
     dataReady: ready, accountReady: ready, isReady: ready, setupVerified: ready, restoring,
-    inviteStatus: config, pendingAction, reconcilePending, loading: loading || (active && !loaded), onboardingStep, error, clearError: () => setError(''),
+    inviteStatus: config, pendingAction, reconcilePending, dismissPendingAction, loading: loading || (active && !loaded), onboardingStep, error, clearError: () => setError(''),
     activate, connectWithWallet, walletRegistration: true, evmAddress: evmWallet?.address || '', tradingAddress: credentials?.address || '',
     disconnect, refresh, fetchAccount: refresh, fetchPositions: refresh, fetchOrders: refresh,
     placeMarketOrder, placeLimitOrder, cancelOrder, closePosition, setLeverage, setTpsl, fetchTradeHistory, fetchCandles,

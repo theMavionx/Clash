@@ -41,10 +41,19 @@ let fetchImpl = (...args) => fetch(...args);
 let databaseOverride = null;
 let timeoutMs = Math.max(2000, Math.min(30000, Number(process.env.THRONE_TIMEOUT_MS) || 12000));
 let nowImpl = () => Date.now();
+let sleepImpl = ms => new Promise(resolve => setTimeout(resolve, ms));
 const initialized = new WeakSet();
 let marketCache = null, marketLoad = null;
 const accountCache = new Map();
 const snapshotCache = new Map();
+// Per-account leverage settings. GET /v1/client/leverage is limited to 1 req/s per IP and
+// every user shares our server IP, so reads go through the bulk GET /v1/client/leverages
+// (one call per account per TTL) with in-flight de-duplication; single-symbol reads are a
+// fallback only. https://orderly.network/docs/build-on-omnichain/restful-api/private/get-all-leverage-settings
+const LEVERAGE_TTL_MS = 30000;
+const leverageCache = new Map();
+const leverageLoads = new Map();
+const leverageBulkFailed = new Map();
 
 function failure(message, status = 400, code = 'THRONE_ERROR', extra = {}) {
   return Object.assign(new Error(message), { status, code }, extra);
@@ -449,10 +458,15 @@ async function readAllPages(creds, path, query, maximum = 500) {
   return rows;
 }
 
-/** TP/SL legs from Orderly algo orders (TP_SL / POSITIONAL_TP_SL roots with TAKE_PROFIT / STOP_LOSS children). */
+/**
+ * TP/SL legs from Orderly algo orders (TP_SL / POSITIONAL_TP_SL roots with TAKE_PROFIT / STOP_LOSS children).
+ * BRACKET roots are skipped: their TP/SL only becomes a position TP/SL once the entry fills
+ * (Orderly then decouples leg_2 into an independent POSITIONAL_TP_SL root).
+ */
 function algoLegs(algoRows) {
   const legs = [];
   const visit = (row, root) => {
+    if (String(root?.algo_type || '').toUpperCase() === 'BRACKET') return;
     const type = String(row?.algo_type || '').toUpperCase();
     if (type === 'TAKE_PROFIT' || type === 'STOP_LOSS') {
       const trigger = positive(row.trigger_price);
@@ -483,14 +497,20 @@ async function getAccountSnapshot(credsInput, options = {}) {
 }
 
 async function loadAccountSnapshot(creds) {
-  const [holding, positionData, orders, algos, markets] = await Promise.all([
+  const [holding, positionData, orders, algos, markets, leverageSettings] = await Promise.all([
     request('GET', '/v1/client/holding', { creds }),
     request('GET', '/v1/positions', { creds }),
     readAllPages(creds, '/v1/orders', { status: 'INCOMPLETE' }),
     readAllPages(creds, '/v1/algo/orders', { status: 'INCOMPLETE' }),
-    getMarkets()]);
+    getMarkets(),
+    bulkLeverages(creds).catch(() => null)]);
   const marketMap = new Map(markets.map(m => [m.symbol, m]));
   const legs = algoLegs(algos).filter(leg => !leg.is_triggered);
+  // BRACKET (limit entry + TP/SL) roots: the resting entry is a regular order carrying
+  // algo_order_id; it is cancelled through the bracket root so leg_2 goes with it.
+  const brackets = new Map(algos.filter(row => String(row?.algo_type || '').toUpperCase() === 'BRACKET')
+    .map(row => [String(row.algo_order_id), { root: row, ...bracketTargets(row) }]));
+  const linkedBrackets = new Set(orders.map(o => String(o.algo_order_id ?? '')).filter(id => brackets.has(id)));
   const usdc = (holding?.holding || []).find(row => String(row.token).toUpperCase() === 'USDC');
   const positions = (positionData?.rows || []).filter(p => number(p.position_qty) !== 0).map(p => {
     const qty = number(p.position_qty), long = qty > 0;
@@ -511,7 +531,14 @@ async function loadAccountSnapshot(creds) {
   });
   const free = number(positionData?.free_collateral);
   const equity = number(positionData?.account_value ?? positionData?.total_collateral_value);
-  const leverage = Object.fromEntries(positions.filter(p => p.leverage).map(p => [p.symbol, p.leverage]));
+  // Configured leverage for every symbol (bulk read), overridden by live position leverage,
+  // so the ticket does not need a per-symbol leverage call before a first order.
+  const leverage = { ...(leverageSettings || {}), ...Object.fromEntries(positions.filter(p => p.leverage).map(p => [p.symbol, p.leverage])) };
+  const bracketFields = id => {
+    const bracket = brackets.get(String(id ?? ''));
+    return bracket ? { is_bracket: true, bracket_algo_order_id: String(bracket.root.algo_order_id),
+      take_profit: bracket.take_profit, stop_loss: bracket.stop_loss } : {};
+  };
   return {
     account: { account_id: creds.accountId, address: creds.address, broker_id: BROKER_ID,
       balance: number(usdc?.holding), usdc: number(usdc?.holding), available_to_spend: free, free_collateral: free,
@@ -525,7 +552,15 @@ async function loadAccountSnapshot(creds) {
       ...orders.map(o => ({ ...o, id: String(o.order_id), order_id: String(o.order_id), symbol: o.symbol,
         side: o.side === 'BUY' ? 'bid' : 'ask', price: String(o.price ?? ''),
         amount: String(new BigNumber(String(o.quantity ?? 0)).minus(String(o.executed_quantity ?? o.total_executed_quantity ?? 0)).toFixed()),
-        order_type: String(o.type || '').toLowerCase(), reduce_only: o.reduce_only === true, created_at: o.created_time ? new Date(number(o.created_time)).toISOString() : null })),
+        order_type: String(o.type || '').toLowerCase(), reduce_only: o.reduce_only === true, created_at: o.created_time ? new Date(number(o.created_time)).toISOString() : null,
+        ...bracketFields(o.algo_order_id) })),
+      // A bracket whose entry order is not (yet) listed still shows, so it can be cancelled.
+      ...[...brackets.values()].filter(b => !linkedBrackets.has(String(b.root.algo_order_id))).map(b => ({
+        id: String(b.root.algo_order_id), order_id: String(b.root.algo_order_id), symbol: b.root.symbol,
+        side: String(b.root.side).toUpperCase() === 'BUY' ? 'bid' : 'ask', price: String(b.root.price ?? ''),
+        amount: String(new BigNumber(String(b.root.quantity ?? 0)).minus(String(b.root.total_executed_quantity ?? 0)).toFixed()),
+        order_type: String(b.root.type || 'limit').toLowerCase(), reduce_only: false, algo_type: 'BRACKET',
+        created_at: b.root.created_time ? new Date(number(b.root.created_time)).toISOString() : null, ...bracketFields(b.root.algo_order_id) })),
       ...legs.map(l => ({ id: l.root_algo_order_id, order_id: l.root_algo_order_id, algo_order_id: l.algo_order_id, symbol: l.symbol,
         side: l.side === 'BUY' ? 'bid' : 'ask', amount: String(l.quantity || ''), price: String(l.trigger_price),
         trigger_price: String(l.trigger_price), stop_price: String(l.trigger_price), reduce_only: true, is_stop: true,
@@ -589,9 +624,92 @@ async function orderParams(input, actionId) {
   return params;
 }
 
+function cachedLeverage(creds, symbol) {
+  const hit = leverageCache.get(creds.accountId);
+  return hit && nowImpl() - hit.time < LEVERAGE_TTL_MS && Object.hasOwn(hit.map, symbol) ? hit.map[symbol] : undefined;
+}
+
+function rememberLeverage(creds, symbol, leverage) {
+  const hit = leverageCache.get(creds.accountId);
+  if (hit && nowImpl() - hit.time < LEVERAGE_TTL_MS) hit.map[symbol] = leverage;
+  else {
+    if (leverageCache.size >= 512) leverageCache.delete(leverageCache.keys().next().value);
+    leverageCache.set(creds.accountId, { map: { [symbol]: leverage }, time: nowImpl(), partial: true });
+  }
+}
+
+/** Run one load per key at a time; concurrent callers share the in-flight promise. */
+function dedupe(key, load) {
+  if (leverageLoads.has(key)) return leverageLoads.get(key);
+  const promise = load().finally(() => leverageLoads.delete(key));
+  leverageLoads.set(key, promise);
+  return promise;
+}
+
+/** All cross-margin leverage settings of the account ({ symbol: leverage }), cached for LEVERAGE_TTL_MS. */
+async function readLeverages(creds, options = {}) {
+  const hit = leverageCache.get(creds.accountId);
+  if (!options.force && hit && !hit.partial && nowImpl() - hit.time < LEVERAGE_TTL_MS) return hit.map;
+  return dedupe(`all:${creds.accountId}`, async () => {
+    const data = await request('GET', '/v1/client/leverages', { creds });
+    const map = {};
+    for (const row of Array.isArray(data?.rows) ? data.rows : []) {
+      if (row?.margin_mode && String(row.margin_mode).toUpperCase() !== 'CROSS') continue;
+      const value = number(row?.leverage);
+      if (SYMBOL.test(String(row?.symbol || '')) && value > 0) map[row.symbol] = value;
+    }
+    if (leverageCache.size >= 512) leverageCache.delete(leverageCache.keys().next().value);
+    leverageCache.set(creds.accountId, { map, time: nowImpl(), partial: false });
+    return map;
+  });
+}
+
+/** Bulk leverage map, or null while the bulk endpoint is failing (retried after LEVERAGE_TTL_MS). */
+async function bulkLeverages(creds) {
+  if (nowImpl() - (leverageBulkFailed.get(creds.accountId) ?? -Infinity) < LEVERAGE_TTL_MS) return null;
+  try { return await readLeverages(creds); } catch (error) {
+    if (error.code === 'THRONE_UNAUTHORIZED') throw error;
+    if (leverageBulkFailed.size >= 512) leverageBulkFailed.delete(leverageBulkFailed.keys().next().value);
+    leverageBulkFailed.set(creds.accountId, nowImpl());
+    return null;
+  }
+}
+
+/**
+ * Current leverage of one symbol, or null when unknown. Prefers the cached bulk read; the
+ * per-symbol endpoint (1 req/s per IP) is a de-duplicated fallback. A rate limit never
+ * fails the caller: the stale cached value (or null) is returned instead.
+ */
 async function readLeverage(creds, symbol) {
-  const data = await request('GET', '/v1/client/leverage', { creds, query: { symbol } });
-  return number(data?.leverage) || null;
+  const cached = cachedLeverage(creds, symbol);
+  if (cached !== undefined) return cached;
+  const all = await bulkLeverages(creds);
+  if (all && Object.hasOwn(all, symbol)) return all[symbol];
+  try {
+    const value = await dedupe(`one:${creds.accountId}:${symbol}`, async () => {
+      const data = await request('GET', '/v1/client/leverage', { creds, query: { symbol } });
+      return number(data?.leverage) || null;
+    });
+    if (value != null) rememberLeverage(creds, symbol, value);
+    return value;
+  } catch (error) {
+    if (error.code === 'THRONE_RATE_LIMITED') return leverageCache.get(creds.accountId)?.map?.[symbol] ?? null;
+    throw error;
+  }
+}
+
+function checkLeverage(market, value) {
+  const leverage = Number(value);
+  if (!Number.isInteger(leverage) || leverage < 1 || leverage > market.max_leverage) {
+    throw failure(`Leverage must be a whole number between 1 and ${market.max_leverage}`, 400, 'THRONE_LEVERAGE_INVALID');
+  }
+  return leverage;
+}
+
+async function writeLeverage(creds, symbol, leverage) {
+  await request('POST', '/v1/client/leverages', { creds, body: { symbol, leverage } });
+  rememberLeverage(creds, symbol, leverage);
+  snapshotCache.clear();
 }
 
 /** Per-symbol leverage (POST /v1/client/leverages, single-symbol mode). */
@@ -599,36 +717,97 @@ async function setLeverage(credsInput, input = {}, options = {}) {
   const creds = await resolveAccount(credsInput);
   if (options.playerId) claimAccount(options.playerId, creds);
   const symbol = symbolOf(input.symbol);
-  const market = await marketFor(symbol);
-  const leverage = Number(input.leverage);
-  if (!Number.isInteger(leverage) || leverage < 1 || leverage > market.max_leverage) {
-    throw failure(`Leverage must be a whole number between 1 and ${market.max_leverage}`, 400, 'THRONE_LEVERAGE_INVALID');
-  }
+  const leverage = checkLeverage(await marketFor(symbol), input.leverage);
   if (await readLeverage(creds, symbol) === leverage) return { success: true, unchanged: true, symbol, leverage, account_id: creds.accountId };
-  await request('POST', '/v1/client/leverages', { creds, body: { symbol, leverage } });
-  snapshotCache.clear();
+  await writeLeverage(creds, symbol, leverage);
   return { success: true, symbol, leverage, account_id: creds.accountId };
 }
 
+const present = value => value != null && value !== '' && Number(value) !== 0;
+
+/** Validate ticket TP/SL against a reference entry price (the limit price for a bracket). */
+function bracketLegs(params, market, takeProfit, stopLoss) {
+  const long = params.side === 'BUY', closeSide = long ? 'SELL' : 'BUY', entry = params.order_price;
+  const legs = [];
+  if (present(takeProfit)) {
+    const price = exactNumber(takeProfit, market.tick_size, null, null, 'Take profit');
+    if (long ? price <= entry : price >= entry) throw failure(`Take profit must be ${long ? 'above' : 'below'} the limit price (${entry}).`, 400, 'THRONE_TPSL_INVALID');
+    legs.push({ symbol: params.symbol, algo_type: 'TAKE_PROFIT', side: closeSide, type: 'CLOSE_POSITION', trigger_price_type: 'MARK_PRICE', trigger_price: price, reduce_only: true });
+  }
+  if (present(stopLoss)) {
+    const price = exactNumber(stopLoss, market.tick_size, null, null, 'Stop loss');
+    if (long ? price >= entry : price <= entry) throw failure(`Stop loss must be ${long ? 'below' : 'above'} the limit price (${entry}).`, 400, 'THRONE_TPSL_INVALID');
+    legs.push({ symbol: params.symbol, algo_type: 'STOP_LOSS', side: closeSide, type: 'CLOSE_POSITION', trigger_price_type: 'MARK_PRICE', trigger_price: price, reduce_only: true });
+  }
+  return legs;
+}
+
+/** TP/SL trigger prices carried by a BRACKET root (nested POSITIONAL_TP_SL / TP_SL children). */
+function bracketTargets(root) {
+  const found = { take_profit: null, stop_loss: null };
+  const visit = row => {
+    const type = String(row?.algo_type || '').toUpperCase();
+    if (type === 'TAKE_PROFIT' && positive(row.trigger_price) != null) found.take_profit = String(row.trigger_price);
+    if (type === 'STOP_LOSS' && positive(row.trigger_price) != null) found.stop_loss = String(row.trigger_price);
+    for (const child of Array.isArray(row?.child_orders) ? row.child_orders : []) visit(child);
+  };
+  visit(root);
+  return found;
+}
+
+// Market fills are reported asynchronously, so the position can lag the order response.
+const TPSL_ATTACH_DELAYS_MS = [0, 500, 1000, 2000];
+
 async function placeOrder(credsInput, input = {}, options = {}) {
   const creds = await resolveAccount(credsInput);
-  const params = await orderParams(input, input.actionId || input.idempotencyKey);
+  const actionId = input.actionId || input.idempotencyKey;
+  const params = await orderParams(input, actionId);
+  const takeProfit = input.takeProfit ?? input.take_profit, stopLoss = input.stopLoss ?? input.stop_loss;
+  const wantsTpsl = !params.reduce_only && (present(takeProfit) || present(stopLoss));
+  // A resting order cannot get a positional TP/SL before it fills (no position yet), so a
+  // LIMIT entry with TP/SL is sent as one BRACKET algo order (entry + POSITIONAL_TP_SL leg),
+  // https://orderly.network/docs/build-on-omnichain/user-flows/algo-order-samples#bracket
+  if (wantsTpsl && params.order_type === 'POST_ONLY') {
+    throw failure('Post-only orders cannot carry TP/SL on Throne. Use a regular limit order, or add TP/SL once the order fills.', 400, 'THRONE_TPSL_UNSUPPORTED');
+  }
+  const bracket = wantsTpsl && params.order_type === 'LIMIT';
+  const legs = bracket ? bracketLegs(params, await marketFor(params.symbol), takeProfit, stopLoss) : null;
   if (input.leverage != null && input.leverage !== '' && !params.reduce_only) {
     // Orderly applies leverage per symbol; align it before the order (not an order itself).
     const wanted = Math.round(Number(input.leverage));
     if (Number.isFinite(wanted) && wanted >= 1 && await readLeverage(creds, params.symbol) !== wanted) {
-      await setLeverage(creds, { symbol: params.symbol, leverage: wanted }, options);
+      if (options.playerId) claimAccount(options.playerId, creds);
+      await writeLeverage(creds, params.symbol, checkLeverage(await marketFor(params.symbol), wanted));
     }
+  }
+  if (bracket) {
+    const body = { symbol: params.symbol, algo_type: 'BRACKET', client_order_id: params.client_order_id, quantity: params.order_quantity,
+      side: params.side, type: 'LIMIT', price: params.order_price,
+      child_orders: [{ symbol: params.symbol, algo_type: 'POSITIONAL_TP_SL', child_orders: legs }] };
+    const result = await executeAction(creds, input, options, 'bracket_order', body, () => request('POST', '/v1/algo/order', { creds, body }));
+    const targets = bracketTargets(body);
+    return { ...result, bracket: true, tpsl: { attached: 'bracket', take_profit: targets.take_profit, stop_loss: targets.stop_loss } };
   }
   const result = await executeAction(creds, input, options, 'add_order', params,
     () => request('POST', '/v1/order', { creds, body: params }));
-  // Optional TP/SL attached by the ticket: a positional TP/SL once the position exists.
-  const takeProfit = input.takeProfit ?? input.take_profit, stopLoss = input.stopLoss ?? input.stop_loss;
-  if (!result.replayed && !params.reduce_only && ((takeProfit != null && takeProfit !== '') || (stopLoss != null && stopLoss !== ''))) {
-    try {
-      result.tpsl = await setTpsl(creds, { symbol: params.symbol, actionId: deriveActionId(input.actionId || input.idempotencyKey, 'attach'),
-        ...(takeProfit != null && takeProfit !== '' ? { takeProfit } : {}), ...(stopLoss != null && stopLoss !== '' ? { stopLoss } : {}) }, options);
-    } catch (error) { result.tpsl_error = error.message; }
+  // Market / IOC / FOK: positional TP/SL once the position exists, retried briefly while the fill lands.
+  if (!result.replayed && wantsTpsl) {
+    const tpslInput = { symbol: params.symbol, actionId: deriveActionId(actionId, 'attach'),
+      ...(present(takeProfit) ? { takeProfit } : {}), ...(present(stopLoss) ? { stopLoss } : {}) };
+    for (let attempt = 0; attempt < TPSL_ATTACH_DELAYS_MS.length; attempt++) {
+      if (TPSL_ATTACH_DELAYS_MS[attempt] > 0) await sleepImpl(TPSL_ATTACH_DELAYS_MS[attempt]);
+      try {
+        result.tpsl = await setTpsl(creds, tpslInput, options);
+        delete result.tpsl_error; delete result.tpsl_error_code;
+        break;
+      } catch (error) {
+        result.tpsl_error = error.code === 'THRONE_NO_POSITION'
+          ? 'The order was accepted but no filled position was found yet, so TP/SL was not set. Set TP/SL on the position once it appears.'
+          : `TP/SL was not set: ${error.message}`;
+        result.tpsl_error_code = error.code || null;
+        if (error.code !== 'THRONE_NO_POSITION') break;
+      }
+    }
   }
   return result;
 }
@@ -735,24 +914,73 @@ async function getActionStatus(credsInput, actionId, options = {}) {
   claimAccount(options.playerId, creds);
   const row = database().prepare('SELECT * FROM throne_action_intents WHERE account_id=? AND player_id=? AND action_id=?')
     .get(creds.accountId, String(options.playerId), actionId);
-  if (!row) throw failure('Throne action not found', 404, 'THRONE_ACTION_NOT_FOUND', { account_id: creds.accountId });
-  const response = { action_id: actionId, account_id: creds.accountId, status: row.status, can_resubmit: false };
-  if (!['unknown', 'pending'].includes(row.status) || row.kind !== 'add_order') {
+  const response = { action_id: actionId, account_id: creds.accountId, status: row?.status, can_resubmit: false };
+  if (!row) {
+    // Composite actions (TP/SL replace: cancel + place) record each step under a derived id.
+    const steps = [1, 2, 3, 4].map(step => database().prepare('SELECT * FROM throne_action_intents WHERE account_id=? AND player_id=? AND action_id=?')
+      .get(creds.accountId, String(options.playerId), deriveActionId(actionId, step))).filter(Boolean);
+    if (!steps.length) throw failure('Throne action not found', 404, 'THRONE_ACTION_NOT_FOUND', { account_id: creds.accountId });
+    const states = [];
+    for (const step of steps) {
+      states.push(['unknown', 'pending'].includes(step.status) ? await reconcileIntent(creds, step)
+        : { status: step.status, result: step.result_json ? JSON.parse(step.result_json) : null });
+    }
+    const status = ['manual_review', 'unknown', 'pending', 'rejected'].find(s => states.some(state => state.status === s)) || 'reconciled';
+    const reason = states.find(state => state.reason)?.reason;
+    return { ...response, status, ...(reason ? { reason } : {}),
+      steps: states.map((state, i) => ({ kind: steps[i].kind, status: state.status })), result: { steps: states.map(state => state.result ?? null) } };
+  }
+  if (!['unknown', 'pending'].includes(row.status)) {
     return { ...response, result: row.result_json ? JSON.parse(row.result_json) : null };
   }
-  // Orderly indexes orders by our client_order_id (= action UUID): read it, never resend.
-  let order = null;
-  try { order = await request('GET', `/v1/client/order/${encodeURIComponent(row.client_order_id)}`, { creds }); }
-  catch (error) { if (error.code !== 'THRONE_NOT_FOUND') throw error; }
-  if (!order?.order_id) return { ...response, status: 'unknown' };
+  return { ...response, ...(await reconcileIntent(creds, row)) };
+}
+
+const OPEN_ORDER_STATUS = new Set(['NEW', 'PARTIAL_FILLED']);
+
+async function readOptional(creds, path) {
+  try { return await request('GET', path, { creds }); }
+  catch (error) { if (error.code === 'THRONE_NOT_FOUND') return null; throw error; }
+}
+
+/**
+ * Reconcile one pending/unknown intent with Orderly. Read-only: nothing is ever resent.
+ * Orders are found by our client_order_id (= action UUID; GET /v1/client/order/{id} or
+ * /v1/algo/client/order/{id}); cancels by reading the target order's current status
+ * (GET /v1/order/{id} or /v1/algo/order/{id}).
+ */
+async function reconcileIntent(creds, row) {
   const params = JSON.parse(row.params_json || '{}');
-  const exact = order.symbol === params.symbol && order.side === params.side
-    && new BigNumber(String(order.quantity)).eq(params.order_quantity);
-  if (!exact) return { ...response, status: 'manual_review', reason: 'Order parameters do not match the intent' };
-  const result = { success: true, order_id: String(order.order_id), status: order.status, action_id: actionId,
-    account_id: creds.accountId, broker_id: BROKER_ID, reconciled: true, broker_attributed: true };
-  finishAction(row, 'reconciled', result);
-  return { ...response, status: 'reconciled', result };
+  const done = (status, result) => { finishAction(row, status, result); return { status, result }; };
+  const base = { action_id: row.action_id, account_id: creds.accountId, broker_id: BROKER_ID, reconciled: true };
+  if (['add_order', 'bracket_order', 'algo_order'].includes(row.kind)) {
+    const algo = row.kind !== 'add_order';
+    if (!row.client_order_id) return { status: 'unknown' };
+    const found = await readOptional(creds, `${algo ? '/v1/algo/client/order/' : '/v1/client/order/'}${encodeURIComponent(row.client_order_id)}`);
+    const id = algo ? found?.algo_order_id : found?.order_id;
+    if (id == null) return { status: 'unknown' };
+    const quantity = row.kind === 'add_order' ? params.order_quantity : params.quantity;
+    const exact = found.symbol === params.symbol && (row.kind === 'algo_order'
+      ? String(found.algo_type || '').toUpperCase() === String(params.algo_type || '').toUpperCase()
+      : String(found.side).toUpperCase() === params.side && new BigNumber(String(found.quantity)).eq(String(quantity)));
+    if (!exact) return { status: 'manual_review', reason: 'Order parameters do not match the intent' };
+    return done('reconciled', { ...base, success: true, order_id: String(id), status: algo ? found.algo_status ?? null : found.status,
+      broker_attributed: true });
+  }
+  if (row.kind === 'cancel_order' || row.kind === 'cancel_algo_order') {
+    const algo = row.kind === 'cancel_algo_order';
+    const found = await readOptional(creds, `${algo ? '/v1/algo/order/' : '/v1/order/'}${encodeURIComponent(params.order_id)}`);
+    const state = String((algo ? found?.algo_status ?? found?.status : found?.status) || '').toUpperCase();
+    if (found && !state) return { status: 'unknown' };
+    // Still open: the cancel did not take effect. Re-cancelling is harmless, so this is
+    // settled as rejected and the user may cancel again.
+    if (OPEN_ORDER_STATUS.has(state)) {
+      return done('rejected', { error: 'The order is still open; the cancel did not take effect. You can cancel it again.',
+        code: 'THRONE_CANCEL_NOT_APPLIED', order_status: state });
+    }
+    return done('reconciled', { ...base, success: true, order_id: String(params.order_id), status: state || 'NOT_FOUND' });
+  }
+  return { status: row.status };
 }
 
 // ------------------------------------------------------------------ history and reward proof
@@ -766,24 +994,71 @@ function normalizeTrade(t) {
     created_at: ts > 0 ? new Date(ts).toISOString() : null, _raw: t };
 }
 
+/**
+ * Label fills as opens or closes. Orderly's /v1/trades rows carry no reduce_only or position
+ * fields, so each symbol's position is walked backwards from its current size (newest fill
+ * first): a fill that moves the position toward zero is a close. Fills of our own
+ * reduce-only orders are always closes.
+ */
+function labelTradeSides(trades, positionRows = [], reduceOnlyOrderIds = new Set(), reduceOnlyOnly = false) {
+  if (reduceOnlyOnly) {
+    for (const trade of trades) if (reduceOnlyOrderIds.has(trade.order_id)) trade.side = trade._raw.side === 'BUY' ? 'close_short' : 'close_long';
+    return trades;
+  }
+  const position = new Map(positionRows.map(p => [p.symbol, new BigNumber(String(p.position_qty ?? 0))]));
+  const newestFirst = [...trades].sort((a, b) => number(b._raw.executed_timestamp) - number(a._raw.executed_timestamp)
+    || number(b._raw.id) - number(a._raw.id));
+  for (const trade of newestFirst) {
+    const signed = new BigNumber(trade.amount).times(trade._raw.side === 'BUY' ? 1 : -1);
+    if (!signed.isFinite()) continue;
+    const after = position.get(trade.symbol) || new BigNumber(0);
+    const before = after.minus(signed);
+    position.set(trade.symbol, before);
+    const reducing = !before.isZero() && before.isNegative() !== signed.isNegative();
+    if (reducing || reduceOnlyOrderIds.has(trade.order_id)) trade.side = signed.isNegative() ? 'close_long' : 'close_short';
+  }
+  return trades;
+}
+
 async function getTradeHistory(credsInput, options = {}) {
   const creds = await resolveAccount(credsInput);
   if (options.playerId) claimAccount(options.playerId, creds);
   const size = Math.max(1, Math.min(500, Math.floor(Number(options.limit) || 100)));
   const query = { size, page: 1, ...(options.symbol ? { symbol: symbolOf(options.symbol) } : {}) };
-  const data = await request('GET', '/v1/trades', { creds, query });
-  return (data?.rows || []).map(normalizeTrade);
+  const [data, positionData] = await Promise.all([request('GET', '/v1/trades', { creds, query }),
+    request('GET', '/v1/positions', { creds }).catch(() => null)]);
+  const trades = (data?.rows || []).map(normalizeTrade);
+  const reduceOnly = new Set();
+  if (options.playerId) {
+    for (const row of database().prepare(`SELECT order_id, params_json FROM throne_action_intents
+      WHERE account_id=? AND player_id=? AND kind='add_order' AND order_id IS NOT NULL`).all(creds.accountId, String(options.playerId))) {
+      try { if (JSON.parse(row.params_json || '{}').reduce_only === true) reduceOnly.add(String(row.order_id)); } catch { /* ignore */ }
+    }
+  }
+  // Without the current positions the walk has no anchor; only our reduce-only orders are labelled.
+  return labelTradeSides(trades, positionData ? positionData.rows || [] : [], reduceOnly, !positionData);
+}
+
+/** Order parameters of an add_order or bracket_order intent in the add_order shape. */
+function intentOrderParams(intent) {
+  const params = JSON.parse(intent.params_json || '{}');
+  if (intent.kind !== 'bracket_order') return params;
+  return { symbol: params.symbol, side: params.side, order_type: 'LIMIT', order_quantity: params.quantity,
+    order_price: params.price, reduce_only: false, bracket: true };
 }
 
 /**
  * Reward proof (same model as QFEX): a fill is credited only if it belongs to an order we
- * placed ourselves (accepted/reconciled add_order intent carrying Orderly's order_id) on an
- * account registered under broker `throne`, read from Orderly's per-order trade feed
- * (GET /v1/order/{order_id}/trades), with the same symbol and side and a size that never
+ * placed ourselves (accepted/reconciled add_order or bracket_order intent carrying Orderly's
+ * order id) on an account registered under broker `throne`, read from Orderly's per-order trade
+ * feed (GET /v1/order/{order_id}/trades, or GET /v1/algo/order/{order_id}/trades for a
+ * bracket), with the same symbol and side and a size that never
  * exceeds the order quantity. Fills of orders placed elsewhere are never looked up.
  */
 function verifyFill(intent, params, trade, alreadyFilled) {
-  if (trade.order_id !== String(intent.order_id)) return 'foreign_order';
+  // Bracket fills come from Orderly's per-algo-order feed (GET /v1/algo/order/{id}/trades);
+  // they carry the id of the regular order the bracket triggered, not the algo id.
+  if (intent.kind !== 'bracket_order' && trade.order_id !== String(intent.order_id)) return 'foreign_order';
   if (trade.symbol !== params.symbol || trade._raw.side !== params.side) return 'mismatch';
   const qty = new BigNumber(trade.amount);
   if (!qty.isFinite() || qty.lte(0) || !(number(trade.price) > 0)) return 'invalid';
@@ -799,16 +1074,17 @@ async function importTradesForPlayer(playerId, credsInput, options = {}) {
   const maxOrders = Math.max(1, Math.min(40, Math.floor(Number(options.maxOrders) || 25)));
   const since = new Date(nowImpl() - 30 * 86400000).toISOString().replace('T', ' ').slice(0, 19);
   const intents = db.prepare(`SELECT * FROM throne_action_intents
-    WHERE account_id=? AND player_id=? AND kind='add_order' AND status IN ('accepted','reconciled')
+    WHERE account_id=? AND player_id=? AND kind IN ('add_order','bracket_order') AND status IN ('accepted','reconciled')
       AND order_id IS NOT NULL AND fills_done=0 AND broker_id='throne' AND created_at >= ?
     ORDER BY last_checked_at ASC, created_at ASC LIMIT ?`).all(creds.accountId, String(playerId), since, maxOrders);
   let imported = 0, updated = 0, skipped = 0, total = 0, checked = 0;
   const rejected = {};
   for (const intent of intents) {
-    const params = JSON.parse(intent.params_json || '{}');
+    const params = intentOrderParams(intent);
+    const prefix = intent.kind === 'bracket_order' ? '/v1/algo/order/' : '/v1/order/';
     const [fills, order] = await Promise.all([
-      request('GET', `/v1/order/${encodeURIComponent(intent.order_id)}/trades`, { creds }),
-      request('GET', `/v1/order/${encodeURIComponent(intent.order_id)}`, { creds }).catch(() => null)]);
+      request('GET', `${prefix}${encodeURIComponent(intent.order_id)}/trades`, { creds }),
+      request('GET', `${prefix}${encodeURIComponent(intent.order_id)}`, { creds }).catch(() => null)]);
     checked++;
     let filled = new BigNumber(0);
     const seen = new Set();
@@ -828,13 +1104,13 @@ async function importTradesForPlayer(playerId, credsInput, options = {}) {
           action_id: intent.action_id, order_id: String(intent.order_id), params, fill: trade._raw }) });
       imported += Number(result.inserted || 0); updated += Number(result.updated || 0);
     }
-    const terminal = TERMINAL_ORDER_STATUS.has(String(order?.status || '').toUpperCase());
+    const terminal = TERMINAL_ORDER_STATUS.has(String(order?.algo_status ?? order?.status ?? '').toUpperCase());
     db.prepare(`UPDATE throne_action_intents SET fills_done=?, filled_quantity=?, last_checked_at=?
       WHERE account_id=? AND player_id=? AND action_id=?`).run(terminal ? 1 : 0, filled.toFixed(), nowImpl(),
       intent.account_id, intent.player_id, intent.action_id);
   }
   const pending = db.prepare(`SELECT COUNT(*) AS n FROM throne_action_intents WHERE account_id=? AND player_id=?
-    AND kind='add_order' AND status IN ('accepted','reconciled') AND order_id IS NOT NULL AND fills_done=0`).get(creds.accountId, String(playerId)).n;
+    AND kind IN ('add_order','bracket_order') AND status IN ('accepted','reconciled') AND order_id IS NOT NULL AND fills_done=0`).get(creds.accountId, String(playerId)).n;
   return { ok: true, account_id: creds.accountId, broker_id: BROKER_ID, imported, updated, skipped, total, checked,
     rejected, has_more: pending > checked, pending_orders: pending, reward_eligible: true };
 }
@@ -887,10 +1163,12 @@ function setTestDependencies(options = {}) {
   databaseOverride = options.database || null;
   timeoutMs = options.timeoutMs || 12000;
   nowImpl = options.now || (() => Date.now());
+  sleepImpl = options.sleep || (ms => new Promise(resolve => setTimeout(resolve, ms)));
   marketCache = null; marketLoad = null; chainCache = null; relayLimiter.clear(); accountCache.clear(); snapshotCache.clear(); boardCache.clear();
+  leverageCache.clear(); leverageLoads.clear(); leverageBulkFailed.clear();
 }
 
 module.exports = { API_ORIGIN, BROKER_ID, VERIFIED_SOURCE, credentials, decodeSecret, orderlyKeyFromSecret, computeAccountId,
   signRequest, request, mapOrderlyError, configStatus, normalizeMarket, getMarkets, getPrices, getCandles, getOrderbook,
   getOnboardingStatus, getRegistrationNonce, supportedChains, registerAccount, addOrderlyKey, resolveAccount, getAccountSnapshot, placeOrder, cancelOrder, closePosition, setLeverage, setTpsl,
-  getActionStatus, getTradeHistory, importTradesForPlayer, verifyFill, getStanding, ensureSchema, setTestDependencies, symbolOf };
+  getActionStatus, getTradeHistory, importTradesForPlayer, verifyFill, labelTradeSides, getStanding, ensureSchema, setTestDependencies, symbolOf };

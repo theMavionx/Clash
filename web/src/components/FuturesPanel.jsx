@@ -181,7 +181,9 @@ const DEX_ERROR_LABELS = {
   bulk: 'Bulk',
   imperial: 'Imperial',
 };
-const OPEN_TPSL_NATIVE_ORDER_ATTACH_DEXES = new Set(['qfex', 'avantis', 'domfi', 'etoro', 'bulk', 'decibel', 'flash', 'gmx', 'hibachi', 'hotstuff', 'hyperliquid', 'imperial', 'katana', 'lighter', 'rhlighter', 'nado', 'ondo', 'ostium', 'pacifica']);
+// throne: the server attaches TP/SL itself (BRACKET algo order for limits, positional TP/SL
+// after a market fill) and reports failures as result.tpsl_error.
+const OPEN_TPSL_NATIVE_ORDER_ATTACH_DEXES = new Set(['throne', 'qfex', 'avantis', 'domfi', 'etoro', 'bulk', 'decibel', 'flash', 'gmx', 'hibachi', 'hotstuff', 'hyperliquid', 'imperial', 'katana', 'lighter', 'rhlighter', 'nado', 'ondo', 'ostium', 'pacifica']);
 const OPEN_TPSL_NATIVE_LIMIT_ATTACH_DEXES = new Set([...OPEN_TPSL_NATIVE_ORDER_ATTACH_DEXES, 'grvt', 'leverup', 'phoenix']);
 const OPEN_TPSL_POST_MARKET_DEXES = new Set([
   'throne',
@@ -5371,6 +5373,11 @@ function FuturesPanel() {
       }
       if (result && !result.error) {
         let tpslWarning = '';
+        // Venues that attach TP/SL themselves report a failed attach next to an accepted order.
+        if (attachedTpsl?.hasTpsl && result.tpsl_error) {
+          tpslWarning = ` TP/SL not set: ${String(result.tpsl_error).replace(/^TP\/SL was not set:\s*/u, '')}`;
+          setLocalAlert(tpslWarning.trim());
+        }
         const shouldPostAttachTpsl = attachedTpsl?.hasTpsl
           && orderType === 'market'
           && !OPEN_TPSL_NATIVE_ORDER_ATTACH_DEXES.has(dex)
@@ -10711,7 +10718,11 @@ function FuturesPanel() {
       <div>Equity: ${Number(account?.equity || 0).toFixed(2)}</div>
       <div>Free collateral: ${Number(account?.free_collateral || 0).toFixed(2)}</div>
       <div>USDC holding: ${Number(account?.usdc || 0).toFixed(2)}</div>
-      {throneHook.pendingAction && <div role="alert">A Throne action is awaiting confirmation ({throneHook.pendingAction.status || 'unknown'}). New requests are blocked until its outcome is confirmed. <button style={S.btnSmall} onClick={() => throneHook.reconcilePending().catch(reason => setLocalAlert(reason.message))}>Check outcome</button></div>}
+      {throneHook.pendingAction && <div role="alert">A Throne action is awaiting confirmation ({throneHook.pendingAction.status || 'unknown'}{throneHook.pendingAction.reason ? `: ${throneHook.pendingAction.reason}` : ''}). New requests are blocked until its outcome is confirmed. <button style={S.btnSmall} onClick={() => throneHook.reconcilePending().catch(reason => setLocalAlert(reason.message))}>Check outcome</button>{' '}
+        <button style={S.btnSmall} onClick={async () => {
+          if (!window.confirm('Check your Throne positions and open orders first. Dismissing does not resend or cancel anything; it only unblocks new actions. Dismiss?')) return;
+          try { const r = await throneHook.dismissPendingAction(); if (r?.dismissed) setLocalAlert('Pending Throne action dismissed. Positions and orders were refreshed; review them before trading.'); } catch (reason) { setLocalAlert(reason.message); }
+        }}>I checked my positions, dismiss</button></div>}
       <p>Deposit and withdraw USDC on <a href="https://throne.network" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--terminal-orange)' }}>throne.network</a>. Balances update here automatically.</p>
       <p>Gold, tasks and tournaments use verified fills of orders placed here.</p>
       <ThroneStandingCard address={account?.address} token={window._playerToken} />

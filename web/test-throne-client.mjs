@@ -10,7 +10,7 @@ import { recoverTypedDataAddress } from 'viem';
 import {
   ORDERLY_EIP712_TYPES, ORDERLY_OFFCHAIN_VERIFYING_CONTRACT, buildRegistrationTypedData, buildAddOrderlyKeyTypedData,
   computeThroneAccountId, generateOrderlyKeyPair, orderlyKeyFromSecret, signOrderlyRequest, chooseSigningChain, onboardThrone,
-  orderlyDomain, ROBINHOOD_CHAIN_ID,
+  orderlyDomain, ROBINHOOD_CHAIN_ID, throneOrderNotice,
 } from './src/lib/throneOrderly.js';
 
 const ADDRESS = '0x38c8af2baf91998349f0b291fad7301af5a6541e';
@@ -75,11 +75,21 @@ test('account id matches Orderly for broker throne', () => {
   assert.equal(computeThroneAccountId(ADDRESS.toUpperCase().replace('0X', '0x')), ACCOUNT);
 });
 
-test('signing chain prefers Robinhood Chain when Orderly lists it', () => {
+test('signing chain prefers the wallet chain when the broker supports it, else Robinhood Chain', () => {
+  assert.equal(chooseSigningChain([{ chain_id: 42161 }, { chain_id: 4663 }], 42161), 42161);
+  assert.equal(chooseSigningChain([{ chain_id: 42161 }, { chain_id: 4663 }], '42161'), 42161);
   assert.equal(chooseSigningChain([{ chain_id: 42161 }, { chain_id: 4663 }], 8453), ROBINHOOD_CHAIN_ID);
+  assert.equal(chooseSigningChain([{ chain_id: 42161 }, { chain_id: 4663 }], null), ROBINHOOD_CHAIN_ID);
   assert.equal(chooseSigningChain([{ chain_id: 42161 }, { chain_id: 8453 }], 8453), 8453);
   assert.equal(chooseSigningChain([{ chain_id: 42161 }, { chain_id: 10 }], 1), 42161);
   assert.throws(() => chooseSigningChain([], 1));
+});
+
+test('order notice surfaces a TP/SL attach failure next to the accepted order', () => {
+  const failed = throneOrderNotice({ success: true, order_id: '1', tpsl_error: 'TP/SL was not set: no position' });
+  assert.equal(failed.warning, 'TP/SL was not set: no position');
+  assert.match(throneOrderNotice({ success: true, bracket: true, tpsl: {} }).info, /TP\/SL/u);
+  assert.equal(throneOrderNotice({ success: true }).warning, '');
 });
 
 test('one-tap onboarding registers when needed, then binds a read,trading key', async () => {

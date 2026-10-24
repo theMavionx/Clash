@@ -40,7 +40,17 @@ function fakeOrderly(overrides = {}) {
     if (p === '/v1/public/chain_info') return ok({ rows: [{ chain_id: '4663', name: 'Robinhood Chain', broker_ids: ['throne'] }, { chain_id: '42161', name: 'Arbitrum', broker_ids: ['throne'] }] });
     if (p === '/v1/get_account') return state.registeredAccount ? ok({ account_id: state.registeredAccount, user_id: 1 }) : fail(400, -1607, 'Account not found.');
     if (p === '/v1/client/info') return state.unauthorized ? fail(401, -1002, 'orderly key error') : ok({ account_id: state.clientInfoAccount, max_leverage: 20, futures_taker_fee_rate: 6 });
-    if (p === '/v1/client/leverage') return ok({ symbol: u.searchParams.get('symbol'), leverage: state.leverage });
+    if (p === '/v1/client/leverage') return state.singleLeverageLimited ? fail(429, null, 'too many requests') : ok({ symbol: u.searchParams.get('symbol'), leverage: state.leverage });
+    if (p === '/v1/client/leverages' && method === 'GET') {
+      return state.bulkLeverages ? ok({ rows: state.bulkLeverages.map(row => ({ margin_mode: 'CROSS', ...row })) }) : fail(404, null, 'path not found');
+    }
+    if (p === '/v1/trades') return ok({ meta: { total: (state.trades || []).length }, rows: state.trades || [] });
+    let a = p.match(/^\/v1\/algo\/client\/order\/(.+)$/u);
+    if (a) return state.algoByClient?.[a[1]] ? ok(state.algoByClient[a[1]]) : fail(400, -1006, 'not found');
+    a = p.match(/^\/v1\/algo\/order\/(\d+)\/trades$/u);
+    if (a) return ok({ rows: state.algoFills?.[a[1]] || [] });
+    a = p.match(/^\/v1\/algo\/order\/(\d+)$/u);
+    if (a) return state.algoById?.[a[1]] ? ok(state.algoById[a[1]]) : fail(400, -1006, 'not found');
     if (p === '/v1/client/leverages' && method === 'POST') { state.leverage = body.leverage; return ok({ symbol: body.symbol, leverage: body.leverage }); }
     if (p === '/v1/client/holding') return ok({ holding: [{ token: 'USDC', holding: 250, frozen: 0 }] });
     if (p === '/v1/positions') return ok({ free_collateral: 200, total_collateral_value: 250, account_value: 255, rows: state.positions });
@@ -59,7 +69,7 @@ function fakeOrderly(overrides = {}) {
     let m = p.match(/^\/v1\/order\/(\d+)\/trades$/u);
     if (m) return ok({ rows: state.fills[m[1]] || [] });
     m = p.match(/^\/v1\/order\/(\d+)$/u);
-    if (m) return ok({ order_id: Number(m[1]), status: state.orderStatusById?.[m[1]] || 'FILLED' });
+    if (m) return state.orderStatusById?.[m[1]] === null ? fail(400, -1006, 'not found') : ok({ order_id: Number(m[1]), status: state.orderStatusById?.[m[1]] || 'FILLED' });
     m = p.match(/^\/v1\/client\/order\/(.+)$/u);
     if (m) { const found = [...state.orders.values()].find(o => o.client_order_id === m[1]) || state.clientOrder;
       return found ? ok({ order_id: found.order_id, symbol: found.symbol, side: found.side, quantity: found.order_quantity, status: 'FILLED' }) : fail(400, -1006, 'not found'); }
@@ -71,7 +81,9 @@ function fakeOrderly(overrides = {}) {
 function setup(overrides) {
   const db = new Database(':memory:'); dbs.push(db);
   const orderly = fakeOrderly(overrides);
-  throne.setTestDependencies({ fetch: orderly.fetch, database: db, now: () => NOW });
+  orderly.state.sleeps = [];
+  throne.setTestDependencies({ fetch: orderly.fetch, database: db, now: () => NOW,
+    sleep: async ms => { orderly.state.sleeps.push(ms); orderly.state.onSleep?.(orderly.state); } });
   return { db, ...orderly };
 }
 
@@ -146,9 +158,137 @@ test('market and limit order payloads, intent recorded with Orderly order id, re
 test('leverage is aligned per symbol before an order', async () => {
   const { state } = setup({ leverage: 5 });
   await throne.placeOrder(CREDS, { symbol: 'ETH', side: 'bid', amount: '0.01', leverage: 12, actionId: ACTION }, { playerId: PLAYER });
-  const set = state.calls.find(c => c.path === '/v1/client/leverages');
+  const set = state.calls.find(c => c.method === 'POST' && c.path === '/v1/client/leverages');
   assert.deepEqual(set.body, { symbol: 'PERP_ETH_USDC', leverage: 12 });
+  // One leverage read per order, never a second one inside the leverage update.
+  assert.equal(state.calls.filter(c => c.method === 'GET' && c.path === '/v1/client/leverage').length, 1);
   await assert.rejects(throne.setLeverage(CREDS, { symbol: 'ETH', leverage: 80 }, { playerId: PLAYER }), e => e.code === 'THRONE_LEVERAGE_INVALID');
+});
+
+test('leverage reads use the cached bulk endpoint and survive the per-IP rate limit', async () => {
+  const { state } = setup({ bulkLeverages: [{ symbol: 'PERP_ETH_USDC', leverage: 7 }, { symbol: 'PERP_BTC_USDC', leverage: 3, margin_mode: 'ISOLATED' }] });
+  const snap = await throne.getAccountSnapshot(CREDS, { playerId: PLAYER });
+  // Leverage for symbols without a position comes from GET /v1/client/leverages (cross only).
+  assert.deepEqual(snap.leverage, { PERP_ETH_USDC: 7 });
+  await Promise.all([
+    throne.setLeverage(CREDS, { symbol: 'ETH', leverage: 7 }, { playerId: PLAYER }),
+    throne.placeOrder(CREDS, { symbol: 'ETH', side: 'bid', amount: '0.01', leverage: 7, actionId: ACTION }, { playerId: PLAYER })]);
+  assert.equal(state.calls.filter(c => c.method === 'GET' && c.path === '/v1/client/leverages').length, 1);
+  assert.equal(state.calls.filter(c => c.path === '/v1/client/leverage').length, 0);
+  assert.equal(state.calls.filter(c => c.method === 'POST' && c.path === '/v1/client/leverages').length, 0);
+  // A write refreshes the cache, so the next order does not read again.
+  await throne.setLeverage(CREDS, { symbol: 'ETH', leverage: 9 }, { playerId: PLAYER });
+  await throne.placeOrder(CREDS, { symbol: 'ETH', side: 'bid', amount: '0.01', leverage: 9, actionId: ACTION2 }, { playerId: PLAYER });
+  assert.equal(state.calls.filter(c => c.method === 'POST' && c.path === '/v1/client/leverages').length, 1);
+  assert.equal(state.calls.filter(c => c.method === 'GET' && c.path === '/v1/client/leverages').length, 1);
+
+  // Bulk endpoint unavailable and the single read rate limited: the order still goes out.
+  const ctx = setup({ singleLeverageLimited: true });
+  await throne.placeOrder(CREDS, { symbol: 'ETH', side: 'bid', amount: '0.01', leverage: 4, actionId: ACTION }, { playerId: PLAYER });
+  assert.deepEqual(ctx.state.calls.find(c => c.method === 'POST' && c.path === '/v1/client/leverages').body, { symbol: 'PERP_ETH_USDC', leverage: 4 });
+  assert.equal(ctx.state.calls.filter(c => c.method === 'POST' && c.path === '/v1/order').length, 1);
+});
+
+test('limit order with TP/SL is one BRACKET algo order; post-only with TP/SL is refused', async () => {
+  const { state, db } = setup();
+  const result = await throne.placeOrder(CREDS, { symbol: 'ETH', side: 'bid', amount: '0.02', price: '1900', orderType: 'limit',
+    timeInForce: 'GTC', takeProfit: '2100', stopLoss: '1800', actionId: ACTION }, { playerId: PLAYER });
+  assert.ok(!state.calls.some(c => c.method === 'POST' && c.path === '/v1/order'));
+  const body = state.calls.find(c => c.method === 'POST' && c.path === '/v1/algo/order').body;
+  assert.deepEqual(body, { symbol: 'PERP_ETH_USDC', algo_type: 'BRACKET', client_order_id: ACTION, quantity: 0.02, side: 'BUY', type: 'LIMIT', price: 1900,
+    child_orders: [{ symbol: 'PERP_ETH_USDC', algo_type: 'POSITIONAL_TP_SL', child_orders: [
+      { symbol: 'PERP_ETH_USDC', algo_type: 'TAKE_PROFIT', side: 'SELL', type: 'CLOSE_POSITION', trigger_price_type: 'MARK_PRICE', trigger_price: 2100, reduce_only: true },
+      { symbol: 'PERP_ETH_USDC', algo_type: 'STOP_LOSS', side: 'SELL', type: 'CLOSE_POSITION', trigger_price_type: 'MARK_PRICE', trigger_price: 1800, reduce_only: true }] }] });
+  assert.equal(result.bracket, true); assert.equal(result.tpsl_error, undefined); assert.equal(result.order_id, '77');
+  assert.equal(db.prepare('SELECT kind FROM throne_action_intents WHERE action_id=?').get(ACTION).kind, 'bracket_order');
+  await assert.rejects(throne.placeOrder(CREDS, { symbol: 'ETH', side: 'bid', amount: '0.02', price: '1900', orderType: 'limit',
+    takeProfit: '1850', actionId: ACTION2 }, { playerId: PLAYER }), e => e.code === 'THRONE_TPSL_INVALID');
+  await assert.rejects(throne.placeOrder(CREDS, { symbol: 'ETH', side: 'bid', amount: '0.02', price: '1900', orderType: 'limit', timeInForce: 'ALO',
+    takeProfit: '2100', actionId: '33333333-3333-4333-8333-333333333333' }, { playerId: PLAYER }), e => e.code === 'THRONE_TPSL_UNSUPPORTED');
+  // Bracket fills are read from the algo order's own trade feed and credited once.
+  state.algoFills = { 77: [fill(1, 5001, 0.02), fill(2, 5002, 0.02, { side: 'SELL' })] };
+  state.algoById = { 77: { algo_order_id: 77, algo_status: 'FILLED', algo_type: 'BRACKET' } };
+  const ledger = fakeLedger();
+  const imported = await throne.importTradesForPlayer(PLAYER, CREDS, { ledger });
+  assert.equal(imported.imported, 1); assert.deepEqual(imported.rejected, { mismatch: 1 });
+  assert.ok(state.calls.some(c => c.path === '/v1/algo/order/77/trades'));
+  assert.equal(db.prepare('SELECT fills_done FROM throne_action_intents WHERE action_id=?').get(ACTION).fills_done, 1);
+});
+
+test('bracket entries show as cancellable orders and do not masquerade as position TP/SL', async () => {
+  setup({ positions: [{ symbol: 'PERP_ETH_USDC', position_qty: 0.5, average_open_price: 1900, mark_price: 2000 }],
+    algos: [{ algo_order_id: 77, algo_type: 'BRACKET', symbol: 'PERP_ETH_USDC', side: 'BUY', type: 'LIMIT', price: 1850, quantity: 0.02, total_executed_quantity: 0,
+      child_orders: [{ algo_order_id: 78, algo_type: 'POSITIONAL_TP_SL', symbol: 'PERP_ETH_USDC', child_orders: [
+        { algo_order_id: 79, algo_type: 'TAKE_PROFIT', side: 'SELL', trigger_price: 2100, symbol: 'PERP_ETH_USDC' },
+        { algo_order_id: 80, algo_type: 'STOP_LOSS', side: 'SELL', trigger_price: 1800, symbol: 'PERP_ETH_USDC' }] }] }] });
+  const snap = await throne.getAccountSnapshot(CREDS, { playerId: PLAYER });
+  assert.equal(snap.positions[0].tp_price, null); assert.equal(snap.positions[0].sl_price, null);
+  const [order] = snap.orders;
+  assert.equal(snap.orders.length, 1);
+  assert.equal(order.is_bracket, true); assert.equal(order.bracket_algo_order_id, '77');
+  assert.equal(order.take_profit, '2100'); assert.equal(order.stop_loss, '1800'); assert.equal(order.amount, '0.02');
+});
+
+test('market TP/SL waits briefly for the fill, then surfaces a clear tpsl_error', async () => {
+  let ctx = setup();
+  ctx.state.onSleep = state => { if (state.sleeps.length === 2) state.positions = [{ symbol: 'PERP_ETH_USDC', position_qty: 0.01, average_open_price: 2000, mark_price: 2000 }]; };
+  const filled = await throne.placeOrder(CREDS, { symbol: 'ETH', side: 'bid', amount: '0.01', orderType: 'market', takeProfit: '2200', actionId: ACTION }, { playerId: PLAYER });
+  assert.deepEqual(ctx.state.sleeps, [500, 1000]);
+  assert.equal(filled.tpsl_error, undefined); assert.equal(filled.tpsl.take_profit, 2200);
+  ctx = setup();
+  const missing = await throne.placeOrder(CREDS, { symbol: 'ETH', side: 'bid', amount: '0.01', orderType: 'market', stopLoss: '1800', actionId: ACTION }, { playerId: PLAYER });
+  assert.equal(missing.success, true); assert.equal(missing.tpsl_error_code, 'THRONE_NO_POSITION');
+  assert.match(missing.tpsl_error, /TP\/SL was not set/u);
+  assert.equal(ctx.state.sleeps.length, 3);
+});
+
+test('pending cancel and algo actions are reconciled read-only', async () => {
+  const { state, db } = setup({ networkError: true });
+  await assert.rejects(throne.cancelOrder(CREDS, { symbol: 'ETH', orderId: '555', actionId: ACTION }, { playerId: PLAYER }), e => e.outcomeUnknown);
+  await assert.rejects(throne.cancelOrder(CREDS, { symbol: 'ETH', orderId: '556', actionId: ACTION2 }, { playerId: PLAYER }), e => e.outcomeUnknown);
+  state.networkError = false;
+  state.orderStatusById = { 555: 'CANCELLED', 556: 'NEW' };
+  const writes = state.calls.filter(c => c.method !== 'GET').length;
+  assert.equal((await throne.getActionStatus(CREDS, ACTION, { playerId: PLAYER })).status, 'reconciled');
+  const open = await throne.getActionStatus(CREDS, ACTION2, { playerId: PLAYER });
+  assert.equal(open.status, 'rejected');
+  assert.equal(db.prepare('SELECT status FROM throne_action_intents WHERE action_id=?').get(ACTION2).status, 'rejected');
+  assert.equal(state.calls.filter(c => c.method !== 'GET').length, writes, 'reconciliation never resends');
+
+  // TP/SL replace (cancel + place) is tracked through its derived step ids.
+  const ctx = setup({ positions: [{ symbol: 'PERP_ETH_USDC', position_qty: 0.5, average_open_price: 1900, mark_price: 2000 }],
+    algos: [{ algo_order_id: 9, algo_type: 'POSITIONAL_TP_SL', symbol: 'PERP_ETH_USDC', child_orders: [
+      { algo_order_id: 11, algo_type: 'STOP_LOSS', side: 'SELL', trigger_price: 1800, symbol: 'PERP_ETH_USDC' }] }] });
+  const realFetch = ctx.fetch;
+  throne.setTestDependencies({ database: ctx.db, now: () => NOW, sleep: async () => {},
+    fetch: async (url, init = {}) => {
+      if (init.method !== 'POST' || new URL(url).pathname !== '/v1/algo/order') return realFetch(url, init);
+      ctx.state.calls.push({ method: 'POST', path: '/v1/algo/order', body: JSON.parse(init.body) });
+      throw new Error('reset');
+    } });
+  await assert.rejects(throne.setTpsl(CREDS, { symbol: 'ETH', takeProfit: '2300', actionId: ACTION }, { playerId: PLAYER }), e => e.outcomeUnknown);
+  ctx.state.algoById = { 9: { algo_order_id: 9, algo_status: 'CANCELLED' } };
+  let status = await throne.getActionStatus(CREDS, ACTION, { playerId: PLAYER });
+  assert.equal(status.status, 'unknown');
+  assert.deepEqual(status.steps.map(s => s.kind), ['cancel_algo_order', 'algo_order']);
+  const placed = ctx.state.calls.find(c => c.method === 'POST' && c.path === '/v1/algo/order').body;
+  ctx.state.algoByClient = { [placed.client_order_id]: { algo_order_id: 91, algo_type: 'POSITIONAL_TP_SL', symbol: 'PERP_ETH_USDC', algo_status: 'NEW' } };
+  status = await throne.getActionStatus(CREDS, ACTION, { playerId: PLAYER });
+  assert.equal(status.status, 'reconciled');
+  await assert.rejects(throne.getActionStatus(CREDS, ACTION2, { playerId: PLAYER }), e => e.code === 'THRONE_ACTION_NOT_FOUND');
+});
+
+test('trade history labels closes from reduce-only orders and the position walk', async () => {
+  const { state } = setup({ positions: [{ symbol: 'PERP_ETH_USDC', position_qty: 0.3 }] });
+  state.trades = [
+    fill(1, 900, 0.5, { executed_timestamp: NOW - 5000 }),                 // open long 0 -> 0.5
+    fill(2, 901, 0.2, { side: 'SELL', executed_timestamp: NOW - 4000 }),   // close long 0.5 -> 0.3
+    fill(3, 902, 0.3, { side: 'SELL', executed_timestamp: NOW - 3000 }),   // close long 0.3 -> 0
+    fill(4, 903, 0.1, { side: 'SELL', executed_timestamp: NOW - 2000 }),   // open short 0 -> -0.1
+    fill(5, 904, 0.4, { executed_timestamp: NOW - 1000 }),                 // flip: close short -0.1 -> 0.3
+  ];
+  const rows = await throne.getTradeHistory(CREDS, { playerId: PLAYER });
+  assert.deepEqual(rows.map(r => r.side), ['open_long', 'close_long', 'close_long', 'open_short', 'close_short']);
 });
 
 test('error mapping: definite rejection vs unknown outcome', async () => {
