@@ -315,10 +315,23 @@ export default function Leaderboard({ token, playerId, onCopy, onAnalyze, onCont
     { value: STARRED, label: `Starred${bookmarks.length ? ` (${bookmarks.length})` : ''}`, icon: 'star' },
   ];
 
+  const canAnalyze = (trader) => trader.rank <= TRADER_DETAIL_RANK_LIMIT || starredScope;
+  // Whole row/card opens the analysis; clicks on its own buttons/links keep their action.
+  const rowProps = (trader) => (canAnalyze(trader) ? {
+    tabIndex: 0,
+    'aria-label': `Open analysis for ${trader.displayName || shortAccount(trader.account)}`,
+    onClick: (event) => { if (!event.target.closest('button, a, input, label, [role="button"]')) onAnalyze(trader); },
+    onKeyDown: (event) => {
+      if (event.target !== event.currentTarget || (event.key !== 'Enter' && event.key !== ' ')) return;
+      event.preventDefault();
+      onAnalyze(trader);
+    },
+  } : {});
+
   const renderActions = (trader, compact = false) => (
     <span className="ct-row-actions">
       <StarButton active={isBookmarked(trader)} trader={trader} onToggle={() => toggle(trader, window)} />
-      {!compact && (trader.rank <= TRADER_DETAIL_RANK_LIMIT || starredScope) && (
+      {!compact && canAnalyze(trader) && (
         <Btn size="sm" variant="secondary" icon="chart" onClick={() => onAnalyze(trader)} aria-label={`Open analysis for ${trader.displayName || shortAccount(trader.account)}`}>
           Analysis
         </Btn>
@@ -457,7 +470,7 @@ export default function Leaderboard({ token, playerId, onCopy, onAnalyze, onCont
               </thead>
               <tbody>
                 {items.map((trader) => (
-                  <tr key={traderKey(trader)}>
+                  <tr key={traderKey(trader)} className={canAnalyze(trader) ? 'ct-clickable' : undefined} {...rowProps(trader)}>
                     <td className="ct-rank"><RankLabel trader={trader} /></td>
                     <td className="ct-left"><TraderIdentity trader={trader} /></td>
                     <td><CopyScore value={trader.copyScore} details={trader.copyScoreDetails} /></td>
@@ -487,7 +500,7 @@ export default function Leaderboard({ token, playerId, onCopy, onAnalyze, onCont
           </div>
           <div className={`ct-cards ${busy ? 'ct-loading-dim' : ''}`}>
             {items.map((trader) => (
-              <article key={traderKey(trader)} className="ct-trader-card">
+              <article key={traderKey(trader)} className={`ct-trader-card ${canAnalyze(trader) ? 'ct-clickable' : ''}`} {...rowProps(trader)}>
                 <div className="ct-trader-card-head">
                   <span className="ct-rank-pill">{isRankedTrader(trader) && trader.rank ? `#${trader.rank}` : '—'}</span>
                   <div style={{ flex: 1, minWidth: 0 }}><TraderIdentity trader={trader} /></div>
@@ -501,7 +514,7 @@ export default function Leaderboard({ token, playerId, onCopy, onAnalyze, onCont
                   <div><div className="ct-caption">Volume $</div><MetricValue value={trader.volumeUsd} kind="volume" quality={trader.quality} /></div>
                   <div><div className="ct-caption">Balance</div><BalanceValue trader={trader} /></div>
                 </div>
-                {(trader.rank <= TRADER_DETAIL_RANK_LIMIT || starredScope) && (
+                {canAnalyze(trader) && (
                   <Btn variant="secondary" icon="chart" onClick={() => onAnalyze(trader)} style={{ width: '100%', marginTop: 10 }}>
                     Trader analysis
                   </Btn>

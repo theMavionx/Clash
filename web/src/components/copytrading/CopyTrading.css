@@ -235,6 +235,9 @@ button.ct-chip { cursor: pointer; }
 .ct-table td { padding: 12px; text-align: right; font-size: 13px; border-bottom: 1px solid var(--terminal-border); vertical-align: middle; }
 .ct-table tbody tr:hover { background: var(--terminal-hover); }
 .ct-table tbody tr:last-child td { border-bottom: 0; }
+.ct-clickable { cursor: pointer; }
+.ct-clickable:focus-visible { outline: 2px solid var(--terminal-orange); outline-offset: -2px; }
+.ct-trader-card.ct-clickable:hover { background: var(--terminal-hover); }
 .ct-sort-btn {
   display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: transparent; cursor: pointer;
   font: inherit; letter-spacing: inherit; text-transform: inherit; color: inherit;
@@ -282,6 +285,14 @@ button.ct-chip { cursor: pointer; }
 .ct-modal--md { max-width: 640px; }
 .ct-modal--lg { max-width: 920px; }
 .ct-modal--xl { max-width: 1180px; }
+/* Analysis opens at its full size so it doesn't jump when the data arrives. */
+.ct-modal--analysis { height: calc(100dvh - 32px); max-height: 900px; }
+.ct-analysis-skeleton { display: grid; grid-template-columns: minmax(260px, 340px) 1fr; gap: 12px; flex: 1; min-height: 0; }
+.ct-analysis-skeleton > div { display: flex; flex-direction: column; gap: 12px; }
+.ct-skel { background: var(--terminal-surface); border: 1px solid var(--terminal-border); border-radius: 14px; animation: ct-skel-pulse 1.4s ease-in-out infinite; }
+@keyframes ct-skel-pulse { 50% { opacity: .55; } }
+@media (max-width: 760px) { .ct-analysis-skeleton { grid-template-columns: 1fr; } }
+.ct-position-market { display: inline-flex; align-items: center; gap: 6px; }
 .ct-modal-header { display: flex; align-items: flex-start; gap: 12px; padding: 16px 16px 12px 20px; border-bottom: 1px solid var(--terminal-border); flex-shrink: 0; }
 .ct-modal-title { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -0.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ct-modal-subtitle { margin: 4px 0 0; font-size: 12px; color: var(--terminal-text-muted); line-height: 1.45; }

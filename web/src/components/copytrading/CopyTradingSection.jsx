@@ -5,7 +5,7 @@ import { fetchTraderSummary } from './copyTradingApi';
 import { traderFromSummary } from './traderModel';
 import Leaderboard from './Leaderboard';
 import MyCopyBots from './MyCopyBots';
-import { Notice, Segmented, StateBlock } from './ui';
+import { Notice, Segmented, Spinner, StateBlock } from './ui';
 
 const TraderAnalysis = lazy(() => import('./TraderAnalysis'));
 const CopySetupWizard = lazy(() => import('./CopySetupWizard'));
@@ -125,7 +125,9 @@ export default function CopyTradingSection({ player, walletCtx }) {
         Unsupported or incomplete metrics stay N/A rather than estimated.
       </p>
 
-      <Suspense fallback={null}>
+      <Suspense fallback={analysisTrader ? (
+        <div className="ct-overlay"><div className="ct-modal ct-modal--xl ct-modal--analysis" style={{ display: 'grid', placeItems: 'center' }}><Spinner size={20} /></div></div>
+      ) : null}>
         {analysisTrader && (
           <TraderAnalysis
             key={`${analysisTrader.venue}:${analysisTrader.account}`}

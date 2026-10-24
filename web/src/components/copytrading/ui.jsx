@@ -239,7 +239,7 @@ export function Spinner({ size = 16 }) {
 }
 
 /* ---------- modal ---------- */
-export function Modal({ title, subtitle, onClose, children, footer, size = 'md', labelledBy, headerExtra, closeLabel = 'Close' }) {
+export function Modal({ title, subtitle, onClose, children, footer, size = 'md', labelledBy, headerExtra, closeLabel = 'Close', className = '' }) {
   const dialogRef = useRef(null);
   const onCloseRef = useRef(onClose);
   const titleId = useId();
@@ -288,7 +288,7 @@ export function Modal({ title, subtitle, onClose, children, footer, size = 'md',
         aria-modal="true"
         aria-labelledby={labelledBy || titleId}
         tabIndex={-1}
-        className={`ct-modal ct-modal--${size}`}
+        className={`ct-modal ct-modal--${size} ${className}`.trim()}
       >
         <header className="ct-modal-header">
           <div style={{ minWidth: 0, flex: 1 }}>

@@ -22,6 +22,7 @@ import {
 import TraderProfileChips from './TraderChips';
 import DailyPerformanceChart from './DailyPerformanceChart';
 import { copyScoreComponents } from './copyScoreModel';
+import TokenIcon from '../TokenIcon';
 import { Btn, Modal, Notice, Segmented, Spinner, StateBlock, VenueLogo } from './ui';
 
 const SNAPSHOT_REFRESH_MS = 16_000;
@@ -72,7 +73,7 @@ function PositionsTable({ snapshot, loading }) {
         return (
           <div key={position.key || position.symbol} className="ct-list-row">
             <span style={{ minWidth: 0 }}>
-              <strong style={{ fontSize: 13 }}>{position.symbol}</strong>{' '}
+              <span className="ct-position-market"><TokenIcon sym={position.symbol} size={18} /><strong style={{ fontSize: 13 }}>{position.symbol}</strong></span>{' '}
               <span className={`ct-chip ct-chip--${position.direction === 'long' ? 'long' : 'short'}`}>{position.direction === 'long' ? 'Long' : 'Short'}</span>
               {lev && <span className="ct-subline">{lev}</span>}
             </span>
@@ -347,6 +348,7 @@ export default function TraderAnalysis({ token, trader, context, onClose, onCopy
   return (
     <Modal
       size="xl"
+      className="ct-modal--analysis"
       title={name}
       subtitle={(
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
@@ -362,7 +364,13 @@ export default function TraderAnalysis({ token, trader, context, onClose, onCopy
       headerExtra={<Btn variant="primary" iconRight="copy" onClick={onCopy}>Copy trader</Btn>}
     >
       {detail.loading && !data && (
-        <div className="ct-state" role="status"><Spinner size={20} /><span className="ct-state-text">Loading performance history…</span></div>
+        <div className="ct-analysis-skeleton" role="status" aria-label="Loading performance history">
+          <div><div className="ct-skel" style={{ flex: 1 }} /></div>
+          <div>
+            <div className="ct-skel" style={{ height: 150 }} />
+            <div className="ct-skel" style={{ flex: 1, display: 'grid', placeItems: 'center' }}><Spinner size={20} /></div>
+          </div>
+        </div>
       )}
       {detail.error && !data && (
         <StateBlock tone="error" icon="alert" title="Trader analysis is temporarily unavailable">{detail.error}</StateBlock>
