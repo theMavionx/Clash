@@ -348,17 +348,6 @@ function buildDexSpecificRequests({ dex, token, walletAddress, signal }) {
     return requests;
   }
 
-  if (dex === 'flash') {
-    addPrefetchRequest(requests, futuresUrl('/flash/health'), { headers, signal });
-    if (address && token) {
-      addPrefetchRequest(requests, futuresUrl(`/flash/referral?address=${encoded(address)}`), { headers, signal });
-      addPrefetchRequest(requests, futuresUrl(`/flash/account?address=${encoded(address)}`), { headers, signal });
-      addPrefetchRequest(requests, futuresUrl(`/flash/positions?address=${encoded(address)}`), { headers, signal });
-      addPrefetchRequest(requests, futuresUrl(`/flash/orders?address=${encoded(address)}`), { headers, signal });
-    }
-    return requests;
-  }
-
   if (dex === 'bulk') {
     addPrefetchRequest(requests, futuresUrl('/bulk/config'), { headers, signal });
     if (address && token) {

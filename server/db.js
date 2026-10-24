@@ -4329,7 +4329,6 @@ const TOURNAMENT_CREDIT_DEXES = new Set([
   'grvt',
   'katana',
   'gmtrade',
-  'flash',
   'lighter',
   'rhlighter',
   'bulk',

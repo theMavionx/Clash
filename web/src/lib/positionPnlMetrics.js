@@ -21,7 +21,6 @@ const DEFAULT_TAKER_RATE = Object.freeze({
   avantis: 0.00045,
   bulk: 0,
   decibel: 0.00034,
-  flash: 0.00051,
   gmtrade: 0.0006,
   gmx: 0.0005,
   grvt: 0.00045,
@@ -163,16 +162,6 @@ function explicitBuilderRate(dex, position, market, account) {
   return DEFAULT_BUILDER_RATE[dex] ?? 0;
 }
 
-function flashTradeRate(symbol) {
-  const asset = baseSymbol(symbol);
-  if (['XAU', 'XAG'].includes(asset)) return 0.001;
-  if (['BRENT', 'OIL', 'WTI'].includes(asset)) return 0.0015;
-  if (['AUD', 'CAD', 'CHF', 'CNH', 'EUR', 'GBP', 'JPY', 'NZD', 'SEK', 'SGD'].includes(asset)) return 0.0008;
-  if (['BONK', 'FARTCOIN', 'PENGU', 'SAMO', 'WIF'].includes(asset)) return 0.0012;
-  if (['JTO', 'JUP', 'KMNO', 'PYTH', 'RAY', 'W'].includes(asset)) return 0.0011;
-  return 0.00051;
-}
-
 function venueBaseRates(dex, position, market, account) {
   if (dex === 'avantis') {
     const open = firstNonNegative(
@@ -210,11 +199,6 @@ function venueBaseRates(dex, position, market, account) {
     const marketRate = microsToRate(market?.taker_fee_micros ?? market?._raw?.config?.taker_fee);
     const rate = firstNonNegative(position?.trading_fee_rate, market?.taker_fee, marketRate, DEFAULT_TAKER_RATE.monad);
     return { open: rate, close: rate, source: marketRate != null || market?.taker_fee != null ? 'market' : 'fallback' };
-  }
-
-  if (dex === 'flash') {
-    const rate = firstNonNegative(position?.trading_fee_rate, market?.taker_fee, flashTradeRate(position?.symbol));
-    return { open: rate, close: rate, source: position?.trading_fee_rate != null || market?.taker_fee != null ? 'position' : 'fallback' };
   }
 
   const liveRate = firstNonNegative(

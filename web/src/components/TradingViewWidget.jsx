@@ -701,7 +701,7 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, chartSymbol = nu
             candles = await loadPythCandles(tf, now, start);
           }
           if (cancelled) return;
-        } else if (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'hyperliquid' || dex === 'risex' || dex === 'leverup' || dex === 'hotstuff' || dex === 'grvt' || dex === 'gmtrade' || dex === 'flash') {
+        } else if (dex === 'avantis' || dex === 'gmx' || dex === 'ostium' || dex === 'hyperliquid' || dex === 'risex' || dex === 'leverup' || dex === 'hotstuff' || dex === 'grvt' || dex === 'gmtrade') {
           // Reference candles are display-only; venue mark/oracle stays separate.
           candles = await loadPythCandles(tf, now, start);
           if (cancelled) return;

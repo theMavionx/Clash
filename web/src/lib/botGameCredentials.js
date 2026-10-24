@@ -12,7 +12,6 @@ import {
   readEncryptedCredential,
   writeEncryptedCredential,
 } from './encryptedCredentialStorage';
-import { getFlashOneTapAgent } from './flashOneTap';
 import { readRisexSigner, rememberRisexSigner, RISEX_SIGNER_STORAGE_PREFIX, RISEX_SIGNER_TTL_SECONDS } from './risexClient';
 import { readAvantisSmartWalletDelegate, importAvantisSmartWalletDelegate } from './avantisSmartWallet';
 import { readOstiumSmartWalletDelegate, importOstiumSmartWalletDelegate } from './ostiumSmartWallet';
@@ -49,7 +48,6 @@ const OSTIUM_SMART_WALLET_PREFIX = 'clash_ostium_smart_wallet_delegate_v1:';
 const GMX_ONE_TAP_KEY = 'clash_gmx_one_tap_signer_v1';
 const GMTRADE_ONE_TAP_PREFIX = 'clash_gmtrade_one_tap_signer_v1';
 const PERPL_ONE_TAP_PREFIX = 'clash_perpl_one_tap_signer_v1';
-const FLASH_ONE_TAP_PREFIX = 'clash_flash_one_tap_agent_v1:';
 const DECIBEL_STORAGE_KEY = 'clash_decibel_bot_credentials_v1';
 /** VPS signs via env — never paste server API wallet key in the browser. */
 export const DECIBEL_SERVER_SECRET_REF = 'env:PHANTOM__EXCHANGES__DECIBEL__SECRET_KEY';
@@ -506,8 +504,23 @@ export function savePhoenixBotSigner(privateKey, solOwner, options = {}) {
   };
 }
 
-/** Temporarily disabled in Bots — broken auth or needs access codes. Flash is fully retired (hidden). */
-export const BOTS_DISABLED_EXCHANGES = ['qfex', 'throne', 'domfi', 'etoro', 'gmx', 'gmtrade', 'perpl', 'phoenix', 'flash'];
+/** Temporarily disabled in Bots — broken auth or needs access codes. */
+export const BOTS_DISABLED_EXCHANGES = ['qfex', 'throne', 'domfi', 'etoro', 'gmx', 'gmtrade', 'perpl', 'phoenix'];
+
+/**
+ * Exchanges removed from Clash entirely (Flash Trade). The bot backend can
+ * still return legacy account rows for them; Bots drops those rows so it never
+ * renders them or polls their (404) balance endpoints.
+ */
+const RETIRED_BOT_EXCHANGES = new Set(['flash']);
+
+export function isRetiredBotExchange(exchangeId) {
+  return RETIRED_BOT_EXCHANGES.has(String(exchangeId || '').toLowerCase());
+}
+
+export function withoutRetiredBotExchanges(rows) {
+  return Array.isArray(rows) ? rows.filter((row) => !isRetiredBotExchange(row?.exchange)) : [];
+}
 
 /** Exchanges Bots can sync from game-local credential storage. */
 export const GAME_WALLET_EXCHANGES = [
@@ -542,7 +555,7 @@ export const GAME_WALLET_EXCHANGE_LABELS = {
   decibel: 'Decibel',
 };
 
-/** Not available for Bots sync (disabled or dev-only). Flash omitted — not shown. */
+/** Not available for Bots sync (disabled or dev-only). */
 export const UNSUPPORTED_GAME_WALLET_EXCHANGES = [
   { id: 'qfex', label: 'QFEX', reason: 'API credentials are not exported to Bots' },
   { id: 'throne', label: 'Throne', reason: 'Orderly trading keys are not exported to Bots' },
@@ -556,14 +569,7 @@ export const UNSUPPORTED_GAME_WALLET_EXCHANGES = [
 
 export function isBotsExchangeEnabled(exchangeId) {
   const ex = String(exchangeId || '').toLowerCase();
-  return ex && !BOTS_DISABLED_EXCHANGES.includes(ex);
-}
-
-function flashSecretToBase58(secretKeyB64) {
-  const binary = atob(String(secretKeyB64 || ''));
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-  return bs58.encode(bytes);
+  return ex && !BOTS_DISABLED_EXCHANGES.includes(ex) && !isRetiredBotExchange(ex);
 }
 
 function decodePhoenixSecretBase64(value) {
@@ -1047,50 +1053,6 @@ async function gatherGameCredentialsInner(exchangeId, player, ctx) {
         agent_pubkey: agent.agentPubkey,
       },
       hint: 'Pacifica Solana agent key',
-    };
-  }
-
-  if (ex === 'flash') {
-    const wallets = solanaCandidateWallets(player, 'flash', ctx, FLASH_ONE_TAP_PREFIX);
-    if (wallets.length === 0) {
-      return { ok: false, error: 'Connect Solana wallet and complete Flash setup in Futures.' };
-    }
-    for (const sol of wallets) {
-      const agent = await getFlashOneTapAgent(sol);
-      if (!agent?.secretKey) continue;
-      if (!agent.enabled || !agent.delegated || !agent.sessionToken) continue;
-      const validUntil = Number(agent.validUntil || 0);
-      if (validUntil <= Math.ceil(Date.now() / 1000) + 60) continue;
-      let privateKey;
-      try {
-        privateKey = flashSecretToBase58(agent.secretKey);
-      } catch {
-        continue;
-      }
-      return {
-        ok: true,
-        privateKey,
-        subAccount: '0',
-        metadata: {
-          source: 'game_one_tap',
-          exchange: ex,
-          owner_wallet: sol,
-          master_wallet: sol,
-          session_signer: agent.publicKey,
-          api_secret: agent.sessionToken,
-        },
-        hint: 'Flash one-tap session signer',
-      };
-    }
-    const partial = wallets.length > 0;
-    const anyAgent = await Promise.all(wallets.map((w) => getFlashOneTapAgent(w)));
-    const hasPartial = anyAgent.some((a) => a?.secretKey);
-    return {
-      ok: false,
-      partial,
-      error: hasPartial
-        ? 'Flash one-tap not active. Futures → Flash → enable One tap trading.'
-        : 'No Flash one-tap. Futures → Flash → enable One tap trading and approve session.',
     };
   }
 
@@ -1609,7 +1571,7 @@ async function setupAndSyncGameAccountInner({
 
   const ready = await ensureGameExchangeReady(ex, player, {
     signMessage: solanaSignMessage,
-    walletAddress: ex === 'pacifica' || ex === 'flash' ? solanaWalletAddress : walletAddress,
+    walletAddress: ex === 'pacifica' ? solanaWalletAddress : walletAddress,
     solanaWalletAddress,
     evmWalletAddress: walletAddress,
     evmProvider,
@@ -1690,9 +1652,7 @@ export async function probeExchangeBalance(token, exchangeId) {
     if (/adapter not registered/i.test(String(raw))) {
       return {
         ok: false,
-        error: ex === 'flash'
-          ? 'Phantom bot has no Flash adapter — rebuild and restart phantom on :8080 (cargo build -p phantom && restart).'
-          : `Phantom bot has no ${ex.toUpperCase()} adapter — restart phantom on :8080 with latest config/build.`,
+        error: `Phantom bot has no ${ex.toUpperCase()} adapter — restart phantom on :8080 with latest config/build.`,
       };
     }
     return { ok: false, error: raw };

@@ -29,7 +29,6 @@ const hotstuffRewards = require('./hotstuff-rewards-worker');
 const grvt = require('./grvt');
 const katana = require('./katana');
 const gmtrade = require('./gmtrade');
-const flash = require('./flash');
 const lighter = require('./lighter');
 const rhLighter = require('./rh-lighter');
 const bulk = require('./bulk');
@@ -41,26 +40,31 @@ const { createPublicClient, decodeFunctionData, formatUnits, http } = require('v
 const { base } = require('viem/chains');
 const { Keypair, PublicKey, VersionedTransaction } = require('@solana/web3.js');
 const bs58Module = require('bs58');
-const nacl = require('tweetnacl');
 
 const router = express.Router();
+
+// Exchanges removed from the product. Stale clients that still send these DEX
+// ids get an explicit 410 instead of silently falling through to Pacifica.
+const RETIRED_DEX_MESSAGES = Object.freeze({
+  dango: 'Dango is no longer available because the exchange ceased operation.',
+  flash: 'Flash Trade is no longer available in Clash of Perps.',
+});
 
 router.use((req, res, next) => {
   const requestedDex = String(
     req.query?.dex || req.headers['x-dex'] || req.body?.dex || ''
   ).trim().toLowerCase();
-  if (requestedDex === 'dango') {
+  const retiredMessage = RETIRED_DEX_MESSAGES[requestedDex];
+  if (retiredMessage) {
     return res.status(410).json({
-      error: 'Dango is no longer available because the exchange ceased operation.',
+      error: retiredMessage,
       code: 'DEX_RETIRED',
-      dex: 'dango',
+      dex: requestedDex,
     });
   }
   next();
 });
 const bs58 = bs58Module.default || bs58Module;
-const WALLET_AUTH_ACTION = 'wallet-auth';
-const WALLET_AUTH_MAX_AGE_MS = 10 * 60 * 1000;
 
 const { fetchChartHistory } = require('./chart-history');
 const PYTH_HISTORY_CACHE_TTL_MS = 60_000;
@@ -893,7 +897,7 @@ function auth(req, res, next) {
   // Trust the SERVER-stored dex, not whatever the client asks for. The client
   // header/query is still useful as a best-effort sanity check: if it explicitly
   // asks for the wrong dex, reject so the UI can prompt the user to /set-dex.
-  const SUPPORTED_DEXES = new Set(['avantis', 'domfi', 'etoro', 'qfex', 'throne', 'pacifica', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'ondo', 'leverup', 'aster', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'lighter', 'rhlighter', 'bulk', 'imperial']);
+  const SUPPORTED_DEXES = new Set(['avantis', 'domfi', 'etoro', 'qfex', 'throne', 'pacifica', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'ondo', 'leverup', 'aster', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'lighter', 'rhlighter', 'bulk', 'imperial']);
   const storedDex = SUPPORTED_DEXES.has(player.dex) ? player.dex : 'pacifica';
   const askedDex = (req.query.dex || req.headers['x-dex'] || storedDex).toLowerCase();
   const normalizedAsked = SUPPORTED_DEXES.has(askedDex) ? askedDex : 'pacifica';
@@ -918,7 +922,7 @@ function auth(req, res, next) {
   req.dexWallet = null;
   if (linkedForAsked?.wallet_address) {
     req.dexWallet = String(linkedForAsked.wallet_address || '').trim();
-  } else if ((req.dex === 'gmtrade' || req.dex === 'flash' || req.dex === 'hotstuff') && playerDexAccountStmt) {
+  } else if ((req.dex === 'gmtrade' || req.dex === 'hotstuff') && playerDexAccountStmt) {
     try {
       const linked = playerDexAccountStmt.get(player.id, req.dex);
       if (linked?.wallet_address) {
@@ -957,168 +961,12 @@ function gmtradeRequestWallet(req) {
   return gmtradeLinkedSolanaWallet(req);
 }
 
-function flashLinkedSolanaWallet(req) {
-  const linked = String(req.dexWallet || '').trim();
-  if (flash.isSolanaAddress(linked)) return linked;
-  const primary = String(req.playerWallet || '').trim();
-  if (flash.isSolanaAddress(primary)) return primary;
-  throw Object.assign(
-    new Error('Flash Solana wallet is not linked to this game account. Reconnect your Solana wallet for Flash.'),
-    { status: 409 },
-  );
-}
-
-function flashWalletAuthMessage({ wallet, issuedAt }) {
-  return [
-    'Clash wallet auth',
-    `Action: ${WALLET_AUTH_ACTION}`,
-    `Wallet: ${String(wallet || '').trim()}`,
-    'DEX: flash',
-    `Issued At: ${issuedAt}`,
-  ].join('\n');
-}
-
-function flashDecodeSignatureBytes(value, encoding = '') {
-  if (Array.isArray(value)) return Uint8Array.from(value);
-  const raw = String(value || '').trim();
-  if (!raw) return null;
-  if (/^[0-9a-fA-F]{128}$/.test(raw)) return Uint8Array.from(Buffer.from(raw, 'hex'));
-  const preferred = String(encoding || '').toLowerCase();
-  if (preferred === 'base64') {
-    const bytes = Uint8Array.from(Buffer.from(raw, 'base64'));
-    return bytes.length === 64 ? bytes : null;
-  }
-  if (preferred === 'base58') {
-    try {
-      const bytes = bs58.decode(raw);
-      return bytes.length === 64 ? bytes : null;
-    } catch {
-      return null;
-    }
-  }
-  try {
-    const bytes = Uint8Array.from(Buffer.from(raw, 'base64'));
-    if (bytes.length === 64) return bytes;
-  } catch { /* try base58 */ }
-  try {
-    const bytes = bs58.decode(raw);
-    return bytes.length === 64 ? bytes : null;
-  } catch {
-    return null;
-  }
-}
-
-function flashVerifyWalletAuthProof(req, wallet) {
-  const owner = String(wallet || '').trim();
-  if (!flash.isSolanaAddress(owner)) {
-    throw Object.assign(new Error('Flash trade-report wallet must be a valid Solana address.'), { status: 400 });
-  }
-  const proof = req.body?.auth_proof || req.body?.authProof || req.body?.wallet_auth_proof || req.body?.walletAuthProof || null;
-  if (!proof || typeof proof !== 'object' || Array.isArray(proof)) {
-    throw Object.assign(new Error('Flash wallet signature required for this trading wallet.'), { status: 401 });
-  }
-  const issuedAt = String(proof.issued_at || proof.issuedAt || '').trim();
-  const issuedMs = Date.parse(issuedAt);
-  if (!Number.isFinite(issuedMs)) {
-    throw Object.assign(new Error('Flash wallet signature required for this trading wallet.'), { status: 401 });
-  }
-  if (Math.abs(Date.now() - issuedMs) > WALLET_AUTH_MAX_AGE_MS) {
-    throw Object.assign(new Error('Flash wallet signature expired. Sign again and retry.'), { status: 401 });
-  }
-  const proofWallet = String(proof.wallet || '').trim();
-  if (proofWallet && proofWallet !== owner) {
-    throw Object.assign(new Error('Flash wallet signature wallet mismatch.'), { status: 401 });
-  }
-  const action = String(proof.action || '').trim().toLowerCase();
-  if (action && action !== WALLET_AUTH_ACTION) {
-    throw Object.assign(new Error('Flash wallet signature action mismatch.'), { status: 401 });
-  }
-  const dex = String(proof.dex || '').trim().toLowerCase();
-  if (dex && dex !== 'flash') {
-    throw Object.assign(new Error('Flash wallet signature DEX mismatch.'), { status: 401 });
-  }
-  const chain = String(proof.chain_type || proof.chainType || '').trim().toLowerCase();
-  if (chain && chain !== 'solana') {
-    throw Object.assign(new Error('Flash wallet signature chain mismatch.'), { status: 401 });
-  }
-  const message = flashWalletAuthMessage({ wallet: owner, issuedAt });
-  const suppliedMessage = String(proof.message || '').trim();
-  if (suppliedMessage && suppliedMessage !== message) {
-    throw Object.assign(new Error('Flash wallet signature message mismatch.'), { status: 401 });
-  }
-  let publicKeyBytes;
-  try {
-    publicKeyBytes = bs58.decode(owner);
-  } catch {
-    publicKeyBytes = null;
-  }
-  const signatureBytes = flashDecodeSignatureBytes(proof.signature, proof.signature_encoding || proof.signatureEncoding || '');
-  const ok = publicKeyBytes?.length === 32
-    && signatureBytes?.length === 64
-    && nacl.sign.detached.verify(
-      Uint8Array.from(Buffer.from(message, 'utf8')),
-      signatureBytes,
-      publicKeyBytes,
-    );
-  if (!ok) {
-    console.warn('[flash trade-report] rejected wallet auth proof', {
-      player_id: req.playerId,
-      owner,
-      ip: req.headers['cf-connecting-ip'] || req.headers['x-real-ip'] || req.ip || null,
-      ua: String(req.headers['user-agent'] || '').slice(0, 160),
-    });
-    throw Object.assign(new Error('Flash wallet signature verification failed.'), { status: 401 });
-  }
-  return owner;
-}
-
-function flashReportWallet(req) {
-  const requested = String(req.body?.wallet || req.body?.address || req.body?.owner || '').trim();
-  const linked = (() => {
-    try { return flashLinkedSolanaWallet(req); } catch { return ''; }
-  })();
-  if (!requested) {
-    if (linked) return linked;
-    throw Object.assign(
-      new Error('Flash Solana wallet is required for trade verification.'),
-      { status: 400 },
-    );
-  }
-  if (!flash.isSolanaAddress(requested)) {
-    throw Object.assign(new Error('Flash trade-report wallet must be a valid Solana address.'), { status: 400 });
-  }
-  if (linked && requested === linked) return requested;
-  return flashVerifyWalletAuthProof(req, requested);
-}
-
-function flashRequestWallet(req) {
-  const requested = String(req.query?.address || req.query?.wallet || '').trim();
-  if (requested) {
-    if (!flash.isSolanaAddress(requested)) {
-      throw Object.assign(new Error('Flash request wallet must be a valid Solana address.'), { status: 400 });
-    }
-    return requested;
-  }
-  return flashLinkedSolanaWallet(req);
-}
-
-function flashBodyWallet(req) {
-  const requested = String(req.body?.wallet || req.body?.address || req.body?.owner || '').trim();
-  if (requested) {
-    if (!flash.isSolanaAddress(requested)) {
-      throw Object.assign(new Error('Flash request wallet must be a valid Solana address.'), { status: 400 });
-    }
-    return requested;
-  }
-  return flashLinkedSolanaWallet(req);
-}
-
 // ==================== WALLET ====================
 
 // Get or create custodial wallet for player
 router.post('/wallet', auth, (req, res) => {
   try {
-    if (req.dex === 'avantis' || req.dex === 'domfi' || req.dex === 'etoro' || req.dex === 'qfex' || req.dex === 'throne' || req.dex === 'gmx' || req.dex === 'ostium' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'ondo' || req.dex === 'leverup' || req.dex === 'aster' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash' || req.dex === 'bulk' || req.dex === 'imperial') {
+    if (req.dex === 'avantis' || req.dex === 'domfi' || req.dex === 'etoro' || req.dex === 'qfex' || req.dex === 'throne' || req.dex === 'gmx' || req.dex === 'ostium' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'ondo' || req.dex === 'leverup' || req.dex === 'aster' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'bulk' || req.dex === 'imperial') {
       return res.status(410).json({
         error: req.dex === 'etoro'
           ? 'eToro uses the dedicated browser API-account setup.'
@@ -1150,7 +998,7 @@ router.post('/wallet', auth, (req, res) => {
 
 // Get wallet info (public key only — never expose secret)
 router.get('/wallet', auth, (req, res) => {
-  if (req.dex === 'avantis' || req.dex === 'domfi' || req.dex === 'etoro' || req.dex === 'qfex' || req.dex === 'throne' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'ondo' || req.dex === 'leverup' || req.dex === 'aster' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash' || req.dex === 'ostium' || req.dex === 'bulk' || req.dex === 'imperial') {
+  if (req.dex === 'avantis' || req.dex === 'domfi' || req.dex === 'etoro' || req.dex === 'qfex' || req.dex === 'throne' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'ondo' || req.dex === 'leverup' || req.dex === 'aster' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'ostium' || req.dex === 'bulk' || req.dex === 'imperial') {
     return res.status(410).json({
       error: req.dex === 'etoro'
         ? 'eToro uses the dedicated browser API-account setup.'
@@ -1258,13 +1106,6 @@ router.get('/account', async (req, res) => {
         return res.status(400).json({ error: 'address query param required (Solana wallet)' });
       }
       return res.json(await gmtrade.getAccountByAddress(address));
-    }
-    if (dex === 'flash') {
-      const address = String(req.query.address || req.query.wallet || '').trim();
-      if (!flash.isSolanaAddress(address)) {
-        return res.status(400).json({ error: 'address query param required (Solana wallet)' });
-      }
-      return res.json(await flash.getOwnerSnapshot(address));
     }
     if (dex === 'bulk') {
       const address = String(req.query.address || req.query.wallet || '').trim();
@@ -2769,7 +2610,6 @@ router.get('/markets', async (req, res) => {
       : dex === 'grvt' ? await grvt.getMarketInfo()
       : dex === 'katana' ? await katana.getMarketInfo()
       : dex === 'gmtrade' ? await gmtrade.getMarketInfo()
-      : dex === 'flash' ? await flash.getMarketInfo()
       : dex === 'lighter' ? await lighter.getMarketInfo()
       : dex === 'rhlighter' ? await rhLighter.getMarketInfo()
       : dex === 'bulk' ? await bulk.getMarkets()
@@ -2803,7 +2643,6 @@ router.get('/prices', async (req, res) => {
       : dex === 'grvt' ? await grvt.getPrices()
       : dex === 'katana' ? await katana.getPrices()
       : dex === 'gmtrade' ? await gmtrade.getPrices()
-      : dex === 'flash' ? await flash.getPrices()
       : dex === 'lighter' ? await lighter.getPrices()
       : dex === 'rhlighter' ? await rhLighter.getPrices()
       : dex === 'bulk' ? await bulk.getPrices()
@@ -3191,14 +3030,6 @@ router.get('/positions', async (req, res) => {
       const positions = await gmtrade.getPositionsByAddress(address);
       return res.json(positions);
     }
-    if (dex === 'flash') {
-      const address = String(req.query.address || req.query.wallet || '').trim();
-      if (!flash.isSolanaAddress(address)) {
-        return res.status(400).json({ error: 'address query param required' });
-      }
-      const positions = await flash.getPositionsByAddress(address);
-      return res.json(positions);
-    }
     if (dex === 'bulk') {
       const address = String(req.query.address || req.query.wallet || '').trim();
       if (!bulk.isSolanaAddress(address)) {
@@ -3320,14 +3151,6 @@ router.get('/orders', async (req, res) => {
       const orders = await gmtrade.getOrdersByAddress(address);
       return res.json(orders);
     }
-    if (dex === 'flash') {
-      const address = String(req.query.address || req.query.wallet || '').trim();
-      if (!flash.isSolanaAddress(address)) {
-        return res.status(400).json({ error: 'address query param required' });
-      }
-      const orders = await flash.getOrdersByAddress(address);
-      return res.json(orders);
-    }
     if (dex === 'bulk') {
       const address = String(req.query.address || req.query.wallet || '').trim();
       if (!bulk.isSolanaAddress(address)) {
@@ -3349,7 +3172,7 @@ router.get('/orders', async (req, res) => {
 
 // Reject self-custody writes on legacy Pacifica server endpoints. These
 // venues sign in the browser or use their dedicated route groups.
-const CLIENT_SIGNED_DEXES = new Set(['avantis', 'domfi', 'etoro', 'qfex', 'throne', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'ondo', 'leverup', 'aster', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'flash', 'bulk']);
+const CLIENT_SIGNED_DEXES = new Set(['avantis', 'domfi', 'etoro', 'qfex', 'throne', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'ondo', 'leverup', 'aster', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'bulk']);
 
 function avantisMigratedGuard(req, res, next) {
   if (CLIENT_SIGNED_DEXES.has(req.dex)) {
@@ -3667,7 +3490,7 @@ router.post('/monad/report-fill', auth, async (req, res) => {
 // payloads are not rewardable; market opens on Avantis are immediately
 // re-read from Core API and recorded as `verified_source='worker'`. Everything
 // else is picked up by the per-DEX rewards workers.
-const TRADE_REPORT_DEXES = new Set(['avantis', 'decibel', 'gmtrade', 'flash']);
+const TRADE_REPORT_DEXES = new Set(['avantis', 'decibel', 'gmtrade']);
 
 function avantisCollateralUsd(row) {
   const raw = row?.collateral ?? row?.trade?.positionSizeUSDC ?? row?.positionSizeUSDC ?? row?.trade?.initialPosToken;
@@ -6528,218 +6351,6 @@ function registerLighterDeploymentRoutes(prefix, adapter, label) {
 registerLighterDeploymentRoutes('/lighter', lighter, 'Lighter');
 registerLighterDeploymentRoutes('/rh-lighter', rhLighter, 'Robinhood Lighter');
 
-function requireFlashDex(req, res) {
-  if (req.dex === 'flash') return true;
-  res.status(409).json({
-    error: `Account is registered for '${req.dex}'. Switch DEX to flash before calling Flash endpoints.`,
-    stored_dex: req.dex,
-    requested_dex: 'flash',
-  });
-  return false;
-}
-
-router.get('/flash/health', async (req, res) => {
-  try {
-    const upstream = await flash.getHealth().catch(e => ({ error: e.message }));
-    res.json({ ...flash.configStatus(), upstream });
-  } catch (e) {
-    res.status(e.status || 502).json({ error: 'Failed to load Flash health', detail: e.message });
-  }
-});
-
-router.get('/flash/config', auth, (req, res) => {
-  if (!requireFlashDex(req, res)) return;
-  res.json(flash.configStatus());
-});
-
-router.get('/flash/account', auth, async (req, res) => {
-  if (!requireFlashDex(req, res)) return;
-  try {
-    const owner = flashRequestWallet(req);
-    res.json(await flash.getOwnerSnapshot(owner));
-  } catch (e) {
-    res.status(e.status || 502).json({ error: 'Failed to load Flash account', detail: e.message });
-  }
-});
-
-router.get('/flash/referral', auth, async (req, res) => {
-  if (!requireFlashDex(req, res)) return;
-  try {
-    const owner = flashRequestWallet(req);
-    res.json(await flash.getUserReferralByAddress(owner));
-  } catch (e) {
-    res.status(e.status || 502).json({ error: 'Failed to load Flash referral status', detail: e.message, data: e.data || undefined });
-  }
-});
-
-router.post('/flash/referral-tx', auth, async (req, res) => {
-  if (!requireFlashDex(req, res)) return;
-  try {
-    res.json(await flash.buildReferralTx(req.body || {}, flashBodyWallet(req)));
-  } catch (e) {
-    res.status(e.status || 502).json({ error: 'Failed to build Flash referral transaction', detail: e.message, data: e.data || undefined });
-  }
-});
-
-router.get('/flash/positions', auth, async (req, res) => {
-  if (!requireFlashDex(req, res)) return;
-  try {
-    res.json(await flash.getPositionsByAddress(flashRequestWallet(req)));
-  } catch (e) {
-    res.status(e.status || 502).json({ error: 'Failed to load Flash positions', detail: e.message });
-  }
-});
-
-router.get('/flash/orders', auth, async (req, res) => {
-  if (!requireFlashDex(req, res)) return;
-  try {
-    res.json(await flash.getOrdersByAddress(flashRequestWallet(req)));
-  } catch (e) {
-    res.status(e.status || 502).json({ error: 'Failed to load Flash orders', detail: e.message });
-  }
-});
-
-router.get('/flash/tx-status', auth, async (req, res) => {
-  if (!requireFlashDex(req, res)) return;
-  try {
-    res.json(await flash.getTransactionStatus(String(req.query.signature || req.query.tx || '').trim()));
-  } catch (e) {
-    res.status(e.status || 502).json({ error: 'Failed to load Flash transaction status', detail: e.message });
-  }
-});
-
-router.post('/flash/open-position-tx', auth, async (req, res) => {
-  if (!requireFlashDex(req, res)) return;
-  try {
-    res.json(await flash.buildOpenPositionTx(req.body || {}, flashBodyWallet(req)));
-  } catch (e) {
-    res.status(e.status || 502).json({ error: 'Failed to build Flash open-position transaction', detail: e.message, data: e.data || undefined });
-  }
-});
-
-router.post('/flash/close-position-tx', auth, async (req, res) => {
-  if (!requireFlashDex(req, res)) return;
-  try {
-    res.json(await flash.buildClosePositionTx(req.body || {}, flashBodyWallet(req)));
-  } catch (e) {
-    res.status(e.status || 502).json({ error: 'Failed to build Flash close-position transaction', detail: e.message, data: e.data || undefined });
-  }
-});
-
-router.post('/flash/tpsl-tx', auth, async (req, res) => {
-  if (!requireFlashDex(req, res)) return;
-  try {
-    res.json(await flash.buildPlaceTpSlTx(req.body || {}, flashBodyWallet(req)));
-  } catch (e) {
-    res.status(e.status || 502).json({ error: 'Failed to build Flash TP/SL transaction', detail: e.message, data: e.data || undefined });
-  }
-});
-
-router.post('/flash/cancel-order-tx', auth, async (req, res) => {
-  if (!requireFlashDex(req, res)) return;
-  try {
-    res.json(await flash.buildCancelOrderTx(req.body || {}, flashBodyWallet(req)));
-  } catch (e) {
-    res.status(e.status || 502).json({ error: 'Failed to build Flash cancel-order transaction', detail: e.message, data: e.data || undefined });
-  }
-});
-
-router.post('/flash/init-deposit-ledger-tx', auth, async (req, res) => {
-  if (!requireFlashDex(req, res)) return;
-  try {
-    res.json(await flash.buildInitDepositLedgerTx(flashBodyWallet(req)));
-  } catch (e) {
-    res.status(e.status || 502).json({ error: 'Failed to build Flash init-deposit-ledger transaction', detail: e.message, data: e.data || undefined });
-  }
-});
-
-router.post('/flash/init-basket-tx', auth, async (req, res) => {
-  if (!requireFlashDex(req, res)) return;
-  try {
-    res.json(await flash.buildInitBasketTx(flashBodyWallet(req)));
-  } catch (e) {
-    res.status(e.status || 502).json({ error: 'Failed to build Flash init-basket transaction', detail: e.message, data: e.data || undefined });
-  }
-});
-
-router.post('/flash/delegate-basket-tx', auth, async (req, res) => {
-  if (!requireFlashDex(req, res)) return;
-  try {
-    const owner = flashBodyWallet(req);
-    const payer = String(req.body?.payer || req.body?.agent || req.body?.agent_wallet || owner).trim();
-    res.json(await flash.buildDelegateBasketTx(owner, payer));
-  } catch (e) {
-    res.status(e.status || 502).json({ error: 'Failed to build Flash delegate-basket transaction', detail: e.message, data: e.data || undefined });
-  }
-});
-
-router.post('/flash/deposit-direct-tx', auth, async (req, res) => {
-  if (!requireFlashDex(req, res)) return;
-  try {
-    res.json(await flash.buildDepositDirectTx(req.body || {}, flashBodyWallet(req)));
-  } catch (e) {
-    res.status(e.status || 502).json({ error: 'Failed to build Flash deposit transaction', detail: e.message, data: e.data || undefined });
-  }
-});
-
-router.post('/flash/request-withdrawal-tx', auth, async (req, res) => {
-  if (!requireFlashDex(req, res)) return;
-  try {
-    res.json(await flash.buildRequestWithdrawalTx(req.body || {}, flashBodyWallet(req)));
-  } catch (e) {
-    res.status(e.status || 502).json({ error: 'Failed to build Flash withdrawal transaction', detail: e.message, data: e.data || undefined });
-  }
-});
-
-router.post('/flash/execute-withdrawal-tx', auth, async (req, res) => {
-  if (!requireFlashDex(req, res)) return;
-  try {
-    res.json(await flash.buildExecuteWithdrawalTx(req.body || {}, flashBodyWallet(req)));
-  } catch (e) {
-    res.status(e.status || 502).json({ error: 'Failed to build Flash execute-withdrawal transaction', detail: e.message, data: e.data || undefined });
-  }
-});
-
-router.post('/flash/submit-tx', auth, async (req, res) => {
-  if (!requireFlashDex(req, res)) return;
-  try {
-    const skipPreflight = req.body?.skipPreflight ?? req.body?.skip_preflight;
-    const result = await flash.submitSignedTransaction(req.body?.rawTransactionBase64 || req.body?.raw_transaction_base64, {
-      skipPreflight: skipPreflight == null ? true : skipPreflight === true,
-      preflightCommitment: req.body?.preflightCommitment || req.body?.preflight_commitment || 'confirmed',
-      maxRetries: req.body?.maxRetries ?? req.body?.max_retries ?? 3,
-    });
-    console.log('[flash submit-tx] sent', JSON.stringify({
-      signature: result.signature,
-      endpoint: result.endpoint,
-      submitted_ms: result.submitted_ms,
-      tx: result.tx,
-    }));
-    res.json(result);
-  } catch (e) {
-    console.warn('[flash submit-tx] failed:', e.message, e.data ? JSON.stringify(e.data).slice(0, 500) : '');
-    res.status(e.status || 502).json({ error: 'Failed to submit Flash transaction', detail: e.message, data: e.data || undefined });
-  }
-});
-
-router.post('/flash/trade-report', auth, async (req, res) => {
-  if (!requireFlashDex(req, res)) return;
-  try {
-    const result = await flash.recordTradeReport(db, req.playerId, req.body || {}, flashReportWallet(req));
-    res.json({
-      ok: true,
-      verified: result.changes > 0,
-      duplicate: result.changes === 0,
-      signature: result.signature,
-      notional_usd: result.notional_usd,
-      reason: result.changes > 0
-        ? 'Flash Solana transaction verified; rewards are ready to claim.'
-        : 'Flash transaction was already imported.',
-    });
-  } catch (e) {
-    res.status(e.status || 502).json({ error: 'Failed to verify Flash trade', detail: e.message });
-  }
-});
 
 router.get('/gmtrade/health', async (req, res) => {
   res.json(gmtrade.configStatus());
@@ -7318,14 +6929,9 @@ router.post('/trade-report', auth, async (req, res) => {
     } else if (req.dex === 'gmtrade') {
       const result = await gmtrade.recordTradeReport(db, req.playerId, req.body || {}, gmtradeLinkedSolanaWallet(req));
       verified = result.changes > 0;
-    } else if (req.dex === 'flash') {
-      const result = await flash.recordTradeReport(db, req.playerId, req.body || {}, flashReportWallet(req));
-      verified = result.changes > 0;
     }
     const verifiedReason = req.dex === 'gmtrade'
       ? 'GMTrade Solana transaction verified; rewards are ready to claim.'
-      : req.dex === 'flash'
-      ? 'Flash Solana transaction verified; rewards are ready to claim.'
       : 'Trade verified from Avantis Core API; rewards are ready to claim.';
     res.json({
       ok: true,
@@ -7352,7 +6958,7 @@ router.get('/deposits', auth, (req, res) => {
 // Get USDC & native balance on custodial wallet
 const balanceCache = new Map();
 router.get('/balance', auth, async (req, res) => {
-  if (req.dex === 'domfi' || req.dex === 'etoro' || req.dex === 'qfex' || req.dex === 'throne' || req.dex === 'gmx' || req.dex === 'ostium' || req.dex === 'monad' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'ondo' || req.dex === 'leverup' || req.dex === 'aster' || req.dex === 'hibachi' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'flash' || req.dex === 'bulk' || req.dex === 'imperial') {
+  if (req.dex === 'domfi' || req.dex === 'etoro' || req.dex === 'qfex' || req.dex === 'throne' || req.dex === 'gmx' || req.dex === 'ostium' || req.dex === 'monad' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'ondo' || req.dex === 'leverup' || req.dex === 'aster' || req.dex === 'hibachi' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'bulk' || req.dex === 'imperial') {
     return res.status(410).json({ error: `${req.dex} balances are read directly by the client wallet.` });
   }
   const wallet = db.getWallet(req.playerId, req.dex);

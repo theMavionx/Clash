@@ -729,7 +729,6 @@ function shouldStoreFetchFailure(path, status) {
   if (status === 400 && /^\/api\/ai-chat\/status(?:\?|$)/.test(path || '')) return false;
   if (status === 404 && /^\/api\/players\/login-wallet(?:\?|$)/.test(path || '')) return false;
   if (status === 401 && /^\/api\/futures\/decibel\/signer(?:\?|$)/.test(path || '')) return false;
-  if (status === 404 && /^\/api\/(?:v1\/exchanges|v1\/bot\/exchanges|futures)\/flash\/balance(?:\?|$)/.test(path || '')) return false;
   if (status === 409 && /^\/api\/futures\/bulk\/(?:account|builder-status)(?:\?|$)/.test(path || '')) return false;
   if (status === 401 && /^\/api\/futures\/(?:lighter|rh-lighter)\/account(?:\?|$)/.test(path || '')) return false;
   if ((status === 429 || status >= 500) && /^\/rpc\/solana(?:[-/?]|$)/.test(path || '')) return false;

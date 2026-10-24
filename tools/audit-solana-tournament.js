@@ -21,7 +21,6 @@ const VERIFIED_SOURCES_BY_DEX = {
   grvt: ['grvt_builder'],
   katana: ['katana_api'],
   gmtrade: ['gmtrade_tx', 'gmtrade_position_after_tx', 'gmtrade_close_tx_client_notional'],
-  flash: ['flash_tx'],
   lighter: ['lighter_integrator'],
 };
 
@@ -181,7 +180,7 @@ function isAptosWallet(value) {
 
 function walletMatchesDex(dex, wallet) {
   if (!wallet) return false;
-  if (dex === 'pacifica' || dex === 'phoenix' || dex === 'gmtrade' || dex === 'flash') return isSolanaWallet(wallet);
+  if (dex === 'pacifica' || dex === 'phoenix' || dex === 'gmtrade') return isSolanaWallet(wallet);
   if (dex === 'decibel') return isAptosWallet(wallet);
   return isEvmWallet(wallet);
 }
@@ -310,7 +309,7 @@ function buildWalletResolver(participants, linkedState) {
   }
 
   function chainForDex(dex) {
-    if (dex === 'pacifica' || dex === 'phoenix' || dex === 'gmtrade' || dex === 'flash') return 'solana';
+    if (dex === 'pacifica' || dex === 'phoenix' || dex === 'gmtrade') return 'solana';
     if (dex === 'decibel') return 'aptos';
     return 'evm';
   }
@@ -471,22 +470,6 @@ async function livePacifica(wallet) {
   };
 }
 
-async function liveFlash(wallet) {
-  const flash = require(path.join(ROOT, 'server-futures', 'flash.js'));
-  const positions = await flash.getPositionsByAddress(wallet);
-  return {
-    source: 'flash_onchain_positions',
-    positions: Array.isArray(positions) ? positions.length : 0,
-    rows: Array.isArray(positions) ? positions.slice(0, 5).map(row => ({
-      symbol: row.symbol || row.market_name || null,
-      side: row.side || row.direction || null,
-      size_usd: row.size_usd ?? row.sizeUsd ?? null,
-      pnl_usd: row.pnl_usd ?? row.pnlUsd ?? null,
-      entry_price: row.entry_price ?? row.entryPrice ?? null,
-    })) : [],
-  };
-}
-
 async function runLiveChecks(participants, dexList, resolveWallet) {
   const out = [];
   for (const participant of participants) {
@@ -494,7 +477,7 @@ async function runLiveChecks(participants, dexList, resolveWallet) {
       const wallets = resolveWallet(participant.player_id, dex);
       if (!wallets.length) continue;
       const primary = wallets[0];
-      if (dex !== 'pacifica' && dex !== 'phoenix' && dex !== 'flash') continue;
+      if (dex !== 'pacifica' && dex !== 'phoenix') continue;
       const row = {
         player_id: participant.player_id,
         name: participant.name,
@@ -508,7 +491,6 @@ async function runLiveChecks(participants, dexList, resolveWallet) {
       try {
         if (dex === 'pacifica') row.result = await livePacifica(primary.wallet);
         if (dex === 'phoenix') row.result = await livePhoenix(primary.wallet);
-        if (dex === 'flash') row.result = await liveFlash(primary.wallet);
         row.ok = true;
       } catch (e) {
         row.error = e.message || String(e);
@@ -694,7 +676,7 @@ function audit(options) {
           pnl_usd: round2(d.pnl_usd),
         } : null,
       };
-      if ((dex === 'phoenix' || dex === 'flash') && f && !c) {
+      if (dex === 'phoenix' && f && !c) {
         row.warnings.push(`${dex}: verified trade_history exists but tournament credits are missing`);
       }
       if (c && f && (!nearlyEqual(c.volume_usd, f.volume_usd) || !nearlyEqual(c.pnl_usd, f.pnl_usd) || Number(c.trades_count) !== Number(f.trades_count))) {

@@ -9,7 +9,7 @@ const RPC = new Map([
   ['rpc.risechain.com', ['/']], ['rpc.hyperliquid.xyz', ['/']], ['rpc.grvt.io', ['/']],
   ['rpc.katana.network', ['/']], ['rpc.testnet.arc.network', ['/']],
   ['api.mainnet-beta.solana.com', ['/']], ['solana-rpc.publicnode.com', ['/']],
-  ['rpc-1.gmtrade.xyz', ['/']], ['flash.magicblock.xyz', ['/']], ['flashtrade.magicblock.app', ['/']],
+  ['rpc-1.gmtrade.xyz', ['/']],
   ['1rpc.io', ['/eth', '/base', '/arb', '/sol']], ['rpc.ankr.com', ['/eth', '/base', '/arbitrum', '/solana']],
 ]);
 const RPC_METHODS = new Set([
@@ -43,8 +43,6 @@ const GET_PATHS = new Map([
   ['service.leverup.xyz', /^\/(api\/)?(v\d\/)?(market|markets|prices|pairs|ticker|candles)(\/|$)/],
   ['api.ondoperps.xyz', /^\/v1\/(markets|perps\/(mark_prices|volume|open_interest|depth|history))$/],
   ['api.hotstuff.trade', /^\/(api\/)?(v\d\/)?(markets|prices|candles|pairs|ticker|orderbook)(\/|$)/],
-  ['flashapi.trade', /^\/(api\/)?(v\d\/)?(markets|raw\/markets|prices|tokens|pools|stats)(\/|$)/],
-  ['api.prod.flash.trade', /^\/(api\/)?(v\d\/)?(markets|prices|tokens|pools|stats)(\/|$)/],
   ['web-api-server.gmtrade.xyz', /^\/(cache\/prices\/tickers|(api\/)?(v\d\/)?(markets|prices|tokens|pools|stats))(\/|$)/],
   ['fullnode.mainnet.aptoslabs.com', /^\/v1(\/(accounts\/0x[0-9a-f]+(\/resources?|\/modules?)(\/[^?]+)?|transactions\/by_(version\/\d+|hash\/0x[0-9a-f]+)|estimate_gas_price))?$/i],
   ['archive.mainnet.aptoslabs.com', /^\/v1\/transactions\/by_(version\/\d+|hash\/0x[0-9a-f]+)$/i],

@@ -114,7 +114,6 @@ const FUTURES_TASK_DEXES = new Set([
   'grvt',
   'katana',
   'gmtrade',
-  'flash',
   'lighter',
   'rhlighter',
   'bulk',
@@ -551,7 +550,7 @@ function resolveWallet(player) {
 
 function walletMatchesDex(dex, wallet) {
   if (dex === 'decibel') return isAptosWallet(wallet);
-  if (dex === 'pacifica' || dex === 'phoenix' || dex === 'gmtrade' || dex === 'flash' || dex === 'bulk' || dex === 'imperial') return isSolanaWallet(wallet);
+  if (dex === 'pacifica' || dex === 'phoenix' || dex === 'gmtrade' || dex === 'bulk' || dex === 'imperial') return isSolanaWallet(wallet);
   if (
     dex === 'avantis' ||
     dex === 'domfi' ||
@@ -596,7 +595,7 @@ function resolveWalletForDex(player, dex) {
   try {
     const chainType = normalizedDex === 'decibel'
       ? 'aptos'
-      : (normalizedDex === 'pacifica' || normalizedDex === 'phoenix' || normalizedDex === 'gmtrade' || normalizedDex === 'flash' || normalizedDex === 'bulk' || normalizedDex === 'imperial')
+      : (normalizedDex === 'pacifica' || normalizedDex === 'phoenix' || normalizedDex === 'gmtrade' || normalizedDex === 'bulk' || normalizedDex === 'imperial')
         ? 'solana'
         : 'evm';
     const walletRow = db.db.prepare(

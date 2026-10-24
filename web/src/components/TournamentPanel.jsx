@@ -45,6 +45,7 @@ const DEX_LABELS = {
   grvt: 'GRVT',
   katana: 'Katana',
   gmtrade: 'GMTrade',
+  // Flash Trade is retired; label kept only for historical tournament rows.
   flash: 'Flash Trade',
 };
 

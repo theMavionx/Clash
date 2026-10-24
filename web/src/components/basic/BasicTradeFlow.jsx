@@ -132,7 +132,7 @@ function BasicTradeFlow({
         ?? 0
     ));
     if (accBal > 0) return accBal;
-    if (dex === 'pacifica' || dex === 'hyperliquid' || dex === 'risex' || dex === 'phoenix' || dex === 'nado' || dex === 'ondo' || dex === 'flash') return 0;
+    if (dex === 'pacifica' || dex === 'hyperliquid' || dex === 'risex' || dex === 'phoenix' || dex === 'nado' || dex === 'ondo') return 0;
     return Number(walletUsdc || 0);
   }, [account, walletUsdc, dex]);
 
@@ -201,7 +201,7 @@ function BasicTradeFlow({
     setSubmitting(true);
     setErrorMsg(null);
     try {
-      const isCollateralDex = dex === 'avantis' || dex === 'domfi' || dex === 'etoro' || dex === 'decibel' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'gmtrade' || dex === 'flash' || dex === 'leverup';
+      const isCollateralDex = dex === 'avantis' || dex === 'domfi' || dex === 'etoro' || dex === 'decibel' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'gmtrade' || dex === 'leverup';
       const sideForOpen = pickedDir === 'long'
         ? (isCollateralDex ? 'long' : 'bid')
         : (isCollateralDex ? 'short' : 'ask');

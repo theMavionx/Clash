@@ -152,7 +152,6 @@ function DexPicker({ onPick, isInFrame, isSolanaMobile }) {
                   cfg.id === 'katana' ? 'Self-custody · Katana' :
                   cfg.id === 'lighter' || cfg.id === 'rhlighter' ? 'Self-custody · EVM' :
                   cfg.id === 'gmtrade' ? 'Self-custody · Solana' :
-                  cfg.id === 'flash' ? 'Self-custody · Solana' :
                   cfg.id === 'monad' ? 'Self-custody · Monad' :
                   cfg.id === 'decibel' ? 'Self-custody · Aptos' :
                   'Self-custody · Solana'
@@ -370,15 +369,13 @@ function ConnectVenueGate({
 }
 
 function ConnectPacifica({ onOpenWalletModal, onPrivyLogin, privyEnabled, privyAuthed, dex = 'pacifica' }) {
-  const venue = dex === 'imperial' ? 'Imperial' : dex === 'bulk' ? 'Bulk' : dex === 'flash' ? 'Flash Trade' : dex === 'gmtrade' ? 'GMTrade' : dex === 'phoenix' ? 'Phoenix' : 'Pacifica';
+  const venue = dex === 'imperial' ? 'Imperial' : dex === 'bulk' ? 'Bulk' : dex === 'gmtrade' ? 'GMTrade' : dex === 'phoenix' ? 'Phoenix' : 'Pacifica';
   const connectCopy = dex === 'imperial'
     ? 'Connect your Solana wallet to browse Imperial markets and create a signed mobile session. Clash routes orders through Imperial with the CLASH builder code; your private key never leaves your wallet.'
     : dex === 'bulk'
     ? 'Connect your Solana wallet to start playing. Bulk orders are signed by your own wallet, include the Clash builder code, and never expose your private key.'
     : dex === 'gmtrade'
     ? 'Connect your Solana wallet to start playing. Please accept our referral code in Clash to receive a GMTrade fee discount. Trades are signed by your own wallet - we never hold your keys.'
-    : dex === 'flash'
-      ? 'Connect your Solana wallet to start playing. Flash Trade transactions are built by the Flash v2 transaction builder and signed by your own wallet - we never hold your keys.'
     : 'Connect your Solana wallet to start playing. Trades are signed by your own wallet - we never hold your keys.';
   const steps = [
     { id: 'wallet', label: 'Connect a Solana wallet', hint: 'Choose email or a wallet app. The connected wallet remains self-custodial.', status: 'active' },
@@ -551,7 +548,6 @@ function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthe
     : dex === 'lighter' ? 'Lighter'
     : dex === 'rhlighter' ? 'RH Lighter'
     : dex === 'gmtrade' ? 'GMTrade'
-    : dex === 'flash' ? 'Flash Trade'
     : 'Avantis';
   const chainName = dex === 'gmx' || dex === 'ostium' ? 'Arbitrum'
     : dex === 'etoro' ? 'EVM'
@@ -569,7 +565,6 @@ function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthe
     : dex === 'katana' ? 'Katana'
     : dex === 'lighter' || dex === 'rhlighter' ? 'EVM'
     : dex === 'gmtrade' ? 'Solana'
-    : dex === 'flash' ? 'Solana'
     : 'Base';
   const chainArticle = chainName === 'EVM' || chainName === 'Ethereum' ? 'an' : 'a';
   const venueSetupStep = dex === 'domfi'
@@ -771,7 +766,6 @@ function RegisterPanel() {
                   dex === 'grvt' ? 'GRVT' :
                   dex === 'katana' ? 'Katana' :
                   dex === 'gmtrade' ? 'GMTrade' :
-                  dex === 'flash' ? 'Flash Trade' :
                   dex === 'phoenix' ? 'Phoenix' :
                   'Pacifica'
                 } as ${fcUser.username || fcUser.displayName}…`
@@ -913,7 +907,6 @@ function RegisterPanel() {
     if (dex === 'lighter') return 'Lighter login';
     if (dex === 'rhlighter') return 'RH Lighter login';
     if (dex === 'gmtrade') return 'GMTrade login';
-    if (dex === 'flash') return 'Flash Trade login';
     if (dex === 'bulk') return 'Bulk login';
     if (dex === 'imperial') return 'Imperial login';
     if (dex === 'phoenix') return 'Phoenix login';

@@ -13,7 +13,7 @@ const botCredentialsSource = await readFile(new URL('./src/lib/botGameCredential
 
 assert.match(
   panelSource,
-  /dex === 'nado' \|\| dex === 'ondo' \|\| dex === 'katana' \|\| dex === 'flash' \|\| dex === 'ostium'/,
+  /dex === 'nado' \|\| dex === 'ondo' \|\| dex === 'katana' \|\| dex === 'ostium'/,
   'Nado OFF -> ENABLE must use the one-tap signer setup branch',
 );
 assert.match(

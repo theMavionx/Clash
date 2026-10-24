@@ -15,8 +15,6 @@ import { readPacificaAgent, findAnyPacificaAgent, listStoredPacificaMasters } fr
 import { bindPacificaAgent } from './pacificaBind';
 import { registeredDexWallet, playerLoginWallet } from './playerDexAccounts';
 import { readAvantisSmartWalletDelegate } from './avantisSmartWallet';
-import { getFlashOneTapAgent } from './flashOneTap';
-import { enableFlashOneTapSession } from './flashOneTapSetup';
 import { ensureKatanaOneTapReady, loadKatanaStoredCredentials, loadKatanaStoredOneTapSigner } from './katanaOneTapSetup';
 import {
   enableAvantisSmartWallet,
@@ -442,65 +440,6 @@ async function ensureDecibelReady(player, ctx = {}) {
   return { ok: true, wallet: resolved.wallet, subaccount: resolved.subaccount };
 }
 
-async function ensureFlashReady(player, ctx = {}) {
-  const wallets = solanaWalletsForPlayer(player, 'flash', ctx);
-  const preferred = [];
-  const add = (w) => {
-    const v = String(w || '').trim();
-    if (v && !preferred.includes(v)) preferred.push(v);
-  };
-  add(ctx.solanaWalletAddress || ctx.walletAddress);
-  for (const w of wallets) add(w);
-
-  const isUsable = (agent) => {
-    if (!agent?.secretKey || !agent.enabled || !agent.delegated || !agent.sessionToken) return false;
-    const validUntil = Number(agent.validUntil || 0);
-    return validUntil > Math.ceil(Date.now() / 1000) + 60;
-  };
-
-  for (const sol of preferred) {
-    const agent = await getFlashOneTapAgent(sol, { scope: ctx.credentialScope });
-    ctx.assertCurrent();
-    if (isUsable(agent)) return { ok: true, wallet: sol };
-  }
-
-  const primary = preferred[0] || '';
-  if (!primary) {
-    return { ok: false, error: 'Connect Solana Phantom (Futures → Flash).' };
-  }
-
-  const { solWallet, playerToken } = ctx;
-  if (!solWallet?.publicKey) {
-    return {
-      ok: false,
-      error: 'Connect Solana Phantom — Connect bot will enable Flash one-tap (same as Futures).',
-    };
-  }
-
-  try {
-    const result = await enableFlashOneTapSession({
-      solWallet,
-      walletAddr: primary,
-      playerToken,
-      credentialScope: ctx.credentialScope,
-      scope: ctx.credentialScope,
-      assertCurrent: ctx.assertCurrent,
-    });
-    ctx.assertCurrent();
-    if (result?.error) return { ok: false, error: result.error };
-    const agent = await getFlashOneTapAgent(primary, { scope: ctx.credentialScope });
-    ctx.assertCurrent();
-    if (isUsable(agent)) return { ok: true, wallet: primary };
-    return { ok: false, error: 'Flash one-tap setup finished but session is not active yet.' };
-  } catch (e) {
-    const msg = String(e?.message || e || '');
-    if (/user rejected|denied|cancelled|canceled|blocked/i.test(msg)) {
-      return { ok: false, error: 'Signature cancelled or blocked in wallet.' };
-    }
-    return { ok: false, error: msg || 'Flash one-tap setup failed' };
-  }
-}
-
 /**
  * Run game-equivalent readiness check (and inline auth where possible).
  * @returns {Promise<{ ok: true } | { ok: false, error: string }>}
@@ -521,7 +460,6 @@ export async function ensureGameExchangeReady(exchangeId, player, ctx = {}) {
 async function ensureGameExchangeReadyInner(exchangeId, player, ctx) {
   const ex = String(exchangeId || '').toLowerCase();
   if (ex === 'pacifica') return ensurePacificaReady(player, ctx);
-  if (ex === 'flash') return ensureFlashReady(player, ctx);
   if (ex === 'hyperliquid') return ensureHyperliquidReady(player, ctx);
   if (ex === 'hotstuff') return ensureHotstuffReady(player, ctx);
   if (ex === 'nado') return ensureNadoReady(player, ctx);

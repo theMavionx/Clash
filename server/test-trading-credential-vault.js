@@ -414,7 +414,7 @@ test('production catalog rejects Solana primary keys in supported encodings, inc
   const productionCatalog = require('./trading_credential_catalog');
   const { Keypair } = require('@solana/web3.js'), bs58Module = require('bs58'), bs58 = bs58Module.default || bs58Module;
   const primary = Keypair.generate(), delegate = Keypair.generate(), wallet = primary.publicKey.toBase58();
-  for (const prefix of ['clash_flash_one_tap_agent_v1', 'clash:phoenix:one_tap:v1']) {
+  for (const prefix of ['clash:phoenix:one_tap:v1']) {
     const key = `${prefix}:${wallet}`;
     assert.equal(productionCatalog.validate(key, { owner: wallet, secretKey: Buffer.from(delegate.secretKey).toString('base64') }, 'alice'), true);
     const candidates = [Buffer.from(primary.secretKey).toString('base64'), bs58.encode(primary.secretKey),

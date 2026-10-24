@@ -1,7 +1,7 @@
 const VALID_DEXES = new Set([
   'pacifica', 'avantis', 'domfi', 'etoro', 'qfex', 'throne', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix',
   'hyperliquid', 'risex', 'nado', 'ondo', 'leverup', 'aster', 'hibachi', 'hotstuff', 'grvt', 'katana',
-  'gmtrade', 'flash', 'lighter', 'rhlighter', 'bulk', 'imperial',
+  'gmtrade', 'lighter', 'rhlighter', 'bulk', 'imperial',
 ]);
 
 const MAX_BALANCE_USD = 1_000_000_000_000;

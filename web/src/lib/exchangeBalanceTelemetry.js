@@ -1,7 +1,7 @@
 const SUPPORTED_EXCHANGES = new Set([
   'qfex', 'throne', 'pacifica', 'avantis', 'domfi', 'etoro', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix',
   'hyperliquid', 'risex', 'nado', 'ondo', 'leverup', 'hibachi', 'hotstuff', 'grvt', 'katana',
-  'gmtrade', 'flash', 'lighter', 'rhlighter', 'bulk', 'imperial',
+  'gmtrade', 'lighter', 'rhlighter', 'bulk', 'imperial',
 ]);
 
 const MIN_REPORT_INTERVAL_MS = 60_000;

@@ -26,7 +26,6 @@ const FUTURES_REWARD_DEXES = new Set([
   'grvt',
   'katana',
   'gmtrade',
-  'flash',
   'lighter',
   'rhlighter',
   'bulk',
@@ -37,7 +36,6 @@ const DEX_REQUIRED_CHAIN = {
   pacifica: 'solana',
   phoenix: 'solana',
   gmtrade: 'solana',
-  flash: 'solana',
   bulk: 'solana',
   imperial: 'solana',
   decibel: 'aptos',
@@ -83,7 +81,6 @@ const VERIFIED_SOURCES_BY_DEX = {
   grvt: ['grvt_builder'],
   katana: ['katana_api'],
   gmtrade: ['gmtrade_tx', 'gmtrade_position_after_tx', 'gmtrade_close_tx_client_notional'],
-  flash: ['flash_tx'],
   // *_integrator: Clash builder fills (fee revenue). *_terminal: non-builder
   // (Standard account) fills matched to a server-signed order receipt; rewards only.
   lighter: ['lighter_integrator', 'lighter_terminal'],

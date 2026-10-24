@@ -6015,7 +6015,6 @@ function dexAccent(dex) {
     risex: '#f43f5e',
     katana: '#eab308',
     gmtrade: '#22c55e',
-    flash: '#22c55e',
     imperial: '#d7b36b',
   };
   return map[String(dex || '').toLowerCase()] || 'var(--admin-blue)';

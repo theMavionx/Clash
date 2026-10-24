@@ -1,7 +1,7 @@
 export const TOURNAMENT_DEXES = [
   'qfex', 'throne',
   'pacifica', 'avantis', 'domfi', 'etoro', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid',
-  'risex', 'nado', 'ondo', 'leverup', 'hibachi', 'grvt', 'hotstuff', 'katana', 'gmtrade', 'flash', 'lighter', 'rhlighter', 'bulk', 'imperial',
+  'risex', 'nado', 'ondo', 'leverup', 'hibachi', 'grvt', 'hotstuff', 'katana', 'gmtrade', 'lighter', 'rhlighter', 'bulk', 'imperial',
 ];
 
 export const DEX_LABELS = {
@@ -26,6 +26,8 @@ export const DEX_LABELS = {
   hotstuff: 'Hotstuff',
   katana: 'Katana',
   gmtrade: 'GMTrade',
+  // Flash Trade is retired (not in TOURNAMENT_DEXES); label kept only so
+  // historical tournaments/players with dex='flash' render a readable name.
   flash: 'Flash Trade',
   lighter: 'Lighter',
   rhlighter: 'Robinhood Lighter',

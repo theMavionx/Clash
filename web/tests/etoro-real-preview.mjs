@@ -22,7 +22,7 @@ const mockComponents = new Set([
 const hookNames = [
   'Pacifica', 'Avantis', 'Domfi', 'Etoro', 'Decibel', 'Gmx', 'Monad',
   'Phoenix', 'Hyperliquid', 'Risex', 'Nado', 'Ondo', 'Leverup', 'Aster',
-  'Hibachi', 'Hotstuff', 'Grvt', 'Katana', 'Gmtrade', 'Flash',
+  'Hibachi', 'Hotstuff', 'Grvt', 'Katana', 'Gmtrade',
   'Lighter', 'RhLighter', 'Bulk', 'Ostium',
 ];
 const mocks = `

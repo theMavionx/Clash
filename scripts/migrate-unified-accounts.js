@@ -28,7 +28,6 @@ const REQUIRED_CHAIN = {
   pacifica: 'solana',
   phoenix: 'solana',
   gmtrade: 'solana',
-  flash: 'solana',
   decibel: 'aptos',
   avantis: 'evm',
   gmx: 'evm',

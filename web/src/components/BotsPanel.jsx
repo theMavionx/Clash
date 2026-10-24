@@ -27,6 +27,7 @@ import {
   supportsGameWalletSync,
   syncGameAccountToPhantom,
   UNSUPPORTED_GAME_WALLET_EXCHANGES,
+  withoutRetiredBotExchanges,
 } from '../lib/botGameCredentials';
 import { botApiUrl, botAuthHeaders, botWsUrl, fetchBotApiJson, botApiPathCandidates } from '../lib/botApiClient';
 import { registeredDexWallet } from '../lib/playerDexAccounts';
@@ -2330,7 +2331,7 @@ function BotsPanel({ onClose }) {
 
   const fetchExchangeBalanceFallback = useCallback(async (exchanges) => {
     if (!token || !Array.isArray(exchanges) || exchanges.length === 0) return;
-    const active = exchanges.filter((acc) => acc.status === 'active');
+    const active = withoutRetiredBotExchanges(exchanges).filter((acc) => acc.status === 'active');
     const results = [];
     for (let i = 0; i < active.length; i += 1) {
       const acc = active[i];
@@ -2441,7 +2442,7 @@ function BotsPanel({ onClose }) {
       console.error('fetch accounts failed:', res.error);
       return;
     }
-    const rows = Array.isArray(res.data) ? res.data : [];
+    const rows = withoutRetiredBotExchanges(res.data);
     setSyncedAccounts(rows);
     const now = Date.now();
     if (rows.length > 0 && now - balanceFallbackAt.current > 45000) {

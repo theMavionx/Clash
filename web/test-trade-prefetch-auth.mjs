@@ -33,7 +33,7 @@ async function run(dex, token = null, walletAddress = 'fixture-wallet') {
   return calls.map(call => call.url);
 }
 
-for (const dex of ['flash', 'gmtrade', 'bulk']) {
+for (const dex of ['gmtrade', 'bulk']) {
   test(`${dex}: anonymous prefetch retains public data, never probes protected accounts`, async () => {
     const urls = await run(dex);
     assert.equal(urls.length, 3);
@@ -106,9 +106,9 @@ test('GRVT never prefetches unsupported account route; positions/orders remain a
 
 test('anonymous warmup does not throttle the subsequent authenticated warmup', async () => {
   clearTradePrefetchCache();
-  await prefetchDexTradeData({ dex: 'flash', walletAddress: 'fixture-wallet' });
+  await prefetchDexTradeData({ dex: 'gmtrade', walletAddress: 'fixture-wallet' });
   calls.length = 0;
-  const summary = await prefetchDexTradeData({ dex: 'flash', walletAddress: 'fixture-wallet', token: 'new-session' });
+  const summary = await prefetchDexTradeData({ dex: 'gmtrade', walletAddress: 'fixture-wallet', token: 'new-session' });
   assert.equal(summary.skipped, undefined);
-  assert.ok(calls.some(call => call.url.includes('/flash/account?')));
+  assert.ok(calls.some(call => call.url.includes('/gmtrade/account?')));
 });

@@ -9,7 +9,7 @@ import { calculateFeeAwarePositionPnl, findPositionMarket, positionPnlPresentati
 // Execute the actual shared metrics functions, not a duplicate test formula.
 const source = readFileSync(new URL('./src/components/FuturesPanel.jsx', import.meta.url), 'utf8');
 const names = ['numOrNull','displayLeverage','cleanSignedZero','signedMetricDirection','firstPositive',
-  'isFlashPositionLike','flashPositionDisplayLeverageStable','getPositionMetrics','formatPositionPrice','positionPnlFeeTitle'];
+  'getPositionMetrics','formatPositionPrice','positionPnlFeeTitle'];
 const nodes = parse(source, {sourceType:'module',plugins:['jsx']}).program.body
   .filter(node => node.type === 'FunctionDeclaration' && names.includes(node.id.name));
 assert.equal(nodes.length, names.length);

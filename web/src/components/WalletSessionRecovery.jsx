@@ -41,7 +41,6 @@ const DEX_WALLET = {
   pacifica: { kind: 'solana', chain: 'Solana', label: 'Pacifica', cta: 'Reconnect Solana wallet' },
   phoenix: { kind: 'solana', chain: 'Solana', label: 'Phoenix', cta: 'Reconnect Solana wallet' },
   gmtrade: { kind: 'solana', chain: 'Solana', label: 'GMTrade', cta: 'Reconnect Solana wallet' },
-  flash: { kind: 'solana', chain: 'Solana', label: 'Flash Trade', cta: 'Reconnect Solana wallet' },
   bulk: { kind: 'solana', chain: 'Solana', label: 'Bulk', cta: 'Reconnect Solana wallet' },
   imperial: { kind: 'solana', chain: 'Solana', label: 'Imperial', cta: 'Reconnect Solana wallet' },
 };

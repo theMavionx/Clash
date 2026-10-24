@@ -78,7 +78,7 @@ test('LeverUp uses the official execution chart identifier and clears stale cand
  assert.equal(new URL(h.calls.at(-1).url,'http://local').searchParams.get('symbol'),'Hyperliquid.xyz:SKHX');h.unmount();
 });
 
-for (const dex of ['leverup','avantis','gmx','ostium','hyperliquid','risex','hotstuff','grvt','gmtrade','flash']) {
+for (const dex of ['leverup','avantis','gmx','ostium','hyperliquid','risex','hotstuff','grvt','gmtrade']) {
   test(`${dex} shared chart uses same-origin reference history without retired Pyth calls`,async()=>{
     const h=harness(async()=>new Response(JSON.stringify({s:'ok',source:'Binance USD index',t:[1788122700],o:[78000],h:[78010],l:[77990],c:[78005]})));
     h.render({dex,symbol:'BTC'});await flush();

@@ -363,7 +363,7 @@ export function useAuthFlow() {
   // of silently locking the device to Pacifica.
   useEffect(() => {
     if (!smReady || !isSolanaMobile) return;
-    if (dex !== 'pacifica' && dex !== 'phoenix' && dex !== 'gmtrade' && dex !== 'flash') setDex('pacifica');
+    if (dex !== 'pacifica' && dex !== 'phoenix' && dex !== 'gmtrade') setDex('pacifica');
   }, [smReady, isSolanaMobile, dex, setDex]);
 
   // Saga/Seeker auto-connect: once the page settles, programmatically select
@@ -552,7 +552,7 @@ export function useAuthFlow() {
     // .getWalletClient(chainId) — Avantis uses Base, GMX uses Arbitrum).
     if (EVM_AUTH_DEXES.has(dex)) return evmContext || privyEvm || privySol || solAdapter || aptosCandidate || null;
     if (dex === 'decibel') return aptosCandidate || evmContext || privyEvm || privySol || solAdapter || null;
-    if (dex === 'pacifica' || dex === 'phoenix' || dex === 'gmtrade' || dex === 'flash') {
+    if (dex === 'pacifica' || dex === 'phoenix' || dex === 'gmtrade') {
       const farcasterSol = solAdapter?.source === 'farcaster' ? solAdapter : null;
       return farcasterSol || privySol || solAdapter || evmContext || privyEvm || aptosCandidate || null;
     }

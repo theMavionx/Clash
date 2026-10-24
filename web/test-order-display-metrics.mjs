@@ -15,7 +15,7 @@ const cases = [
   ['GRVT', { initial_amount: '0.008' }, 0.008, 512],
   ['Katana quantity', { quantity: '0.009' }, 0.009, 576],
   ['Lighter', { amount: '0.011' }, 0.011, 704],
-  ['Flash', { initial_amount: '0.012', notional_usd: 768 }, 0.012, 768],
+  ['Initial amount with notional', { initial_amount: '0.012', notional_usd: 768 }, 0.012, 768],
   ['GMTrade token amount', { token_amount: '0.013', notional_usd: 832 }, 0.013, 832],
   ['Ostium', { amount: '0.014', size_usd: 896 }, 0.014, 896],
   ['Phoenix normalized', { initial_amount: '0.015' }, 0.015, 960],

@@ -3155,17 +3155,6 @@ async function fetchGmtradeEarnings() {
   });
 }
 
-async function fetchFlashEarnings() {
-  return localVerifiedBuilderEarnings({
-    dex: 'flash',
-    verifiedSource: 'flash_tx',
-    currency: 'USDC (Flash/Solana)',
-    feeBps: FLASH_BUILDER_FEE_BPS,
-    sourceDetail: 'flash_v2_verified_tx_local_estimate',
-    note: `Flash stats use confirmed Solana transaction proof rows built through the Flash Trade API v2 transaction builder. Exact commission is not indexed yet, so local ${FLASH_BUILDER_FEE_BPS}bps is an estimate for comparison.`,
-  });
-}
-
 async function fetchHibachiEarnings() {
   const local = readVerifiedFuturesDexStats('hibachi', 'hibachi_api');
   const estimated = local.volume_usd * (HIBACHI_BUILDER_FEE_BPS / 10000);
@@ -3753,7 +3742,6 @@ const ANALYTICS_DEXES = [
   { key: 'hotstuff', label: 'Hotstuff' },
   { key: 'katana', label: 'Katana Perps' },
   { key: 'gmtrade', label: 'GMTrade' },
-  { key: 'flash', label: 'Flash Trade' },
   { key: 'lighter', label: 'Lighter' },
   { key: 'rhlighter', label: 'Robinhood Lighter' },
   { key: 'bulk', label: 'Bulk' },
@@ -3770,7 +3758,6 @@ const ANALYTICS_WINDOWS = [
 // RISEx protocol value 100 is one conventional basis point. Keep analytics
 // fixed to the same canonical 1 bps enforced by order routing and rewards.
 const RISEX_BUILDER_FEE_CONVENTIONAL_BPS = 1;
-const FLASH_BUILDER_FEE_BPS = Number(process.env.FLASH_BUILDER_FEE_BPS || process.env.GMTRADE_BUILDER_FEE_BPS) || 0;
 // DomFi pays referrers 10% of the protocol half of each 5-10 bps
 // maker/taker fee. That is a variable 0.25-0.5 bps share of notional.
 // Local analytics use the midpoint only as a labelled estimate; exact
@@ -3839,7 +3826,6 @@ function tradeSourceWhereForAnalytics(dex) {
   if (dex === 'hotstuff') return "verified_source = 'hotstuff_api'";
   if (dex === 'katana') return "verified_source = 'katana_api'";
   if (dex === 'gmtrade') return "verified_source IN ('gmtrade_tx', 'gmtrade_position_after_tx', 'gmtrade_close_tx_client_notional')";
-  if (dex === 'flash') return "verified_source = 'flash_tx'";
   // Revenue analytics stay builder-only: *_terminal fills carry no integrator fee.
   if (dex === 'lighter') return "verified_source = 'lighter_integrator'";
   if (dex === 'rhlighter') return "verified_source = 'rhlighter_integrator'";
@@ -4054,18 +4040,6 @@ function revenueModelForDex(dex, dateForRate = null) {
       builder_fee_pct: bps / 100,
       model: bps > 0 ? 'single_builder_fee' : 'builder_fee_not_configured',
       source_detail: bps > 0 ? 'local_volume_x_gmtrade_bps' : 'gmtrade_builder_not_configured',
-    };
-  }
-  if (dex === 'flash') {
-    const bps = Math.max(0, FLASH_BUILDER_FEE_BPS);
-    return {
-      configured: bps > 0,
-      rate: bps / 10000,
-      rate_label: bps > 0 ? `${bps} bps builder fee estimate` : 'not configured',
-      builder_fee_bps: bps,
-      builder_fee_pct: bps / 100,
-      model: bps > 0 ? 'single_builder_fee' : 'builder_fee_not_configured',
-      source_detail: bps > 0 ? 'local_volume_x_flash_bps' : 'flash_builder_not_configured',
     };
   }
   if (dex === 'lighter') {
@@ -4576,7 +4550,6 @@ const EARNINGS_READER_CONFIG = {
   hibachi: { source: 'hibachi_api_activity_builder_fee_unverified', read: () => fetchHibachiEarnings() },
   katana: { source: 'katana_builder_fee_exact_or_estimate', read: () => fetchKatanaEarnings() },
   gmtrade: { source: 'gmtrade_verified_tx_local_estimate', read: () => fetchGmtradeEarnings() },
-  flash: { source: 'flash_v2_verified_tx_local_estimate', read: () => fetchFlashEarnings() },
   lighter: { source: 'lighter_integrator_fills_fee_sum', read: () => fetchLighterEarnings() },
   rhlighter: { source: 'rh_lighter_public_partner_stats', read: () => fetchRhLighterEarnings() },
   bulk: { source: 'bulk_mainnet_signed_order_proof', read: ({ mainDb }) => fetchBulkEarnings({ mainDb }) },
@@ -4605,7 +4578,6 @@ const EARNINGS_DEX_ORDER = [
   'hibachi',
   'katana',
   'gmtrade',
-  'flash',
   'lighter',
   'rhlighter',
   'bulk',

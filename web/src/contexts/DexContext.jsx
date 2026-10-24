@@ -387,21 +387,6 @@ export const DEX_CONFIG = {
     chainShort: 'SOL',
     description: 'GMX-style perps on Solana',
   },
-  flash: {
-    id: 'flash',
-    label: 'FLASH',
-    shortLabel: 'FLS',
-    emoji: 'FLS',
-    logo: '/flash-trade.png',
-    logoIsWordmark: false,
-    color: '#FACC15',
-    colorDark: '#A16207',
-    colorLight: 'rgba(250,204,21,0.16)',
-    borderColor: '#EAB308',
-    chain: 'Solana',
-    chainShort: 'SOL',
-    description: 'Flash Trade perps on Solana',
-  },
   lighter: {
     id: 'lighter',
     label: 'LIGHTER',
@@ -443,7 +428,6 @@ export const DEX_ORDER = [
   'imperial',
   'bulk',
   'lighter',
-  'flash',
   'gmtrade',
   'katana',
   'grvt',
@@ -472,7 +456,7 @@ export function isDexAvailableInContext(dexId, { isInFrame = false, isSolanaMobi
   // Vault holds a Solana keypair, and Mobile Wallet Adapter is Solana-native.
   // Base/Arbitrum/Aptos/Monad signing would either dead-end or fall through
   // to a non-native wallet flow.
-  if (isSolanaMobile && dexId !== 'qfex' && dexId !== 'pacifica' && dexId !== 'phoenix' && dexId !== 'gmtrade' && dexId !== 'flash' && dexId !== 'bulk' && dexId !== 'imperial') return false;
+  if (isSolanaMobile && dexId !== 'qfex' && dexId !== 'pacifica' && dexId !== 'phoenix' && dexId !== 'gmtrade' && dexId !== 'bulk' && dexId !== 'imperial') return false;
   // Farcaster mini apps expose Solana and, on some clients, EVM providers.
   // Aptos wallet-standard providers such as Petra are not available there, so
   // Decibel would leave users stuck on an impossible connect step.
@@ -510,7 +494,9 @@ export function DexProvider({ children }) {
       const ctx = { isInFrame: isFarcasterFrame(), isSolanaMobile: isSolanaMobileSync() };
       if (isDexAvailableInContext(cached, ctx)) return cached;
       localStorage.setItem(STORAGE_KEY, 'pacifica');
-      if (cached === 'dango') localStorage.removeItem('clash_dex_picked');
+      // Retired venues (Dango, Flash Trade): fall back to Pacifica and re-open
+      // the DEX picker so the player chooses a live venue.
+      if (cached === 'dango' || cached === 'flash') localStorage.removeItem('clash_dex_picked');
       return 'pacifica';
     }
   );
