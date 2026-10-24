@@ -11,9 +11,8 @@
  * from the player's request other than those query values is forwarded: no
  * game token, cookies, client IP or bodies.
  *
- * Copy-bot control (`/v1/copy/subscriptions*`, credentials, venue setup) is
- * deliberately NOT proxied. ClashBot requires a wallet sign-in session bound
- * to its own origin for those routes; the game hands off to ClashBot instead.
+ * Copy-bot control is NOT proxied here: it goes through the signed partner
+ * channel in clashbot_copy_bots.js (`/api/v1/copy-bots/*`).
  *
  * Upstream base: CLASHBOT_COPY_API_URL (default https://clashbot.fun), which
  * serves `/leaderboard-api/*` and `/copy-api/*`.

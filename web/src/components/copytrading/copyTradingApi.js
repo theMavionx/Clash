@@ -7,9 +7,8 @@
 //   /leaderboard-api/v1/venues/status    -> /api/v1/copy-trading/venues/status
 //   /copy-api/v1/<route>                 -> /api/v1/copy-trading/<route>
 //
-// Copy-bot control (create / manage / stats) is intentionally absent: ClashBot
-// requires a wallet sign-in bound to its own origin (copy.clashbot.fun) for
-// every /v1/copy/subscriptions call, so those actions hand off to ClashBot.
+// Copy-bot control (create / manage / stats) lives in copyBotsApi.js, which
+// goes through the Clash server's HMAC-signed ClashBot partner channel.
 //
 // The path is same-origin on purpose: VITE_BOT_API_BASE_URL may point at the
 // Phantom bot backend for debugging, which does not host these routes.

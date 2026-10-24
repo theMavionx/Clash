@@ -63,15 +63,8 @@ import clashbotLogo from '../assets/resources/clashbot-logo.png';
 
 // ClashBot copy trading lives in its own lazily loaded chunk.
 const CopyTradingSection = lazy(() => import('./copytrading/CopyTradingSection'));
-const PANEL_SECTION_KEY = 'clash.botsPanel.section.v1';
-
-function readPanelSection() {
-  try {
-    return globalThis.localStorage?.getItem(PANEL_SECTION_KEY) === 'mm' ? 'mm' : 'copy';
-  } catch {
-    return 'copy';
-  }
-}
+// The panel is copy trading only; the market-making section is no longer offered.
+const PANEL_SECTION = 'copy';
 import { keccak256 } from 'js-sha3';
 
 function keccak256Array(key) {
@@ -1698,11 +1691,7 @@ function BotsPanel({ onClose }) {
     aptosWalletAddress,
   ]);
 
-  const [panelSection, setPanelSectionState] = useState(readPanelSection);
-  const setPanelSection = useCallback((next) => {
-    setPanelSectionState(next);
-    try { globalThis.localStorage?.setItem(PANEL_SECTION_KEY, next); } catch { /* storage optional */ }
-  }, []);
+  const panelSection = PANEL_SECTION;
   const [view, setView] = useState('dashboard');
   const [step, setStep] = useState('exchange');
   const [history, setHistory] = useState(DEFAULT_HISTORY);
@@ -4933,21 +4922,6 @@ function BotsPanel({ onClose }) {
             {!isMobile && <div style={S.headerSub}>{panelSection === 'copy' ? 'Copy trading' : 'MM Bot control room'}</div>}
           </div>
         </div>
-        <div className="bots-segment" style={{ ...S.segment, ...S.sectionSwitch }} role="tablist" aria-label="ClashBot section">
-          {[['copy', isMobile ? 'Copy' : 'Copy trading'], ['mm', isMobile ? 'MM bots' : 'Market making']].map(([key, label]) => (
-            <button
-              key={key}
-              type="button"
-              role="tab"
-              aria-selected={panelSection === key}
-              className="bots-segment-button"
-              style={{ ...S.segmentButton, ...(panelSection === key ? S.segmentActive : {}) }}
-              onClick={() => setPanelSection(key)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
         <button type="button" style={S.closeButton} onClick={onClose} aria-label="Close ClashBot panel">
           x
         </button>
@@ -4962,7 +4936,7 @@ function BotsPanel({ onClose }) {
               </div>
             )}
           >
-            <CopyTradingSection player={player} />
+            <CopyTradingSection player={player} walletCtx={gameSyncWalletCtx} />
           </Suspense>
         ) : view === 'launch'
           ? renderLaunch()

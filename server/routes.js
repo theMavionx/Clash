@@ -27898,6 +27898,16 @@ try {
   console.warn('[clashbot-copy] failed to mount proxy:', err?.message || err);
 }
 
+// In-game ClashBot copy bots (create / start / stop / edit / delete) through
+// the HMAC-signed ClashBot partner API. Player auth required; the partner
+// secret stays on this server.
+try {
+  const { mountClashbotCopyBots } = require('./clashbot_copy_bots');
+  mountClashbotCopyBots(router, { auth });
+} catch (err) {
+  console.warn('[clashbot-copy-bots] failed to mount:', err?.message || err);
+}
+
 router.use('/v1/strategies', auth, proxyToBot);
 router.use('/v1/bot', auth, proxyToBot);
 router.use('/v1/portfolio', auth, proxyToBot);

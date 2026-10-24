@@ -4,10 +4,11 @@ import { CLASHBOT_COPY_URL, PUBLIC_LEADERBOARD_VENUES } from './constants';
 import { fetchTraderSummary } from './copyTradingApi';
 import { traderFromSummary } from './traderModel';
 import Leaderboard from './Leaderboard';
-import { Icon, Segmented, StateBlock } from './ui';
+import MyCopyBots from './MyCopyBots';
+import { Notice, Segmented, StateBlock } from './ui';
 
 const TraderAnalysis = lazy(() => import('./TraderAnalysis'));
-const CopyHandoffModal = lazy(() => import('./CopyHandoffModal'));
+const CopySetupWizard = lazy(() => import('./CopySetupWizard'));
 
 const VIEW_KEY = 'clash.copytrading.view.v1';
 
@@ -19,38 +20,21 @@ function readView() {
   }
 }
 
-function MyBotsHandoff() {
-  return (
-    <section className="ct-card">
-      <StateBlock
-        tone="brand"
-        icon="bot"
-        title="Your copy bots live on ClashBot"
-        action={(
-          <a className="ct-btn ct-btn--primary ct-btn--md" href={CLASHBOT_COPY_URL} target="_blank" rel="noopener noreferrer" style={{ textDecoration: 'none' }}>
-            Open my bots on ClashBot
-            <Icon name="external" size={16} />
-          </a>
-        )}
-      >
-        Status, PnL, pause, stop and edit controls require your ClashBot wallet sign-in, which only works on
-        ClashBot itself. Bots keep running there after you close the game.
-      </StateBlock>
-    </section>
-  );
-}
-
 /**
  * Native ClashBot copy trading inside the Bots panel: leaderboard with every
- * ClashBot filter and sort, starred traders, deep trader analysis, and a
- * copy hand-off to ClashBot (bot creation / control needs ClashBot sign-in).
- * Data comes from ClashBot through the authenticated Clash server proxy.
+ * ClashBot filter and sort, starred traders, deep trader analysis, an in-game
+ * copy setup wizard and "My bots" management. Analytics come through the
+ * read-only Clash proxy; bot control goes through the Clash server's signed
+ * ClashBot partner channel, so no ClashBot sign-in is needed.
  */
-export default function CopyTradingSection({ player }) {
+export default function CopyTradingSection({ player, walletCtx }) {
   const token = player?.token || null;
   const [view, setViewState] = useState(readView);
   const [analysisTrader, setAnalysisTrader] = useState(null);
   const [copyTrader, setCopyTrader] = useState(null);
+  const [editBot, setEditBot] = useState(null);
+  const [savedNotice, setSavedNotice] = useState(null);
+  const [refreshKey, setRefreshKey] = useState(0);
   const contextRef = useRef(null);
   const [analysisContext, setAnalysisContext] = useState(null);
 
@@ -76,6 +60,19 @@ export default function CopyTradingSection({ player }) {
     setAnalysisTrader(trader);
   }, [token]);
 
+  const onSaved = useCallback((item, kind, warning) => {
+    setCopyTrader(null);
+    setEditBot(null);
+    setSavedNotice({
+      tone: warning ? 'warning' : 'success',
+      text: warning || (kind === 'updated'
+        ? `Copy bot #${item?.id ?? ''} updated.`
+        : `Copy bot #${item?.id ?? ''} created${item?.status === 'active' ? ' and running' : ''}.`),
+    });
+    setRefreshKey((value) => value + 1);
+    setView('bots');
+  }, [setView]);
+
   if (!token) {
     return (
       <div className="ct-root">
@@ -94,7 +91,7 @@ export default function CopyTradingSection({ player }) {
           <p className="ct-subtitle">
             {view === 'leaderboard'
               ? `Discover perp traders across ${PUBLIC_LEADERBOARD_VENUES.length} exchanges by copy score, profit, ROI, win rate and real trading volume. Powered by ClashBot.`
-              : 'Manage copy strategies, risk settings and status on ClashBot.'}
+              : 'Status, PnL and controls for the copy bots ClashBot runs for your game account.'}
           </p>
         </div>
         <Segmented
@@ -108,6 +105,8 @@ export default function CopyTradingSection({ player }) {
         />
       </div>
 
+      {savedNotice && view === 'bots' && <Notice tone={savedNotice.tone}>{savedNotice.text}</Notice>}
+
       {view === 'leaderboard' ? (
         <Leaderboard
           token={token}
@@ -117,7 +116,7 @@ export default function CopyTradingSection({ player }) {
           onContextChange={rememberContext}
         />
       ) : (
-        <MyBotsHandoff />
+        <MyCopyBots token={token} refreshKey={refreshKey} onEdit={setEditBot} onBrowse={() => setView('leaderboard')} />
       )}
 
       <p className="ct-field-hint" style={{ margin: 0, textAlign: 'center' }}>
@@ -140,12 +139,16 @@ export default function CopyTradingSection({ player }) {
             }}
           />
         )}
-        {copyTrader && (
-          <CopyHandoffModal
-            key={`${copyTrader.venue}:${copyTrader.account}`}
+        {(copyTrader || editBot) && (
+          <CopySetupWizard
+            key={editBot ? `edit:${editBot.id}` : `${copyTrader.venue}:${copyTrader.account}`}
             token={token}
             trader={copyTrader}
-            onClose={() => setCopyTrader(null)}
+            editBot={editBot}
+            player={player}
+            walletCtx={walletCtx}
+            onClose={() => { setCopyTrader(null); setEditBot(null); }}
+            onSaved={onSaved}
           />
         )}
       </Suspense>
