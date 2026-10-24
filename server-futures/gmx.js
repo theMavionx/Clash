@@ -144,7 +144,7 @@ async function getMarketInfo() {
       mark: fmtUsd(t?.markPrice),
       oracle: fmtUsd(t?.markPrice),
       yesterday_price: fmtUsd(t?.open24h),
-      open_interest: fmtUsd(t?.longInterestUsd) || 0,
+      open_interest: (fmtUsd(t?.longInterestUsd) || 0) + (fmtUsd(t?.shortInterestUsd) || 0),
       funding_rate: fmtUsd(t?.fundingRateLong) || 0,
     };
   });
@@ -161,7 +161,7 @@ async function getPrices() {
       mark: String(fmtUsd(t?.markPrice) ?? ''),
       oracle: String(fmtUsd(t?.markPrice) ?? ''),
       yesterday_price: String(fmtUsd(t?.open24h) ?? ''),
-      open_interest: String(fmtUsd(t?.longInterestUsd) || 0),
+      open_interest: String((fmtUsd(t?.longInterestUsd) || 0) + (fmtUsd(t?.shortInterestUsd) || 0)),
     };
   });
   return { success: true, data: dedupBySymbol(rows) };

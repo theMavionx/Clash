@@ -33,6 +33,7 @@ import {
   GMX_REFERRAL_STORAGE,
   GMX_REFERRAL_CODE,
   REFERRAL_STORAGE_ABI,
+  GMX_SUBSQUID_URL,
 } from '../lib/gmxConfig';
 import {
   GMX_DATA_STORE,
@@ -102,6 +103,53 @@ function parseGmxMarketName(raw) {
 // Where GMX's free read API doesn't expose a value (lot/tick/min), we ship
 // sensible defaults — the actual on-chain limits come from market config in
 // Phase 2 where we'll fetch them via GmxSdk v1.
+// 24h position volume per base symbol. The ticker payload has no volume, so we
+// read GMX Subsquid's per-market positionsVolume (1d window) and sum every pool
+// of the same base (e.g. BTC/USD [BTC-USDC] + [WBTC-USDC]). Refreshed at most
+// once a minute; failures keep the previous snapshot.
+const GMX_VOLUME_TTL_MS = 60_000;
+let gmxVolumeCache = { at: 0, byMarket: new Map(), inflight: null };
+let gmxVolumeBySymbol = new Map();
+function gmxVolume24h(symbol) {
+  return gmxVolumeBySymbol.get(symbol) || 0;
+}
+// Recompute per-symbol totals from the current ticker list (market address -> base).
+function applyGmxVolumes(tickers) {
+  const bySymbol = new Map();
+  for (const t of tickers || []) {
+    const base = parseGmxMarketName(t?.symbol)?.base;
+    const vol = gmxVolumeCache.byMarket.get(String(t?.marketTokenAddress || '').toLowerCase());
+    if (base && vol) bySymbol.set(base, (bySymbol.get(base) || 0) + vol);
+  }
+  if (bySymbol.size) gmxVolumeBySymbol = bySymbol;
+}
+function refreshGmxVolumes() {
+  const now = Date.now();
+  if (gmxVolumeCache.inflight || now - gmxVolumeCache.at < GMX_VOLUME_TTL_MS) return gmxVolumeCache.inflight;
+  const since = Math.floor(now / 1000) - 86_400;
+  const query = '{ positionsVolume(where:{period:"1d", timestamp:' + since + '}) { market volume } }';
+  const inflight = fetch(GMX_SUBSQUID_URL, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ query }), signal: AbortSignal.timeout(10_000),
+  }).then(r => r.json()).then((json) => {
+    const byMarket = new Map();
+    for (const row of json?.data?.positionsVolume || []) {
+      const usd = fmtUsd(row?.volume);
+      if (row?.market && usd) byMarket.set(String(row.market).toLowerCase(), usd);
+    }
+    gmxVolumeCache = { at: Date.now(), byMarket: byMarket.size ? byMarket : gmxVolumeCache.byMarket, inflight: null };
+  }).catch(() => {
+    gmxVolumeCache = { ...gmxVolumeCache, at: Date.now(), inflight: null };
+  });
+  gmxVolumeCache = { ...gmxVolumeCache, inflight };
+  return inflight;
+}
+
+// Total open interest (longs + shorts), not the long side only.
+function gmxOpenInterest(t) {
+  return (fmtUsd(t?.longInterestUsd) || 0) + (fmtUsd(t?.shortInterestUsd) || 0);
+}
+
 function normalizeMarket(t) {
   const parsed = parseGmxMarketName(t?.symbol);
   // Swap-only markets aren't tradeable as perps; skip them so the picker
@@ -131,8 +179,8 @@ function normalizeMarket(t) {
     low_24h: fmtPriceUsd(t?.low24h),
     open_24h: fmtPriceUsd(t?.open24h),
     yesterday_price: fmtPriceUsd(t?.open24h),
-    volume_24h: 0,                 // Ticker shape doesn't carry 24h vol; rates endpoint does (Phase 2 wire-up).
-    open_interest: fmtUsd(t?.longInterestUsd) || 0,
+    volume_24h: gmxVolume24h(sym),
+    open_interest: gmxOpenInterest(t),
     funding_rate: fmtUsd(t?.fundingRateLong) || 0,
     next_funding_rate: fmtUsd(t?.fundingRateLong) || 0,
     _raw: t,
@@ -149,8 +197,8 @@ function normalizePrice(t) {
     mark: String(fmtPriceUsd(t?.markPrice) ?? ''),
     oracle: String(fmtPriceUsd(t?.markPrice) ?? ''),
     yesterday_price: String(fmtPriceUsd(t?.open24h) ?? ''),
-    volume_24h: 0,
-    open_interest: String(fmtUsd(t?.longInterestUsd) || 0),
+    volume_24h: gmxVolume24h(parsed.base),
+    open_interest: String(gmxOpenInterest(t)),
   };
 }
 
@@ -643,13 +691,14 @@ export function useGmx() {
   const fetchMarkets = useCallback(async () => {
     try {
       const sdk = await ensureSdk();
-      const tickers = await fetchTickersShared(sdk);
+      const [tickers] = await Promise.all([fetchTickersShared(sdk), refreshGmxVolumes()]);
       // Cache the raw, non-deduped tickers so `findGmxMarketSymbol` can
       // pick the USDC-collateral pool when opening/closing positions.
       // Without this, `markets` (deduped first-wins) would sometimes have
       // a non-USDC pool variant for a base symbol — opens routing through
       // it would either fail or lock collateral in the wrong token.
       marketsRawRef.current = tickers || [];
+      applyGmxVolumes(tickers);
       const norm = dedupBySymbol((tickers || []).map(normalizeMarket));
       marketsRef.current = norm;
       setMarkets(norm);
@@ -665,10 +714,12 @@ export function useGmx() {
   const fetchPrices = useCallback(async () => {
     try {
       const sdk = await ensureSdk();
+      refreshGmxVolumes();
       const tickers = await fetchTickersShared(sdk);
       // Keep the raw pool list current so markets listed after page load
       // stay resolvable by findGmxMarketSymbol for opens.
       if (Array.isArray(tickers) && tickers.length) marketsRawRef.current = tickers;
+      applyGmxVolumes(tickers);
       const fresh = dedupBySymbol((tickers || []).map(normalizePrice));
       // Merge by symbol so we don't lose entries during transient gaps.
       setPrices(prev => {
