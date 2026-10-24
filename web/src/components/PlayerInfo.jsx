@@ -67,10 +67,10 @@ function PlayerInfo({ onOpenProfile, onOpenLeaderboard }) {
       >
         <div style={{
           ...styles.levelCircle,
-          ...(mobile ? { width: 48, height: 48, borderRadius: 14, padding: 4 } : {}),
+          ...(mobile ? { width: 48, height: 48, borderRadius: 16, padding: 4 } : {}),
           background: `conic-gradient(from -90deg, var(--terminal-orange) ${progressPct * 3.6}deg, var(--terminal-surface-muted) ${progressPct * 3.6}deg)`,
         }}>
-          <div style={{ ...styles.innerSquare, ...(mobile ? { borderRadius: 10 } : {}) }}>
+          <div style={{ ...styles.innerSquare, ...(mobile ? { borderRadius: 12 } : {}) }}>
             <span style={{ ...styles.levelText, ...(mobile ? { fontSize: 22 } : {}) }}>{townHallLevel}</span>
           </div>
         </div>
@@ -177,7 +177,7 @@ const styles = {
   levelText: {
     color: 'var(--terminal-text)',
     fontSize: 28,
-    fontWeight: 700,
+    fontWeight: 600,
     fontVariantNumeric: 'tabular-nums',
     textShadow: 'none',
     zIndex: 2,

@@ -61,7 +61,7 @@ export default function CredentialVaultBoundary({ children }) {
     {showManager && <button type="button" style={{ ...button, position: 'fixed', left: '50%', bottom: 9, transform: 'translateX(-50%)',
       zIndex: 1100, background: 'var(--terminal-surface)', color: 'var(--terminal-text)', fontSize: 11, padding: '6px 12px', border: '1px solid var(--terminal-border)' }}
       onClick={() => setOpen(true)}>{needsAttention ? 'Trading key sync · action needed' : 'Manage trading key sync'}</button>}
-    {open && <div style={{ position: 'fixed', inset: 0, zIndex: 3000, background: 'var(--terminal-overlay)', display: 'grid', placeItems: 'center', padding: 16 }}>
+    {open && <div style={{ position: 'fixed', inset: 0, zIndex: 3000, background: 'var(--terminal-overlay)', backdropFilter: 'blur(var(--cb-scrim-blur))', WebkitBackdropFilter: 'blur(var(--cb-scrim-blur))', display: 'grid', placeItems: 'center', padding: 16 }}>
       <section role="dialog" aria-modal="true" aria-labelledby="vault-title" style={{ ...box, width: 'min(520px, 100%)', maxHeight: '85vh', overflowY: 'auto' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <h2 id="vault-title" style={{ fontSize: 18, fontWeight: 600, margin: 0 }}>Secure trading keys</h2>

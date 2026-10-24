@@ -271,12 +271,24 @@ html {
   outline-offset: 2px;
 }
 
+/* ClashBot fields: border-gray-200 hairline, flat, focus = #F26522 border +
+   3px rgba(242,101,34,0.12) ring (StyledSelect open state). */
 .clash-ui-root input,
 .clash-ui-root select,
 .clash-ui-root textarea {
   color: var(--terminal-text) !important;
-  border-color: var(--terminal-border-strong) !important;
-  box-shadow: inset 0 1px 2px var(--terminal-field-inset), 0 1px 0 var(--terminal-control-highlight) !important;
+  border-color: var(--terminal-border) !important;
+  box-shadow: none !important;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+/* Text fields take the ClashBot `focus:border-[#F26522]` border
+   (CreateBotModal). The keyboard outline above stays for accessibility,
+   since many inputs sit borderless inside a styled shell. */
+.clash-ui-root input:not([type='range']):not([type='checkbox']):not([type='radio']):focus,
+.clash-ui-root select:focus,
+.clash-ui-root textarea:focus {
+  border-color: var(--terminal-orange) !important;
 }
 
 .clash-ui-root input::placeholder,
@@ -294,7 +306,7 @@ html {
 .futures-ticket-topbar > div { display: flex; gap: 16px; }
 .futures-ticket-topbar button {
   border: 0;
-  border-bottom: 2px solid transparent;
+  border-bottom: 1px solid transparent;
   background: transparent;
   color: var(--terminal-text-muted);
   padding: 10px 0;
@@ -305,8 +317,9 @@ html {
 }
 .futures-ticket-topbar button[aria-pressed='true'] {
   color: var(--terminal-text);
-  border-bottom-color: var(--terminal-orange);
+  border-bottom-color: var(--cb-tab-underline);
 }
+.futures-ticket-topbar button:hover { color: var(--terminal-text); }
 .futures-ticket-side-selector {
   display: flex;
   gap: 4px;
@@ -511,10 +524,10 @@ html {
 
 .futures-terminal-shell--compact {
   border: 1px solid var(--terminal-border) !important;
-  border-radius: 16px !important;
+  border-radius: 24px !important;
   background: var(--terminal-surface) !important;
   color: var(--terminal-text) !important;
-  box-shadow: 0 16px 48px var(--terminal-shadow) !important;
+  box-shadow: var(--cb-shadow-dialog) !important;
 }
 
 .futures-terminal-shell--fullscreen {

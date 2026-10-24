@@ -919,17 +919,17 @@ const S = {
   card: {
     background: 'var(--terminal-surface)',
     border: '1px solid var(--terminal-border)',
-    borderRadius: 16,
+    borderRadius: 20,
     padding: 16,
     display: 'flex', flexDirection: 'column', gap: 8,
-    boxShadow: 'none',
+    boxShadow: 'var(--cb-shadow-sm)',
   },
   cardHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
   cardTitle: { fontSize: 16, fontWeight: 600, color: 'var(--terminal-text)' },
   cardDesc: { fontSize: 13, color: 'var(--terminal-text-muted)', fontWeight: 500 },
   cardAuto: { fontSize: 11, color: 'var(--terminal-text-faint)', fontWeight: 500 },
   progressWrap: { display: 'flex', flexDirection: 'column', gap: 4 },
-  progressBar: { height: 6, background: 'var(--terminal-surface-muted)', borderRadius: 999, overflow: 'hidden' },
+  progressBar: { height: 8, background: 'var(--cb-soft)', borderRadius: 999, overflow: 'hidden' },
   progressFill: { height: '100%', borderRadius: 999, background: 'var(--terminal-long)', transition: 'width 0.3s' },
   progressText: { fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-control)', textAlign: 'right', fontVariantNumeric: 'tabular-nums' },
   rewardRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginTop: 2 },
@@ -959,7 +959,7 @@ const S = {
   emptyIcon: { fontSize: 48, marginBottom: 10 },
   emptyTitle: { fontSize: 14, fontWeight: 600, color: 'var(--terminal-text)', marginBottom: 6 },
   emptyDesc: { fontSize: 12, fontWeight: 500 },
-  error: { background: 'var(--terminal-short-soft)', border: '1px solid var(--terminal-short-border)', color: 'var(--terminal-short)', padding: 8, borderRadius: 12, fontSize: 12, fontWeight: 600, cursor: 'pointer', textAlign: 'center' },
+  error: { background: 'var(--terminal-short-soft)', border: '1px solid var(--terminal-short-border)', color: 'var(--terminal-short)', padding: '12px 16px', borderRadius: 16, fontSize: 12, fontWeight: 500, cursor: 'pointer', textAlign: 'center' },
 };
 
 export default memo(QuestsTab);

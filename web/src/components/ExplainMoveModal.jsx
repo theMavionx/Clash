@@ -95,13 +95,13 @@ function ExplainMoveModal({ symbol, onClose }) {
 
 const S = {
   backdrop: {
-    position: 'fixed', inset: 0, background: 'var(--terminal-overlay)',
+    position: 'fixed', inset: 0, background: 'var(--terminal-overlay)', backdropFilter: 'blur(var(--cb-scrim-blur))', WebkitBackdropFilter: 'blur(var(--cb-scrim-blur))',
     zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
   },
   modal: {
     background: 'var(--terminal-surface)',
-    border: '1px solid var(--terminal-border)', borderRadius: 16, padding: 18,
-    maxWidth: 460, width: '100%', boxShadow: 'var(--terminal-shadow-card)',
+    border: '1px solid var(--terminal-border)', borderRadius: 24, padding: 18,
+    maxWidth: 460, width: '100%', boxShadow: 'var(--cb-shadow-dialog)',
   },
   header: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 },
   brain: {
@@ -110,13 +110,13 @@ const S = {
     background: 'var(--terminal-text)', color: 'var(--terminal-on-accent)', fontSize: 18, fontWeight: 600,
   },
   title: { fontSize: 16, fontWeight: 600, color: 'var(--terminal-text)', flex: 1, margin: 0 },
-  closeBtn: uiIconButton('secondary', 34, { fontSize: 18 }),
+  closeBtn: uiIconButton('soft', 34, { fontSize: 18 }),
   loading: { fontSize: 13, color: 'var(--terminal-text-muted)', fontWeight: 600, padding: '20px 0', textAlign: 'center' },
   error: { fontSize: 13, color: 'var(--terminal-short)', fontWeight: 600, padding: '12px 0' },
   text: { fontSize: 14, color: 'var(--terminal-text)', lineHeight: 1.5, fontWeight: 600, marginBottom: 14 },
   poweredBy: {
     display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-    fontSize: 10, color: 'var(--terminal-text-muted)', marginTop: 12, fontWeight: 600, letterSpacing: '0.03em', textTransform: 'uppercase',
+    fontSize: 10, color: 'var(--terminal-text-muted)', marginTop: 12, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase',
   },
   poweredLogo: { height: 16, width: 'auto', objectFit: 'contain', display: 'block' },
 };

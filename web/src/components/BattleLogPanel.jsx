@@ -424,12 +424,12 @@ function BattleLogPanel({ onClose }) {
 export default memo(BattleLogPanel);
 
 const S = {
-  backdrop: { position: 'fixed', inset: 0, background: 'var(--terminal-overlay)', zIndex: 200, pointerEvents: 'auto' },
+  backdrop: { position: 'fixed', inset: 0, background: 'var(--terminal-overlay)', backdropFilter: 'blur(var(--cb-scrim-blur))', WebkitBackdropFilter: 'blur(var(--cb-scrim-blur))', zIndex: 200, pointerEvents: 'auto' },
   modal: {
     position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
     width: 'min(440px, calc(100dvw - 16px))', maxHeight: 'calc(100dvh - 16px)', boxSizing: 'border-box',
-    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 16,
-    boxShadow: 'var(--terminal-shadow-card)', display: 'flex', flexDirection: 'column',
+    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 24,
+    boxShadow: 'var(--cb-shadow-dialog)', display: 'flex', flexDirection: 'column',
     zIndex: 201, pointerEvents: 'auto', overflow: 'hidden', fontFamily: 'inherit',
   },
   header: {
@@ -437,7 +437,7 @@ const S = {
     padding: '14px 16px', background: 'var(--terminal-surface)', borderBottom: '1px solid var(--terminal-border)',
   },
   headerTitle: { fontSize: 18, fontWeight: 600, color: 'var(--terminal-text)' },
-  closeBtn: uiIconButton('ghost', 44),
+  closeBtn: uiIconButton('soft', 44),
   filterRow: {
     display: 'flex', gap: 0, overflowX: 'auto', overscrollBehaviorX: 'contain', touchAction: 'pan-x',
     background: 'var(--terminal-surface)', borderBottom: '1px solid var(--terminal-border)', flexShrink: 0,
@@ -447,7 +447,7 @@ const S = {
     fontSize: 13,
     background: active ? 'var(--terminal-surface)' : 'var(--terminal-surface-subtle)',
     color: active ? 'var(--terminal-text)' : 'var(--terminal-text-muted)',
-    boxShadow: active ? 'inset 0 -1px 0 var(--terminal-text)' : 'none', fontWeight: 500,
+    boxShadow: active ? 'inset 0 -1px 0 var(--cb-tab-underline)' : 'none', fontWeight: 500,
   }),
   body: {
     flex: 1, padding: 12, display: 'flex', flexDirection: 'column', gap: 8,

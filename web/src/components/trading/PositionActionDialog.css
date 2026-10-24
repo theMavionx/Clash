@@ -7,7 +7,7 @@
   font:14px/1.4 ui-sans-serif,system-ui,sans-serif; box-shadow:var(--terminal-shadow-card);
   overscroll-behavior:contain;
 }
-.position-action-dialog::backdrop { background:var(--terminal-overlay); }
+.position-action-dialog::backdrop { background:var(--terminal-overlay); backdrop-filter:blur(var(--cb-scrim-blur)); -webkit-backdrop-filter:blur(var(--cb-scrim-blur)); }
 .position-action-dialog[open] { display:flex; flex-direction:column; overflow:hidden; }
 .position-action-dialog__header { flex:none; }
 .position-action-dialog__body { min-height:0; overflow:auto; overscroll-behavior:contain; }
@@ -55,7 +55,7 @@
 }
 .open-tpsl-draft__context {
   display:grid; grid-template-columns:1fr 1fr; gap:12px; margin:0; padding:12px;
-  background:var(--terminal-surface-muted); border-radius:10px;
+  background:var(--terminal-surface-muted); border-radius:12px;
 }
 .open-tpsl-draft__context div { min-width:0; }
 .open-tpsl-draft__context dt { color:var(--terminal-text-muted); font-size:12px; margin-bottom:4px; }

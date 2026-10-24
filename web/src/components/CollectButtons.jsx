@@ -60,7 +60,7 @@ const styles = {
     minHeight: 48,
     background: 'rgba(17, 20, 27, 0.92)',
     border: '1px solid var(--terminal-border)',
-    borderRadius: 14,
+    borderRadius: 16,
     padding: '6px 10px',
     cursor: 'pointer',
     boxShadow: 'var(--terminal-shadow-card)',

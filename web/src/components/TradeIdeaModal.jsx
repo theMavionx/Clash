@@ -369,19 +369,19 @@ function MetaCard({ label, value, color }) {
 
 const S = {
   backdrop: {
-    position: 'fixed', inset: 0, background: 'var(--terminal-overlay)',
+    position: 'fixed', inset: 0, background: 'var(--terminal-overlay)', backdropFilter: 'blur(var(--cb-scrim-blur))', WebkitBackdropFilter: 'blur(var(--cb-scrim-blur))',
     zIndex: 10000, display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
     padding: '16px 16px', overflowY: 'auto',
   },
   modal: {
     background: 'var(--terminal-surface)',
-    border: '1px solid var(--terminal-border)', borderRadius: 16, padding: 16,
-    maxWidth: 460, width: '100%', boxShadow: 'var(--terminal-shadow-card)',
+    border: '1px solid var(--terminal-border)', borderRadius: 24, padding: 16,
+    maxWidth: 460, width: '100%', boxShadow: 'var(--cb-shadow-dialog)',
     maxHeight: 'calc(100dvh - 32px)', overflowY: 'auto',
   },
   header: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 },
   title: { fontSize: 16, fontWeight: 600, color: 'var(--terminal-text)', flex: 1, margin: 0 },
-  closeBtn: uiIconButton('secondary', 34, { fontSize: 18 }),
+  closeBtn: uiIconButton('soft', 34, { fontSize: 18 }),
   loading: { fontSize: 13, color: 'var(--terminal-text-muted)', fontWeight: 600, padding: '20px 0', textAlign: 'center' },
   error: { fontSize: 13, color: 'var(--terminal-short)', fontWeight: 600, padding: '12px 0' },
   sideBadge: {
@@ -392,7 +392,7 @@ const S = {
   levelRow: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
     padding: '7px 10px', background: 'var(--terminal-surface-subtle)',
-    border: '1px solid var(--terminal-border)', borderRadius: 10, gap: 8,
+    border: '1px solid var(--terminal-border)', borderRadius: 12, gap: 8,
   },
   levelLabel: {
     color: 'var(--terminal-on-accent)', fontSize: 11, fontWeight: 600, padding: '2px 10px',
@@ -402,13 +402,13 @@ const S = {
   metaGrid: { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6, marginBottom: 12 },
   metaCard: {
     background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)',
-    borderRadius: 10, padding: '8px 4px', textAlign: 'center', minWidth: 0,
+    borderRadius: 12, padding: '8px 4px', textAlign: 'center', minWidth: 0,
   },
-  metaLabel: { fontSize: 10, fontWeight: 600, color: 'var(--terminal-text-muted)', textTransform: 'uppercase', letterSpacing: '0.3px', whiteSpace: 'nowrap' },
+  metaLabel: { fontSize: 10, fontWeight: 600, color: 'var(--terminal-text-muted)', textTransform: 'uppercase', letterSpacing: '0.1em', whiteSpace: 'nowrap' },
   metaValue: { fontSize: 13, fontWeight: 600, marginTop: 2, whiteSpace: 'nowrap' },
   reason: {
     fontSize: 13, color: 'var(--terminal-text-control)', lineHeight: 1.4, fontWeight: 600,
-    background: 'var(--terminal-surface-subtle)', padding: '8px 10px', borderRadius: 10,
+    background: 'var(--terminal-surface-subtle)', padding: '8px 10px', borderRadius: 12,
     border: '1px solid var(--terminal-border)', marginBottom: 12,
   },
   reasonLabel: { fontWeight: 600, color: 'var(--terminal-orange)', marginRight: 4 },
@@ -419,7 +419,7 @@ const S = {
   },
   poweredBy: {
     display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-    fontSize: 10, color: 'var(--terminal-text-muted)', fontWeight: 600, letterSpacing: '0.03em', textTransform: 'uppercase',
+    fontSize: 10, color: 'var(--terminal-text-muted)', fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase',
   },
   poweredLogo: { height: 16, width: 'auto', objectFit: 'contain', display: 'block' },
 };

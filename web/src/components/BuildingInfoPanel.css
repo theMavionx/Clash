@@ -142,7 +142,7 @@
   padding: 18px;
   background: var(--bim-surface-subtle);
   border: 1px solid var(--bim-line);
-  border-radius: 14px;
+  border-radius: 16px;
 }
 
 .building-info-modal__sphere {
@@ -264,7 +264,7 @@
   overflow-wrap: anywhere;
   color: var(--bim-text);
   font-size: 18px;
-  font-weight: 700;
+  font-weight: 600;
   line-height: 1.25;
 }
 
@@ -297,7 +297,7 @@
 
 .building-info-modal__status {
   color: var(--bim-long);
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .building-info-modal__supplemental > .building-info-modal__section-title:not(:first-child) {
@@ -1113,7 +1113,7 @@
   border-radius: 8px;
   font-family: inherit;
   font-size: 15px;
-  font-weight: 700;
+  font-weight: 600;
   line-height: 1;
   box-shadow: none;
 }

@@ -34,7 +34,7 @@ function EnemyHeader() {
       <div style={compact ? { ...styles.headerWrap, gap: 8 } : styles.headerWrap}>
         <div style={styles.levelCircleContainer}>
           <div style={compact ? { ...styles.levelCircle, ...styles.levelCircleMobile } : styles.levelCircle}>
-            <div style={compact ? { ...styles.innerSquare, borderRadius: 10 } : styles.innerSquare}>
+            <div style={compact ? { ...styles.innerSquare, borderRadius: 12 } : styles.innerSquare}>
               <span style={compact ? { ...styles.levelText, ...styles.levelTextMobile } : styles.levelText}>{townHallLevel}</span>
             </div>
           </div>
@@ -144,7 +144,7 @@ const styles = {
   levelCircleMobile: {
     width: 48,
     height: 48,
-    borderRadius: 14,
+    borderRadius: 16,
     padding: 4,
   },
   innerSquare: {
@@ -162,7 +162,7 @@ const styles = {
   levelText: {
     color: 'var(--terminal-text)',
     fontSize: 26,
-    fontWeight: 700,
+    fontWeight: 600,
     fontVariantNumeric: 'tabular-nums',
     textShadow: 'none',
     zIndex: 2,

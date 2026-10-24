@@ -54,7 +54,7 @@ function BasicLeveragePicker({ amount, direction, maxLeverage = 20, onPick, onBa
     const min = 1;
     return Math.max(0, Math.min(100, ((lev - min) / Math.max(1, maxLeverage - min)) * 100));
   }, [lev, maxLeverage]);
-  const sliderBg = `linear-gradient(90deg, ${band.color} 0%, ${band.color} ${pct}%, ${colors.border} ${pct}%, ${colors.border} 100%)`;
+  const sliderFill = { "--range-progress": `${pct}%` };
 
   return (
     // Centre everything as one block — same pattern as the other steps.
@@ -97,8 +97,7 @@ function BasicLeveragePicker({ amount, direction, maxLeverage = 20, onPick, onBa
           onChange={(e) => setLev(Number(e.target.value))}
           style={{
             ...S.fineSlider,
-            background: sliderBg,
-            accentColor: band.color,
+            ...sliderFill,
           }}
           aria-label="Risk multiplier"
         />
@@ -141,7 +140,7 @@ const S = {
   tightTitle: {
     fontSize: 'clamp(16px, 3vh, 20px)',
     fontWeight: 600, color: colors.ink,
-    textAlign: 'center', letterSpacing: '0.3px',
+    textAlign: 'center', letterSpacing: '-0.025em',
     margin: '2px 0 6px', lineHeight: 1.1,
   },
 
@@ -158,7 +157,7 @@ const S = {
   bannerLeft: { display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 },
   bannerIcon: { fontSize: 22, lineHeight: 1 },
   bannerLabel: {
-    fontSize: 14, fontWeight: 600, letterSpacing: '0.6px',
+    fontSize: 14, fontWeight: 600, letterSpacing: 0,
   },
   bannerValue: {
     fontSize: 'clamp(20px, 4vh, 26px)', fontWeight: 600,
@@ -173,28 +172,22 @@ const S = {
   // Slider + stats container — kept in one card so the multiplier
   // control reads as a single object rather than three loose rows.
   sliderCard: {
-    padding: '12px 12px 10px', borderRadius: 12,
+    padding: '12px 12px 10px', borderRadius: 16,
     background: 'var(--terminal-surface-subtle)',
     borderWidth: 1, borderStyle: 'solid', borderColor: colors.border,
     display: 'flex', flexDirection: 'column', gap: 8,
     boxSizing: 'border-box',
   },
-  // Thicker bar than the previous tier sub-slider so it reads as the
-  // primary control of the step. Background gradient is set inline
-  // (painted fill that tracks the current value).
+  // Native range drawn by the shared ClashBot slider (styles/clashbot.css);
+  // the orange fill tracks --range-progress set inline.
   fineSlider: {
-    width: '100%', height: 10,
-    borderRadius: 6,
-    cursor: 'pointer',
+    width: '100%',
     margin: 0,
-    appearance: 'none',
-    WebkitAppearance: 'none',
-    outline: 'none',
   },
   scaleRow: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
     fontSize: 10, fontWeight: 600, color: colors.inkFaint,
-    letterSpacing: '0.3px',
+    letterSpacing: 0,
     margin: '-2px 2px 0',
   },
 
@@ -208,7 +201,7 @@ const S = {
   },
   statLabel: {
     fontSize: 9, fontWeight: 600, color: colors.inkFaint,
-    letterSpacing: '0.3px', marginBottom: 2,
+    letterSpacing: 0, marginBottom: 2,
   },
   statValue: {
     fontSize: 14, fontWeight: 600, color: colors.ink,

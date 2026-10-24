@@ -1362,7 +1362,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
             ) : (
             <>
             {rhNftOrders.filter(order => order.state !== 'expired').slice(0,3).map(order => (
-              <div key={order.id} role="status" style={{ padding: '10px 14px', marginBottom: 8, border: '1px solid var(--terminal-border)', borderRadius: 10, fontSize: 13 }}>
+              <div key={order.id} role="status" style={{ padding: '10px 14px', marginBottom: 8, border: '1px solid var(--terminal-border)', borderRadius: 12, fontSize: 13 }}>
                 <strong>Dragon · CLASH on Robinhood</strong>
                 <div>{order.message}</div>
                 <small>Order {order.id}</small>
@@ -3573,7 +3573,7 @@ const overlayStyles = {
     border: '1px solid var(--terminal-border)',
     color: 'var(--terminal-text)',
     fontSize: 11, fontWeight: 600,
-    letterSpacing: 0.5,
+    letterSpacing: 0,
   },
   actionRow: {
     display: 'flex', gap: 8, marginTop: 10,
@@ -3753,7 +3753,7 @@ const MINT_ANIM_CSS = `
 
 const styles = {
   overlay: {
-    position: 'fixed', inset: 0, background: 'var(--terminal-overlay)',
+    position: 'fixed', inset: 0, background: 'var(--terminal-overlay)', backdropFilter: 'blur(var(--cb-scrim-blur))', WebkitBackdropFilter: 'blur(var(--cb-scrim-blur))',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     zIndex: 250, pointerEvents: 'all',
     padding: 12,
@@ -3789,7 +3789,7 @@ const styles = {
     textShadow: 'none',
   },
   backBtn: uiIconButton('secondary', 32),
-  closeBtn: uiIconButton('danger', 32),
+  closeBtn: uiIconButton('soft', 32),
   bridgeBtn: uiIconButton('secondary', 32),
   // Bridge entry button rendered inside the hero summary row — small pill
   // with icon + "Bridge" label. Sits right under the dynamic supply chip
@@ -3881,7 +3881,7 @@ const styles = {
     color: 'var(--terminal-surface)',
     fontSize: 9,
     fontWeight: 600,
-    letterSpacing: 0.4,
+    letterSpacing: 0,
   },
   chainLogoBadge: {
     flex: '0 0 auto',
@@ -4021,9 +4021,7 @@ const styles = {
   // though it stays visible behind the dim wash.
   comingSoonOverlay: {
     position: 'absolute', inset: 0,
-    background: 'var(--terminal-overlay)',
-    backdropFilter: 'blur(2px)',
-    WebkitBackdropFilter: 'blur(2px)',
+    background: 'var(--terminal-overlay)', backdropFilter: 'blur(var(--cb-scrim-blur))', WebkitBackdropFilter: 'blur(var(--cb-scrim-blur))',
     display: 'flex', flexDirection: 'column',
     alignItems: 'center', justifyContent: 'center',
     gap: 10, padding: '20px 28px',
@@ -4035,7 +4033,7 @@ const styles = {
     padding: '5px 12px', borderRadius: 999,
     background: 'var(--terminal-brand-border)',
     border: '1px solid var(--terminal-text)', color: 'var(--terminal-text)',
-    fontSize: 11, fontWeight: 600, letterSpacing: '0.06em',
+    fontSize: 11, fontWeight: 600, letterSpacing: 0,
     boxShadow: 'none',
   },
   comingSoonTitle: {
@@ -4123,7 +4121,7 @@ const styles = {
     position: 'relative',
     width: 120, height: 120,
     boxSizing: 'border-box',
-    borderRadius: 18,
+    borderRadius: 20,
     background: 'var(--terminal-surface-subtle)',
     border: '1px solid var(--terminal-border)',
     boxShadow: 'none',
@@ -4134,7 +4132,7 @@ const styles = {
     width: 72,
     height: 72,
     boxSizing: 'border-box',
-    borderRadius: 14,
+    borderRadius: 16,
     border: '1px solid var(--terminal-border)',
     boxShadow: 'none',
   },
@@ -4235,7 +4233,7 @@ const styles = {
     justifyContent: 'center',
     gap: 1,
     padding: '6px 8px',
-    borderRadius: 9,
+    borderRadius: 8,
     border: '1px solid var(--terminal-border)',
     background: 'var(--terminal-surface)',
     boxShadow: 'none',
@@ -4250,7 +4248,7 @@ const styles = {
     fontWeight: 600,
     color: 'var(--terminal-text-muted)',
     textTransform: 'none',
-    letterSpacing: 0.3,
+    letterSpacing: 0,
     lineHeight: 1,
   },
   marketStatValue: {
@@ -4348,11 +4346,11 @@ const styles = {
     fontSize: 9, fontWeight: 600,
     padding: '2px 6px',
     borderRadius: 999,
-    letterSpacing: 0.5,
+    letterSpacing: 0,
   },
   chainChipName: {
     fontSize: 12, fontWeight: 600,
-    letterSpacing: 0.3,
+    letterSpacing: 0,
   },
   chainChipArrow: {
     fontSize: 10,
@@ -4402,7 +4400,7 @@ const styles = {
   shopChainLabel: {
     fontSize: 13,
     fontWeight: 600,
-    letterSpacing: 0.3,
+    letterSpacing: 0,
   },
   shopChainSub: {
     fontSize: 10,
@@ -4460,7 +4458,7 @@ const styles = {
     width: 20,
     height: 20,
     objectFit: 'contain',
-    borderRadius: 6,
+    borderRadius: 8,
     overflow: 'hidden',
     flex: '0 0 auto',
     filter: 'drop-shadow(0 1px 1px rgba(0,0,0,0.18))',
@@ -4468,7 +4466,7 @@ const styles = {
   shopPaymentFallbackIcon: {
     width: 24,
     height: 20,
-    borderRadius: 6,
+    borderRadius: 8,
     background: 'var(--terminal-text)',
     color: 'var(--terminal-surface)',
     display: 'inline-flex',
@@ -4476,7 +4474,7 @@ const styles = {
     justifyContent: 'center',
     fontSize: 8,
     fontWeight: 600,
-    letterSpacing: 0.2,
+    letterSpacing: 0,
     flex: '0 0 auto',
   },
   resourceGrid: {
@@ -4526,7 +4524,7 @@ const styles = {
   },
   resourceSkeletonLine: {
     height: 12,
-    borderRadius: 6,
+    borderRadius: 8,
     background: 'var(--terminal-surface-muted)',
     marginBottom: 4,
   },
@@ -4572,7 +4570,7 @@ const styles = {
   },
   resourceMeta: {
     padding: '2px 6px',
-    borderRadius: 7,
+    borderRadius: 8,
     background: 'var(--terminal-surface-subtle)',
     color: 'var(--terminal-text-secondary)',
     fontSize: 10,
@@ -4662,7 +4660,7 @@ const styles = {
   },
   supplyBox: {
     border: '1px solid var(--terminal-border)',
-    borderRadius: 13,
+    borderRadius: 12,
     background: 'var(--terminal-surface)',
     padding: '10px 11px',
     boxShadow: 'none',
@@ -4683,7 +4681,7 @@ const styles = {
   },
   supplyRemaining: {
     flex: '0 0 auto',
-    borderRadius: 10,
+    borderRadius: 12,
     background: 'var(--terminal-text)',
     color: 'var(--terminal-surface)',
     padding: '4px 8px',
@@ -4693,7 +4691,7 @@ const styles = {
   progressTrack: {
     position: 'relative',
     height: 16,
-    borderRadius: 9,
+    borderRadius: 8,
     border: '1px solid var(--terminal-text-muted)',
     background: 'var(--terminal-border-strong)',
     overflow: 'hidden',
@@ -4701,7 +4699,7 @@ const styles = {
   },
   progressFill: {
     height: '100%',
-    borderRadius: 7,
+    borderRadius: 8,
     background: 'var(--terminal-long)',
     boxShadow: 'none',
     transition: 'width 280ms ease',
@@ -4721,7 +4719,7 @@ const styles = {
     alignItems: 'center',
     gap: 8,
     border: '1px solid var(--terminal-border)',
-    borderRadius: 13,
+    borderRadius: 12,
     background: 'var(--terminal-surface)',
     padding: '10px 11px',
     boxShadow: 'none',
@@ -4822,7 +4820,7 @@ const styles = {
     fontSize: 13,
     fontWeight: 600,
     color: 'var(--terminal-text)',
-    letterSpacing: 0.2,
+    letterSpacing: 0,
     textShadow: 'none',
   },
   clashBannerSub: {
@@ -4850,13 +4848,13 @@ const styles = {
     fontWeight: 600,
     color: 'var(--terminal-text)',
     textTransform: 'none',
-    letterSpacing: 0.6,
+    letterSpacing: 0,
   },
   sectionHeaderHint: {
     fontSize: 10,
     fontWeight: 600,
     color: 'var(--terminal-text-muted)',
-    letterSpacing: 0.3,
+    letterSpacing: 0,
   },
   chainGrid: {
     display: 'grid',
@@ -4905,7 +4903,7 @@ const styles = {
     fontSize: 11,
     fontWeight: 600,
     color: 'var(--terminal-text-secondary)',
-    letterSpacing: 0.3,
+    letterSpacing: 0,
   },
   chainReady: {
     fontSize: 11,
@@ -4972,7 +4970,7 @@ const styles = {
     color: 'var(--terminal-text-secondary)',
     fontWeight: 600,
     textTransform: 'none',
-    letterSpacing: 0.3,
+    letterSpacing: 0,
   },
   walletValue: {
     fontSize: 14,
@@ -5054,7 +5052,7 @@ const styles = {
     color: 'var(--terminal-surface)',
     fontSize: 9,
     fontWeight: 600,
-    letterSpacing: 0.4,
+    letterSpacing: 0,
     verticalAlign: '1px',
     boxShadow: 'none',
   },
@@ -5079,7 +5077,7 @@ const styles = {
   },
   quoteStrip: {
     minHeight: 34,
-    borderRadius: 11,
+    borderRadius: 12,
     border: '1px solid var(--terminal-border)',
     background: 'var(--terminal-surface)',
     color: 'var(--terminal-text)',
@@ -5155,7 +5153,7 @@ const styles = {
     display: 'block',
   },
   notice: {
-    borderRadius: 10,
+    borderRadius: 12,
     border: '1px solid var(--terminal-border)',
     background: 'var(--terminal-warning-soft)',
     color: 'var(--terminal-text-secondary)',
@@ -5165,7 +5163,7 @@ const styles = {
     textAlign: 'center',
   },
   noticeReady: {
-    borderRadius: 10,
+    borderRadius: 12,
     border: '1px solid var(--terminal-long-border)',
     background: 'var(--terminal-long-soft)',
     color: 'var(--terminal-long-strong)',

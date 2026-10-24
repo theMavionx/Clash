@@ -69,7 +69,7 @@ const S = {
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
   },
-  closeBtn: uiIconButton('ghost', 26, {
+  closeBtn: uiIconButton('soft', 32, {
     fontSize: 13,
     flexShrink: 0,
     marginLeft: 4,

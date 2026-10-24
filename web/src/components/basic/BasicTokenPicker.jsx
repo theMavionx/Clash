@@ -241,7 +241,7 @@ const S = {
     gap: 6,
   },
   symbol: {
-    fontSize: 14, fontWeight: 600, color: colors.ink, letterSpacing: '0.4px',
+    fontSize: 14, fontWeight: 600, color: colors.ink, letterSpacing: 0,
     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
   },
   closedBadge: {

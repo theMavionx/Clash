@@ -1774,7 +1774,7 @@ function Stat({ label, value, color }) {
 export default memo(TournamentPanel);
 
 const S = {
-  backdrop: { position: 'fixed', inset: 0, background: 'var(--terminal-overlay)', zIndex: 250, pointerEvents: 'auto' },
+  backdrop: { position: 'fixed', inset: 0, background: 'var(--terminal-overlay)', backdropFilter: 'blur(var(--cb-scrim-blur))', WebkitBackdropFilter: 'blur(var(--cb-scrim-blur))', zIndex: 250, pointerEvents: 'auto' },
   modal: {
     position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
     // Fixed height (clamped to viewport on small screens) keeps the modal
@@ -1782,8 +1782,8 @@ const S = {
     // and a 50-row leaderboard now share the same outer footprint.
     width: 480, maxWidth: 'calc(100dvw - 32px)',
     height: 'min(88dvh, 620px)',
-    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 16,
-    boxShadow: 'var(--terminal-shadow-card)',
+    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 24,
+    boxShadow: 'var(--cb-shadow-dialog)',
     display: 'flex', flexDirection: 'column',
     zIndex: 251, pointerEvents: 'auto', overflow: 'hidden',
     fontFamily: 'inherit',
@@ -1803,7 +1803,7 @@ const S = {
   },
   tabActive: {
     flex: 1, padding: '8px 12px', background: 'transparent',
-    border: 'none', borderBottom: '1px solid var(--terminal-text)',
+    border: 'none', borderBottom: '1px solid var(--cb-tab-underline)',
     color: 'var(--terminal-text)', fontSize: 14, fontWeight: 500, cursor: 'pointer',
   },
   histRow: {
@@ -1831,7 +1831,7 @@ const S = {
     filter: 'invert(60%) sepia(90%) saturate(500%) hue-rotate(10deg)',
   },
   headerTitle: { fontSize: 18, fontWeight: 600, color: 'var(--terminal-text)' },
-  closeBtn: uiIconButton('ghost', 30),
+  closeBtn: uiIconButton('soft', 32),
   body: {
     flex: 1, minHeight: 0, padding: 12, display: 'flex', flexDirection: 'column', gap: 10,
     overflowY: 'auto', overflowX: 'hidden', overscrollBehavior: 'contain', WebkitOverflowScrolling: 'touch',
@@ -1845,7 +1845,7 @@ const S = {
   luckyHero: {
     background: 'var(--terminal-surface)',
     border: '1px solid var(--terminal-warning-border)',
-    borderRadius: 14,
+    borderRadius: 16,
     padding: 12,
     display: 'flex',
     gap: 10,
@@ -1857,7 +1857,7 @@ const S = {
     fontWeight: 600,
     color: 'var(--terminal-warning)',
     textTransform: 'uppercase',
-    letterSpacing: 0.7,
+    letterSpacing: '0.1em',
   },
   luckyTitle: { fontSize: 18, fontWeight: 600, color: 'var(--terminal-text)', marginTop: 2 },
   luckySub: { fontSize: 12, fontWeight: 600, color: 'var(--terminal-text-secondary)', lineHeight: 1.35, marginTop: 3 },
@@ -1879,7 +1879,7 @@ const S = {
     gap: 4,
     background: 'var(--terminal-surface-subtle)',
     border: '1px solid var(--terminal-border)',
-    borderRadius: 14,
+    borderRadius: 16,
     padding: 10,
     color: 'var(--terminal-text-secondary)',
     fontSize: 12,
@@ -1890,7 +1890,6 @@ const S = {
     fontSize: 12,
     fontWeight: 600,
     color: 'var(--terminal-text)',
-        letterSpacing: 0.6,
     marginTop: 2,
   },
   luckyList: { display: 'flex', flexDirection: 'column', gap: 6 },
@@ -1931,7 +1930,7 @@ const S = {
   luckyHistoryWinners: { color: 'var(--terminal-long)', marginTop: 3 },
 
   tCard: {
-    background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 14, padding: 12,
+    background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 16, padding: 12,
   },
   tName: { fontSize: 16, fontWeight: 600, color: 'var(--terminal-text)', marginBottom: 4 },
   tDesc: { fontSize: 12, color: 'var(--terminal-text-secondary)', lineHeight: 1.4, marginBottom: 8 },
@@ -2036,7 +2035,7 @@ const S = {
     background: 'var(--terminal-long-soft)', border: '1px solid var(--terminal-long-border)', color: 'var(--terminal-long)',
   },
   prizeProgress: {
-    background: 'var(--terminal-warning-soft)', border: '1px solid var(--terminal-warning-border)', borderRadius: 14,
+    background: 'var(--terminal-warning-soft)', border: '1px solid var(--terminal-warning-border)', borderRadius: 16,
     padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 6,
   },
   prizeProgressTop: {
@@ -2063,13 +2062,13 @@ const S = {
     fontSize: 10, fontWeight: 600, color: 'var(--terminal-text-secondary)',
   },
   rewardScheduleCard: {
-    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 14,
+    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 16,
     padding: 10, display: 'flex', flexDirection: 'column', gap: 6,
   },
   rewardScheduleHeader: {
     display: 'flex', justifyContent: 'space-between', gap: 8,
     fontSize: 12, fontWeight: 600, color: 'var(--terminal-text)',
-    letterSpacing: 0.4,
+    letterSpacing: 0,
   },
   rewardScheduleLine: {
     fontSize: 11, fontWeight: 600, color: 'var(--terminal-text)',
@@ -2082,11 +2081,11 @@ const S = {
     padding: '6px 7px', display: 'flex', flexDirection: 'column', gap: 3,
   },
   sectorCard: {
-    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 14,
+    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 16,
     padding: 10, display: 'flex', flexDirection: 'column', gap: 8,
   },
   sectorHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
-  sectorTitle: { fontSize: 12, fontWeight: 600, color: 'var(--terminal-text)', letterSpacing: 0.5 },
+  sectorTitle: { fontSize: 12, fontWeight: 600, color: 'var(--terminal-text)', letterSpacing: 0 },
   sectorMine: { fontSize: 11, fontWeight: 600, color: 'var(--terminal-long)', background: 'var(--terminal-long-soft)', border: '1px solid var(--terminal-long-border)', borderRadius: 12, padding: '3px 7px' },
   sectorGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 6 },
   sectorTile: { background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 12, padding: 8 },
@@ -2109,17 +2108,17 @@ const S = {
   lbGroup: { display: 'flex', flexDirection: 'column', gap: 6 },
   lbGroupHeader: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
-    background: 'var(--terminal-warning-soft)', border: '1px solid var(--terminal-warning-border)', borderRadius: 9,
+    background: 'var(--terminal-warning-soft)', border: '1px solid var(--terminal-warning-border)', borderRadius: 8,
     padding: '6px 8px', fontSize: 11, fontWeight: 600, color: 'var(--terminal-text)',
   },
 
   rewardBox: {
-    background: 'var(--terminal-warning-soft)', border: '1px solid var(--terminal-warning-border)', borderRadius: 14, padding: 10,
+    background: 'var(--terminal-warning-soft)', border: '1px solid var(--terminal-warning-border)', borderRadius: 16, padding: 10,
   },
   rewardHeaderRow: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
   },
-  rewardLabel: { fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-secondary)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 5 },
+  rewardLabel: { fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-secondary)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 5 },
   rewardHelp: { fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-secondary)', lineHeight: 1.35, marginBottom: 7 },
   rewardHint: { fontSize: 11, fontWeight: 600, color: 'var(--terminal-warning)', textAlign: 'center', marginTop: 6 },
   townHallReq: {
@@ -2161,7 +2160,7 @@ const S = {
     fontSize: 10,
     fontWeight: 600,
     textTransform: 'uppercase',
-    letterSpacing: 0.45,
+    letterSpacing: '0.1em',
   },
   townHallReqBadgeOk: {
     fontSize: 10,
@@ -2185,7 +2184,7 @@ const S = {
   townHallReqSub: { fontSize: 10, fontWeight: 600, opacity: 0.82 },
   rewardCurrent: {
     fontSize: 13, fontWeight: 600, color: 'var(--terminal-text)',
-    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 9,
+    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 8,
     padding: '5px 8px', overflowWrap: 'anywhere',
   },
   rewardInput: {
@@ -2202,7 +2201,7 @@ const S = {
       },
   rewardSaveBtn: {
     ...uiButton('primary', { flex: 1, minHeight: 36, padding: '8px 12px', fontSize: 12 }),
-    letterSpacing: 0.5,   },
+    letterSpacing: 0,   },
   hibachiSyncBanner: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
     padding: '8px 10px', borderRadius: 12,
@@ -2222,16 +2221,16 @@ const S = {
 
   joinBtn: {
     ...uiButton('primary', { width: '100%', minHeight: 44, padding: '12px 16px', fontSize: 14 }),
-    letterSpacing: 0.4,
+    letterSpacing: 0,
   },
 
   myCard: {
-    background: 'var(--terminal-warning-soft)', border: '1px solid var(--terminal-warning-border)', borderRadius: 14, padding: 12,
+    background: 'var(--terminal-warning-soft)', border: '1px solid var(--terminal-warning-border)', borderRadius: 16, padding: 12,
   },
   myCardHeader: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8,
   },
-  myCardLabel: { fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-secondary)', textTransform: 'uppercase', letterSpacing: 0.5 },
+  myCardLabel: { fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-secondary)', textTransform: 'uppercase', letterSpacing: '0.1em' },
   myCardRank: { fontSize: 22, fontWeight: 600, color: 'var(--terminal-warning)' },
   statRow: { display: 'flex', gap: 5, flexWrap: 'wrap', marginBottom: 8 },
   stat: {
@@ -2239,7 +2238,7 @@ const S = {
     border: '1px solid var(--terminal-border)', borderRadius: 12, padding: '6px 4px',
   },
   statValue: { fontSize: 14, fontWeight: 600, lineHeight: 1.2 },
-  statLabel: { fontSize: 10, color: 'var(--terminal-text-muted)', textTransform: 'uppercase', marginTop: 2, fontWeight: 600, letterSpacing: 0.4 },
+  statLabel: { fontSize: 10, color: 'var(--terminal-text-muted)', textTransform: 'uppercase', marginTop: 2, fontWeight: 600, letterSpacing: '0.1em' },
   freezeNote: {
     fontSize: 11, color: 'var(--terminal-text-secondary)', lineHeight: 1.4, padding: '6px 4px',
     background: 'var(--terminal-surface)', borderRadius: 12, marginBottom: 8,
@@ -2247,7 +2246,7 @@ const S = {
   leaveBtn: uiButton('danger', { width: '100%', minHeight: 34, padding: '6px', fontSize: 11 }),
 
   dailyCard: {
-    background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 14, padding: 10,
+    background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 16, padding: 10,
     display: 'flex', flexDirection: 'column', gap: 8,
   },
   dailyHeader: {
@@ -2258,7 +2257,7 @@ const S = {
   },
   dailyTitle: {
     fontSize: 13, fontWeight: 600, color: 'var(--terminal-text)',
-    letterSpacing: 0.5,
+    letterSpacing: 0,
   },
   dailySub: { fontSize: 10, fontWeight: 600, color: 'var(--terminal-text-secondary)', marginTop: 1 },
   dailyCompactMine: {
@@ -2308,7 +2307,7 @@ const S = {
     color: 'var(--terminal-text-secondary)',
     background: 'var(--terminal-surface)',
     border: '1px solid var(--terminal-border)',
-    borderRadius: 9,
+    borderRadius: 8,
     padding: '5px 7px',
     lineHeight: 1.15,
   },
@@ -2328,7 +2327,7 @@ const S = {
   dailyMineRank: { fontSize: 20, fontWeight: 600, color: 'var(--terminal-warning)' },
   dailyGrid: { display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 5 },
   dailyMiniStat: {
-    minWidth: 0, background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 9,
+    minWidth: 0, background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 8,
     padding: '5px 3px', textAlign: 'center', display: 'flex', flexDirection: 'column', gap: 1,
   },
   dailyMiniValue: {
@@ -2337,7 +2336,7 @@ const S = {
   },
   dailyMiniLabel: {
     fontSize: 10, fontWeight: 600, color: 'var(--terminal-text-muted)',
-    textTransform: 'uppercase', letterSpacing: 0.35,
+    textTransform: 'uppercase', letterSpacing: '0.1em',
   },
   dailyList: { display: 'flex', flexDirection: 'column', gap: 5 },
   dailyPlayerRow: {
@@ -2370,10 +2369,10 @@ const S = {
   },
   dailyEmpty: {
     textAlign: 'center', padding: 8, color: 'var(--terminal-text-muted)', fontSize: 11, fontWeight: 600,
-    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 9,
+    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 8,
   },
 
-  lbHeader: { fontSize: 13, fontWeight: 600, color: 'var(--terminal-text)', letterSpacing: 0.6, padding: '4px 2px 0' },
+  lbHeader: { fontSize: 13, fontWeight: 600, color: 'var(--terminal-text)', letterSpacing: 0, padding: '4px 2px 0' },
   lbList: { display: 'flex', flexDirection: 'column', gap: 5 },
   row: {
     display: 'grid', gridTemplateColumns: '26px minmax(0, 1fr) max-content',

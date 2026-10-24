@@ -7,6 +7,6 @@ export const GOLD_REWARD_PANEL_TOAST_STYLE = Object.freeze({
   maxWidth: 420,
   transform: 'none',
   zIndex: 30,
-  borderRadius: 10,
+  borderRadius: 12,
   padding: '10px 12px',
 });

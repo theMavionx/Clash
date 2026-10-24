@@ -79,7 +79,7 @@ const S = {
     inset: 0,
     zIndex: 1200,
     pointerEvents: 'auto',
-    background: 'var(--terminal-overlay)',
+    background: 'var(--terminal-overlay)', backdropFilter: 'blur(var(--cb-scrim-blur))', WebkitBackdropFilter: 'blur(var(--cb-scrim-blur))',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -87,12 +87,12 @@ const S = {
   },
   modal: {
     width: 'min(360px, calc(100vw - 28px))',
-    borderRadius: 16,
+    borderRadius: 24,
     border: '1px solid var(--terminal-border)',
     background: 'var(--terminal-surface)',
     color: 'var(--terminal-text)',
     overflow: 'hidden',
-    boxShadow: 'var(--terminal-shadow-card)',
+    boxShadow: 'var(--cb-shadow-dialog)',
     fontFamily: 'inherit',
   },
   header: {
@@ -110,7 +110,7 @@ const S = {
 
     color: 'var(--terminal-text)',
   },
-  close: uiIconButton('ghost', 30, { fontSize: 15 }),
+  close: uiIconButton('soft', 32, { fontSize: 15 }),
   body: {
     padding: 14,
     display: 'flex',

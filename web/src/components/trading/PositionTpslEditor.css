@@ -20,7 +20,7 @@
 .position-tpsl__preview[data-error="true"] { color: var(--terminal-short); }
 .position-tpsl__input-wrap:has(input[aria-invalid="true"]) { border-color: var(--terminal-short); }
 .position-tpsl__footer { padding-top: 12px; border-top: 1px solid var(--terminal-border); }
-.position-tpsl__footer > button { width: 100%; min-height: 44px; border: 1px solid var(--terminal-orange); border-radius:999px; background: var(--terminal-orange); color: var(--terminal-on-warning); font: 700 14px/20px system-ui,sans-serif; cursor: pointer; }
+.position-tpsl__footer > button { width: 100%; min-height: 44px; border: 1px solid var(--terminal-orange); border-radius:999px; background: var(--terminal-orange); color: var(--terminal-on-warning); font: 600 14px/20px system-ui,sans-serif; cursor: pointer; }
 .position-tpsl__footer > button:disabled { opacity: .5; cursor: not-allowed; }
 .position-tpsl :is(button,input):focus-visible { outline: 2px solid var(--terminal-orange); outline-offset: 2px; }
 @media (pointer: coarse) { .position-tpsl__modes button { min-height: 44px; } }

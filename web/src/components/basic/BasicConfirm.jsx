@@ -208,7 +208,7 @@ const S = {
   tightTitle: {
     fontSize: 'clamp(16px, 3vh, 20px)',
     fontWeight: 600, color: colors.ink,
-    textAlign: 'center', letterSpacing: '0.3px',
+    textAlign: 'center', letterSpacing: 0,
     margin: '2px 0 4px', lineHeight: 1.1,
   },
   card: {
@@ -230,7 +230,7 @@ const S = {
     color: 'var(--terminal-on-accent)',
   },
   symbol: {
-    fontSize: 20, fontWeight: 700, color: colors.ink, letterSpacing: '0.6px',
+    fontSize: 20, fontWeight: 600, color: colors.ink, letterSpacing: 0,
   },
   bigSize: {
     fontSize: 'clamp(20px, 4vh, 26px)',
@@ -252,7 +252,7 @@ const S = {
     gap: 8,
     minWidth: 0,
   },
-  rowLabel: { fontSize: 12, fontWeight: 600, color: colors.inkFaint, letterSpacing: '0.3px' },
+  rowLabel: { fontSize: 12, fontWeight: 600, color: colors.inkFaint, letterSpacing: 0 },
   rowValue: {
     fontSize: 14, fontWeight: 600, color: colors.ink, fontVariantNumeric: 'tabular-nums',
     textAlign: 'right', minWidth: 0, overflowWrap: 'anywhere',
@@ -287,7 +287,7 @@ const S = {
     position: 'absolute', inset: 0,
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     paddingLeft: THUMB_SIZE,  // centre label over the un-filled portion
-    fontSize: 'clamp(11px, 3.5vw, 15px)', fontWeight: 600, letterSpacing: '0.4px',
+    fontSize: 'clamp(11px, 3.5vw, 15px)', fontWeight: 600, letterSpacing: 0,
     color: colors.inkSoft,
     pointerEvents: 'none',
     boxSizing: 'border-box',

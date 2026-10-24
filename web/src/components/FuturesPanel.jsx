@@ -2729,8 +2729,8 @@ const flashFundingModalStyles = {
     alignItems: 'center',
     justifyContent: 'center',
     padding: 14,
-    background: 'var(--terminal-overlay)',
-    fontFamily: '"Inter","Segoe UI",sans-serif',
+    background: 'var(--terminal-overlay)', backdropFilter: 'blur(var(--cb-scrim-blur))', WebkitBackdropFilter: 'blur(var(--cb-scrim-blur))',
+    fontFamily: 'inherit',
   },
   panel: {
     width: 'min(440px, 100%)',
@@ -2738,8 +2738,8 @@ const flashFundingModalStyles = {
     overflowY: 'auto',
     background: 'var(--terminal-surface)',
     border: '1px solid var(--terminal-border)',
-    borderRadius: 16,
-    boxShadow: 'var(--terminal-shadow-card)',
+    borderRadius: 24,
+    boxShadow: 'var(--cb-shadow-dialog)',
     padding: 16,
     display: 'flex',
     flexDirection: 'column',
@@ -2805,7 +2805,7 @@ const SymbolPicker = memo(function SymbolPicker({ markets, prices, symbol, onSel
         style={{padding: '6px 10px', border: '1px solid var(--terminal-border)', borderRadius: 8, background: 'var(--terminal-surface)', fontSize: 13, fontWeight: 600, color: 'var(--terminal-text)', outline: 'none'}}
       />
       <div className="grad-scrollbar" style={{overflowY: 'auto', overflowX: 'hidden', flex: 1}}>
-        <table style={{width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse', fontSize: 12, fontFamily: '"Inter","Segoe UI",sans-serif'}}>
+        <table style={{width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse', fontSize: 12, fontFamily: 'inherit'}}>
           <colgroup>
             <col style={{width: 'auto'}} />
             <col style={{width: '70px'}} />
@@ -2827,7 +2827,7 @@ const SymbolPicker = memo(function SymbolPicker({ markets, prices, symbol, onSel
                   <span style={{fontWeight: 600, color: 'var(--terminal-text)'}}>{r.label}</span>
                   <span style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-muted)'}}>{r.maxLev}x</span>
                   {r.marketClosed && (
-                    <span style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-warning)', background: 'var(--terminal-warning-border)', border: '1px solid var(--terminal-warning)', borderRadius: 5, padding: '1px 4px'}}>
+                    <span style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-warning)', background: 'var(--terminal-warning-border)', border: '1px solid var(--terminal-warning)', borderRadius: 8, padding: '1px 4px'}}>
                       Closed
                     </span>
                   )}
@@ -2956,7 +2956,7 @@ const OrdersList = memo(function OrdersList({ orders, cancelOrder, positions = [
           <div key={orderStableKey(o, i)} style={S.posCard}>
             <div style={S.row}>
               <span style={{fontSize: 16, fontWeight: 600}}>{sym}</span>
-              <span style={{fontSize: 11, fontWeight: 600, color: typeColor, background: 'var(--terminal-surface)', padding: '2px 6px', borderRadius: 5, border: '1px solid var(--terminal-border)'}}>{type}</span>
+              <span style={{fontSize: 11, fontWeight: 600, color: typeColor, background: 'var(--terminal-surface)', padding: '2px 6px', borderRadius: 8, border: '1px solid var(--terminal-border)'}}>{type}</span>
               {pending ? <OrderPendingBadge /> : null}
               <span style={{fontSize: 13, fontWeight: 600, color: isBid ? 'var(--terminal-long)' : 'var(--terminal-short)'}}>
                 {sideLabel}
@@ -3049,12 +3049,12 @@ const PositionsList = memo(function PositionsList({
                 {(() => {
                   const isIso = pos.is_isolated ?? marginModes?.[pos.symbol];
                   return (
-                    <span style={{fontSize: 11, fontWeight: 600, padding: '2px 6px', borderRadius: 5, borderWidth: 1, borderStyle: 'solid', borderColor: isIso ? 'var(--terminal-warning)' : 'var(--terminal-long)', color: isIso ? 'var(--terminal-warning)' : 'var(--terminal-long)', background: 'var(--terminal-chip-overlay)'}}>
+                    <span style={{fontSize: 11, fontWeight: 600, padding: '2px 6px', borderRadius: 8, borderWidth: 1, borderStyle: 'solid', borderColor: isIso ? 'var(--terminal-warning)' : 'var(--terminal-long)', color: isIso ? 'var(--terminal-warning)' : 'var(--terminal-long)', background: 'var(--terminal-chip-overlay)'}}>
                       {isIso ? 'Iso' : 'Cross'}
                     </span>
                   );
                 })()}
-                <span style={{fontSize: 11, fontWeight: 600, color: isDust ? 'var(--terminal-warning)' : 'var(--terminal-text-muted)', background: 'var(--terminal-surface)', padding: '2px 6px', borderRadius: 5, border: '1px solid var(--terminal-border)'}}>{isDust ? 'DUST' : formatPositionLeverageBadge(setLev)}</span>
+                <span style={{fontSize: 11, fontWeight: 600, color: isDust ? 'var(--terminal-warning)' : 'var(--terminal-text-muted)', background: 'var(--terminal-surface)', padding: '2px 6px', borderRadius: 8, border: '1px solid var(--terminal-border)'}}>{isDust ? 'DUST' : formatPositionLeverageBadge(setLev)}</span>
                 <span style={{fontSize: 13, fontWeight: 600, color: pos.side === 'bid' ? 'var(--terminal-long)' : 'var(--terminal-short)'}}>
                   {pos.side === 'bid' ? 'Long' : 'Short'}
                 </span>
@@ -5657,7 +5657,7 @@ function FuturesPanel() {
         </div>
       </div>
       {showSymbolPicker && (
-        <div style={{position: 'fixed', inset: 0, zIndex: 400, background: 'var(--terminal-overlay)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', paddingTop: 60}} onClick={() => setShowSymbolPicker(false)}>
+        <div style={{position: 'fixed', inset: 0, zIndex: 400, background: 'var(--terminal-overlay)', backdropFilter: 'blur(var(--cb-scrim-blur))', WebkitBackdropFilter: 'blur(var(--cb-scrim-blur))', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', paddingTop: 60}} onClick={() => setShowSymbolPicker(false)}>
           <div style={{width: fullscreen ? 480 : '90%', maxWidth: 600, maxHeight: '80vh', background: 'var(--terminal-dropdown, var(--terminal-surface))', border: '1px solid var(--terminal-border)', borderRadius: 16, padding: 12, boxShadow: 'var(--terminal-shadow-card)', display: 'flex', flexDirection: 'column'}} onClick={e => e.stopPropagation()}>
             <SymbolPicker markets={markets} prices={prices} symbol={symbol} onSelect={(s) => { setSymbol(s); setShowSymbolPicker(false); }} fullscreen={fullscreen} signals={elfaSignals} />
           </div>
@@ -6057,7 +6057,7 @@ function FuturesPanel() {
                 margin: '0 auto',
                 padding: 14,
                 borderWidth: 1,
-                borderRadius: 18,
+                borderRadius: 20,
                 gap: 8,
                 boxSizing: 'border-box',
                 overflowY: 'auto',
@@ -6260,7 +6260,7 @@ function FuturesPanel() {
               width: 58, height: 58, borderRadius: '50%',
               background: 'var(--terminal-warning)', color: 'var(--terminal-on-accent)',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: 36, fontWeight: 700,
+              fontSize: 36, fontWeight: 600,
               boxShadow: 'var(--terminal-shadow-card)',
             }}>!</div>
             <div style={{color: 'var(--terminal-text)', fontSize: 18, fontWeight: 600}}>
@@ -8044,7 +8044,7 @@ function FuturesPanel() {
               }}>
                 <div style={{
                   padding: '10px 12px',
-                  borderRadius: 10,
+                  borderRadius: 12,
                   background: 'var(--terminal-warning-soft)',
                   border: '1px solid var(--terminal-orange)',
                   color: 'var(--terminal-text)',
@@ -9016,7 +9016,7 @@ function FuturesPanel() {
 
               {spotBal > 0.000001 && (
                 <button
-                  style={{...S.btnSmall, width: '100%', marginTop: 8, background: 'var(--terminal-long)', color: 'var(--terminal-on-trade, var(--terminal-on-accent))', border: '1px solid var(--terminal-long)'}}
+                  style={{...S.btnSmall, width: '100%', marginTop: 8, background: 'var(--cb-accent)', color: '#ffffff', border: '1px solid var(--cb-accent)'}}
                   onClick={async () => {
                     const amountText = spotBal.toFixed(6).replace(/(\.\d*?)0+$/u, '$1').replace(/\.$/u, '');
                     const r = await moveSpotToPerp?.(amountText);
@@ -10153,7 +10153,7 @@ function FuturesPanel() {
                     <span style={{fontSize: 16, fontWeight: 600}}>{pos.symbol}</span>
                     <span style={{
                       fontSize: 12, fontWeight: 600,
-                      padding: '2px 8px', borderRadius: 6,
+                      padding: '2px 8px', borderRadius: 8,
                       color: 'var(--terminal-on-trade, var(--terminal-on-accent))',
                       background: pos.side === 'bid' ? 'var(--terminal-long)' : 'var(--terminal-short)',
                       letterSpacing: 0,
@@ -10164,7 +10164,7 @@ function FuturesPanel() {
                     <span style={{
                       fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-muted)',
                       background: 'var(--terminal-surface)', padding: '2px 6px',
-                      borderRadius: 5, border: '1px solid var(--terminal-border)',
+                      borderRadius: 8, border: '1px solid var(--terminal-border)',
                     }}>{isDust ? 'DUST' : formatPositionLeverageBadge(setLev)}</span>
                   </div>
                   <PositionPnlReadout
@@ -10252,12 +10252,12 @@ function FuturesPanel() {
                   {(() => {
                     const isIso = dex === 'gmtrade' ? true : (pos.is_isolated ?? marginModes?.[pos.symbol]);
                     return (
-                      <span style={{fontSize: 11, fontWeight: 600, padding: '2px 6px', borderRadius: 5, borderWidth: 1, borderStyle: 'solid', borderColor: isIso ? 'var(--terminal-warning)' : 'var(--terminal-long)', color: isIso ? 'var(--terminal-warning)' : 'var(--terminal-long)', background: 'var(--terminal-chip-overlay)'}}>
+                      <span style={{fontSize: 11, fontWeight: 600, padding: '2px 6px', borderRadius: 8, borderWidth: 1, borderStyle: 'solid', borderColor: isIso ? 'var(--terminal-warning)' : 'var(--terminal-long)', color: isIso ? 'var(--terminal-warning)' : 'var(--terminal-long)', background: 'var(--terminal-chip-overlay)'}}>
                         {isIso ? 'Iso' : 'Cross'}
                       </span>
                     );
                   })()}
-                  <span style={{fontSize: 11, fontWeight: 600, color: isDust ? 'var(--terminal-warning)' : 'var(--terminal-text-muted)', background: 'var(--terminal-surface)', padding: '2px 6px', borderRadius: 5, border: '1px solid var(--terminal-border)'}}>{isDust ? 'DUST' : formatPositionLeverageBadge(setLev)}</span>
+                  <span style={{fontSize: 11, fontWeight: 600, color: isDust ? 'var(--terminal-warning)' : 'var(--terminal-text-muted)', background: 'var(--terminal-surface)', padding: '2px 6px', borderRadius: 8, border: '1px solid var(--terminal-border)'}}>{isDust ? 'DUST' : formatPositionLeverageBadge(setLev)}</span>
                   <span style={{fontSize: 13, fontWeight: 600, color: pos.side === 'bid' ? 'var(--terminal-long)' : 'var(--terminal-short)'}}>
                     {pos.side === 'bid' ? 'Long' : 'Short'}
                   </span>
@@ -10328,7 +10328,7 @@ function FuturesPanel() {
                     width: 32, padding: 0,
                     background: 'var(--terminal-surface-muted)',
                     border: '1px solid var(--terminal-border)',
-                    borderRadius: 6,
+                    borderRadius: 8,
                     color: 'var(--terminal-text)',
                     cursor: 'pointer',
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -10468,7 +10468,7 @@ function FuturesPanel() {
             <div key={orderStableKey(o, i)} style={S.posCard}>
               <div style={S.row}>
                 <span style={{fontSize: 16, fontWeight: 600}}>{sym}</span>
-                <span style={{fontSize: 11, fontWeight: 600, color: typeColor, background: 'var(--terminal-surface)', padding: '2px 6px', borderRadius: 5, border: '1px solid var(--terminal-border)'}}>{type}</span>
+                <span style={{fontSize: 11, fontWeight: 600, color: typeColor, background: 'var(--terminal-surface)', padding: '2px 6px', borderRadius: 8, border: '1px solid var(--terminal-border)'}}>{type}</span>
                 {pending ? <OrderPendingBadge /> : null}
                 <span style={{fontSize: 13, fontWeight: 600, color: isBid ? 'var(--terminal-long)' : 'var(--terminal-short)'}}>
                   {sideLabel}
@@ -10713,7 +10713,7 @@ function FuturesPanel() {
       : 'var(--terminal-text)';
 
     if (dex === 'throne') return <div style={{ ...S.fullCard, display: 'grid', gap: 14 }}>
-      <h3 style={{ display: 'flex', alignItems: 'center', gap: 8 }}><img src="/throne-logo.png" alt="" width="22" height="22" style={{ borderRadius: 6 }} />Throne account</h3>
+      <h3 style={{ display: 'flex', alignItems: 'center', gap: 8 }}><img src="/throne-logo.png" alt="" width="22" height="22" style={{ borderRadius: 8 }} />Throne account</h3>
       <div>Wallet: {account?.address ? `${account.address.slice(0, 6)}…${account.address.slice(-4)}` : 'Checking…'} · broker throne</div>
       <div>Equity: ${Number(account?.equity || 0).toFixed(2)}</div>
       <div>Free collateral: ${Number(account?.free_collateral || 0).toFixed(2)}</div>
@@ -10760,7 +10760,7 @@ function FuturesPanel() {
                 }}
                 style={{
                   display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                  width: 22, height: 22, padding: 0, borderRadius: 6,
+                  width: 22, height: 22, padding: 0, borderRadius: 8,
                   background: walletCopied ? 'var(--terminal-long-soft)' : 'var(--terminal-surface-muted)',
                   border: `1px solid ${walletCopied ? 'var(--terminal-long-border)' : 'var(--terminal-border-strong)'}`,
                   cursor: 'pointer', color: walletCopied ? 'var(--terminal-long)' : 'var(--terminal-text)',
@@ -10868,12 +10868,12 @@ function FuturesPanel() {
               </button>
             </div>
             <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8}}>
-              <div style={{background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 10, padding: '8px 10px'}}>
-                <div style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-faint)', textTransform: 'uppercase', letterSpacing: '0.06em'}}>Environment</div>
+              <div style={{background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 12, padding: '8px 10px'}}>
+                <div style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-faint)', textTransform: 'uppercase', letterSpacing: '0.1em'}}>Environment</div>
                 <div style={{fontSize: 13, fontWeight: 600, color: 'var(--terminal-short-strong)'}}>Real</div>
               </div>
-              <div style={{background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 10, padding: '8px 10px'}}>
-                <div style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-faint)', textTransform: 'uppercase', letterSpacing: '0.06em'}}>Account</div>
+              <div style={{background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 12, padding: '8px 10px'}}>
+                <div style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-faint)', textTransform: 'uppercase', letterSpacing: '0.1em'}}>Account</div>
                 <div style={{fontSize: 13, fontWeight: 600, color: 'var(--terminal-text)', fontFamily: 'monospace'}}>{String(account?.account_id || '').slice(0, 18) || 'Connected'}</div>
               </div>
             </div>
@@ -10942,12 +10942,12 @@ function FuturesPanel() {
               </button>
             </div>
             <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8}}>
-              <div style={{background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 10, padding: '8px 10px'}}>
-                <div style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-faint)', textTransform: 'uppercase', letterSpacing: '0.06em'}}>Account index</div>
+              <div style={{background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 12, padding: '8px 10px'}}>
+                <div style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-faint)', textTransform: 'uppercase', letterSpacing: '0.1em'}}>Account index</div>
                 <div style={{fontSize: 13, fontWeight: 600, color: 'var(--terminal-text)'}}>{lighterCredentials.accountIndex}</div>
               </div>
-              <div style={{background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 10, padding: '8px 10px'}}>
-                <div style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-faint)', textTransform: 'uppercase', letterSpacing: '0.06em'}}>API key index</div>
+              <div style={{background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 12, padding: '8px 10px'}}>
+                <div style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-faint)', textTransform: 'uppercase', letterSpacing: '0.1em'}}>API key index</div>
                 <div style={{fontSize: 13, fontWeight: 600, color: 'var(--terminal-text)'}}>{lighterCredentials.apiKeyIndex ?? '-'}</div>
               </div>
             </div>
@@ -10975,9 +10975,9 @@ function FuturesPanel() {
                     ...S.btnSmall,
                     padding: '5px 9px',
                     fontSize: 11,
-                    background: 'var(--terminal-long)',
-                    color: 'var(--terminal-on-trade, var(--terminal-on-accent))',
-                    border: '1px solid var(--terminal-long)',
+                    background: 'var(--cb-accent)',
+                    color: '#ffffff',
+                    border: '1px solid var(--cb-accent)',
                     opacity: (risexWalletBusy || loading) ? 0.65 : 1,
                     whiteSpace: 'nowrap',
                   }}
@@ -11076,11 +11076,11 @@ function FuturesPanel() {
               <span style={S.detail}>Encrypted keys</span>
             </div>
             <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8}}>
-              <div style={{background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 10, padding: '8px 10px'}}>
-                <div style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-faint)', textTransform: 'uppercase', letterSpacing: '0.06em'}}>API key</div>
+              <div style={{background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 12, padding: '8px 10px'}}>
+                <div style={{fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-faint)', textTransform: 'uppercase', letterSpacing: '0.1em'}}>API key</div>
                 <div style={{fontSize: 13, fontWeight: 600, color: 'var(--terminal-text)'}}>Saved</div>
               </div>
-              <div style={{background: oneTapTrading?.enabled ? 'var(--terminal-long-border)' : 'var(--terminal-surface-subtle)', border: `1px solid ${oneTapTrading?.enabled ? 'var(--terminal-long)' : 'var(--terminal-border)'}`, borderRadius: 10, padding: '8px 10px'}}>
+              <div style={{background: oneTapTrading?.enabled ? 'var(--terminal-long-border)' : 'var(--terminal-surface-subtle)', border: `1px solid ${oneTapTrading?.enabled ? 'var(--terminal-long)' : 'var(--terminal-border)'}`, borderRadius: 12, padding: '8px 10px'}}>
                 <div style={{fontSize: 11, fontWeight: 600, color: oneTapTrading?.enabled ? 'var(--terminal-long-strong)' : 'var(--terminal-text-faint)', textTransform: 'uppercase'}}>One tap</div>
                 <div style={{fontSize: 13, fontWeight: 600, color: oneTapTrading?.enabled ? 'var(--terminal-long-strong)' : 'var(--terminal-text)'}}>
                   {oneTapTrading?.enabled ? 'Enabled' : 'Off'}
@@ -11092,7 +11092,7 @@ function FuturesPanel() {
                 marginBottom: 8,
                 background: 'var(--terminal-long-soft)',
                 border: '1px dashed var(--terminal-long-border)',
-                borderRadius: 10,
+                borderRadius: 12,
                 padding: '8px 10px',
                 fontSize: 11,
                 fontWeight: 600,
@@ -11135,7 +11135,7 @@ function FuturesPanel() {
               </div>
               <button
                 type="button"
-                style={{...S.btnSmall, width: '100%', padding: '10px 12px', background: 'var(--terminal-long)', color: 'var(--terminal-on-trade, var(--terminal-on-accent))', border: '1px solid var(--terminal-long)'}}
+                style={{...S.btnSmall, width: '100%', padding: '10px 12px', background: 'var(--cb-accent)', color: '#ffffff', border: '1px solid var(--cb-accent)'}}
                 disabled={loading}
                 onClick={async () => {
                   const res = await activate?.({ autoBuilderKey: true });
@@ -11235,9 +11235,9 @@ function FuturesPanel() {
                     ...S.btnSmall,
                     flex: 1,
                     padding: '9px 10px',
-                    background: 'var(--terminal-long)',
-                    color: 'var(--terminal-on-trade, var(--terminal-on-accent))',
-                    border: '1px solid var(--terminal-long)',
+                    background: 'var(--cb-accent)',
+                    color: '#ffffff',
+                    border: '1px solid var(--cb-accent)',
                     opacity: loading || !grvtApiKeyInput.trim() || (grvtAccountOneTap && !oneTapTrading?.enabled && !grvtPrivateKeyInput.trim()) ? 0.65 : 1,
                   }}
                   disabled={loading || !grvtApiKeyInput.trim() || (grvtAccountOneTap && !oneTapTrading?.enabled && !grvtPrivateKeyInput.trim())}
@@ -11369,7 +11369,7 @@ function FuturesPanel() {
                 display: 'flex', alignItems: 'center', gap: 6,
                 background: accentBg,
                 border: `1px dashed ${accentBorder}`,
-                borderRadius: 10, padding: '8px 10px',
+                borderRadius: 12, padding: '8px 10px',
               }}>
                 <code style={{
                   flex: 1, fontSize: 11, fontFamily: 'monospace',
@@ -11392,7 +11392,7 @@ function FuturesPanel() {
                   display: 'flex', alignItems: 'center', gap: 6,
                   background: accentBg,
                   border: `1px dashed ${accentBorder}`,
-                  borderRadius: 10, padding: '8px 10px',
+                  borderRadius: 12, padding: '8px 10px',
                 }}>
                   <span style={{
                     flex: 1,
@@ -11591,9 +11591,9 @@ function FuturesPanel() {
                   style={{
                     ...S.btnSmall,
                     width: '100%',
-                    background: 'var(--terminal-long)',
-                    color: 'var(--terminal-on-trade, var(--terminal-on-accent))',
-                    border: '1px solid var(--terminal-long)',
+                    background: 'var(--cb-accent)',
+                    color: '#ffffff',
+                    border: '1px solid var(--cb-accent)',
                     opacity: isFundingBusy ? 0.65 : 1,
                   }}
                   onClick={async () => {
@@ -11753,7 +11753,7 @@ function FuturesPanel() {
                 </button>
                 {Number(spotUsdc || 0) > 0.000001 && (
                   <button
-                    style={{...S.btnSmall, width: '100%', background: 'var(--terminal-long)', color: 'var(--terminal-on-trade, var(--terminal-on-accent))', border: '1px solid var(--terminal-long)'}}
+                    style={{...S.btnSmall, width: '100%', background: 'var(--cb-accent)', color: '#ffffff', border: '1px solid var(--cb-accent)'}}
                     onClick={async () => {
                       const amountText = Number(spotUsdc || 0).toFixed(6).replace(/(\.\d*?)0+$/u, '$1').replace(/\.$/u, '');
                       const r = await moveSpotToPerp?.(amountText);
@@ -12478,36 +12478,7 @@ const animCSS = `
   @keyframes futures-close-spin {
     to { transform: rotate(360deg); }
   }
-  /* Gradient Range Slider */
-  .grad-slider {
-    -webkit-appearance: none;
-    width: 100%;
-    height: 8px;
-    background: linear-gradient(90deg, var(--terminal-orange) 0%, var(--terminal-orange) var(--val, 0%), var(--terminal-border) var(--val, 0%), var(--terminal-border) 100%);
-    border-radius: 4px;
-    outline: none;
-    cursor: pointer;
-  }
-  .grad-slider::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    appearance: none;
-    width: 18px;
-    height: 18px;
-    border-radius: 50%;
-    background: var(--terminal-surface);
-    border: 4px solid var(--terminal-orange);
-    box-shadow: var(--terminal-shadow-card);
-    cursor: pointer;
-  }
-  .grad-slider::-moz-range-thumb {
-    width: 18px;
-    height: 18px;
-    border-radius: 50%;
-    background: var(--terminal-surface);
-    border: 4px solid var(--terminal-orange);
-    box-shadow: var(--terminal-shadow-card);
-    cursor: pointer;
-  }
+  /* Range sliders (.grad-slider) use the shared ClashBot range in styles/clashbot.css; fill via --val. */
 
   .futures-panel-body { overflow-x: hidden !important; scrollbar-gutter: stable; }
   .futures-panel-body input[type=number]::-webkit-inner-spin-button,
@@ -12601,9 +12572,9 @@ const S = {
     bottom: 150,
     width: DESKTOP_PANEL_WIDTH,
     maxWidth: 'calc(100vw - 32px)',
-    background: 'var(--terminal-canvas)', border: '1px solid var(--terminal-border)', borderRadius: 16,
+    background: 'var(--terminal-canvas)', border: '1px solid var(--terminal-border)', borderRadius: 24,
     display: 'flex', flexDirection: 'column', pointerEvents: 'auto', overflow: 'hidden', zIndex: 100,
-    boxShadow: 'var(--terminal-shadow-card)', fontFamily: 'inherit',
+    boxShadow: 'var(--cb-shadow-dialog)', fontFamily: 'inherit',
     boxSizing: 'border-box',
   },
   header: {
@@ -12623,7 +12594,7 @@ const S = {
     background: 'transparent', border: '1px solid transparent', borderRadius: 999,
     color: 'var(--terminal-text-muted)', boxShadow: 'none', cursor: 'pointer', padding: '6px 9px',
   },
-  closeBtn: uiIconButton('secondary', 36, { background: 'var(--terminal-secondary-button, var(--terminal-surface))' }),
+  closeBtn: uiIconButton('soft', 36),
   body: {
     flex: 1, padding: 'var(--terminal-body-padding, 12px)', display: 'flex', flexDirection: 'column', gap: 10,
     overflowY: 'auto', overflowX: 'hidden', background: 'var(--terminal-canvas)', scrollbarGutter: 'stable',
@@ -12636,8 +12607,8 @@ const S = {
     flexShrink: 0,
   },
   pacificaLogo: { width: 20, height: 20, objectFit: 'contain' },
-  pacificaText: { fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-faint)', letterSpacing: '0.05em', textTransform: 'uppercase' },
-  pacificaBrand: { fontSize: 11, fontWeight: 600, color: 'var(--terminal-text)', letterSpacing: '0.08em', textTransform: 'uppercase' },
+  pacificaText: { fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-faint)', letterSpacing: '0.1em', textTransform: 'uppercase' },
+  pacificaBrand: { fontSize: 11, fontWeight: 600, color: 'var(--terminal-text)', letterSpacing: '0.1em', textTransform: 'uppercase' },
   symbolBar: {
     display: 'flex', alignItems: 'center', gap: 12, padding: '4px 15px',
     background: 'transparent', flexShrink: 0,
@@ -12658,7 +12629,7 @@ const S = {
     pointerEvents: 'none',
   },
   fundingOverlayCompact: { right: 6, gap: 3 },
-  fundingOLabel: { fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-faint)', letterSpacing: '0.04em' },
+  fundingOLabel: { fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-faint)', letterSpacing: 0 },
   fundingOValue: { fontSize: 11, fontWeight: 600, fontVariantNumeric: 'tabular-nums' },
   fundingOValueCompact: { fontSize: 11 },
   // Common
@@ -12897,7 +12868,7 @@ const S = {
   },
   balanceMetricLabel: {
     fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-faint)', lineHeight: 1,
-    letterSpacing: '0.06em', textTransform: 'uppercase', whiteSpace: 'nowrap',
+    letterSpacing: '0.1em', textTransform: 'uppercase', whiteSpace: 'nowrap',
   },
   balanceMetricValue: {
     fontSize: 12, fontWeight: 600, color: 'var(--terminal-text)', lineHeight: 1.2,
@@ -12948,14 +12919,14 @@ const S = {
     borderRadius: 999, fontWeight: 600, fontSize: 12, color: '#ffffff',    boxShadow: 'none',
   },
   levBackdrop: {
-    position: 'fixed', inset: 0, background: 'var(--terminal-overlay)', zIndex: 10000,
+    position: 'fixed', inset: 0, background: 'var(--terminal-overlay)', backdropFilter: 'blur(var(--cb-scrim-blur))', WebkitBackdropFilter: 'blur(var(--cb-scrim-blur))', zIndex: 10000,
   },
   levModal: {
     position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-    width: 320, background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 16,
+    width: 320, background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 24,
     padding: 20, display: 'flex', flexDirection: 'column', gap: 10,
-    boxShadow: 'var(--terminal-shadow-card)', zIndex: 10001,
-    fontFamily: '"Inter","Segoe UI",sans-serif',
+    boxShadow: 'var(--cb-shadow-dialog)', zIndex: 10001,
+    fontFamily: 'inherit',
   },
   levCloseBtn: {
     width: 28, height: 28, borderRadius: '50%', background: 'var(--terminal-short)', border: '1px solid var(--terminal-surface)',
@@ -13018,7 +12989,7 @@ const S = {
   },
   positionLabel: {
     fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-muted)',
-    textTransform: 'uppercase', letterSpacing: '0.06em',
+    textTransform: 'uppercase', letterSpacing: '0.1em',
   },
   positionValue: {
     fontSize: 18, fontWeight: 600, color: 'var(--terminal-text)',
@@ -13029,7 +13000,7 @@ const S = {
   tradeBtn: { flex: 1, minWidth: 0, padding: '11px 6px', borderRadius: 999, border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', boxShadow: 'none' },
   tradeBtnLong: { background: 'var(--terminal-long)' },
   tradeBtnShort: { background: 'var(--terminal-short)' },
-  tradeBtnText: { color: 'var(--terminal-on-trade, var(--terminal-on-accent))', fontSize: 15, fontWeight: 600, letterSpacing: '0.04em' },
+  tradeBtnText: { color: 'var(--terminal-on-trade, var(--terminal-on-accent))', fontSize: 15, fontWeight: 600, letterSpacing: 0 },
   // Positions
   posCard: {
     background: 'var(--terminal-panel, var(--terminal-surface-subtle))', border: '1px solid var(--terminal-border)', borderRadius: 16,
@@ -13256,7 +13227,7 @@ const S = {
   bottomTabActive: {
     padding: '6px 20px', background: 'var(--terminal-surface)', border: 'none',
     fontSize: 12, fontWeight: 600, color: 'var(--terminal-text)', cursor: 'default',
-    borderBottom: '1px solid var(--terminal-text)',
+    borderBottom: '1px solid var(--cb-tab-underline)',
   },
   dragHandleV: {
     width: 5, cursor: 'col-resize', background: 'var(--terminal-surface-muted)', flexShrink: 0,

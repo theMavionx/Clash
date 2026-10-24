@@ -1683,7 +1683,7 @@ const localStyles = {
   },
   intro: { fontSize: 13, color: 'var(--terminal-text)', margin: '4px 0 8px', lineHeight: 1.4 },
   row: { display: 'flex', flexDirection: 'column', gap: 6 },
-  label: { fontSize: 12, fontWeight: 600, color: 'var(--terminal-text)', letterSpacing: 0.2 },
+  label: { fontSize: 12, fontWeight: 600, color: 'var(--terminal-text)', letterSpacing: 0 },
   chainPicker: { display: 'flex', flexWrap: 'wrap', gap: 6 },
   chainChip: {
     padding: '6px 10px', borderRadius: 999, fontSize: 13, fontWeight: 600,
@@ -1715,7 +1715,7 @@ const localStyles = {
   },
   noticeOk: { background: 'var(--terminal-long-soft)', color: 'var(--terminal-long-strong)', border: '1px solid var(--terminal-long-border)' },
   successBox: {
-    padding: 10, borderRadius: 10, background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)',
+    padding: 10, borderRadius: 12, background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)',
     color: 'var(--terminal-text)', fontSize: 13,
   },
   actions: { display: 'flex', justifyContent: 'space-between', gap: 10, marginTop: 4 },
@@ -1735,7 +1735,7 @@ const localStyles = {
   },
   batchPickerBar: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-    gap: 8, padding: '6px 8px', borderRadius: 10,
+    gap: 8, padding: '6px 8px', borderRadius: 12,
     background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)',
   },
   batchPickerText: { fontSize: 11, fontWeight: 600, color: 'var(--terminal-text)' },
@@ -1748,7 +1748,7 @@ const localStyles = {
     padding: 6, flex: 1, minWidth: 0,
     background: 'var(--terminal-surface)',
     border: '1px solid var(--terminal-border)',
-    borderRadius: 10,
+    borderRadius: 12,
     scrollSnapType: 'x mandatory',
   },
   nftArrowBtn: uiIconButton('secondary', 32, { height: 56 }),
@@ -1767,7 +1767,7 @@ const localStyles = {
     boxShadow: 'none',
   },
   nftImg: {
-    width: 72, height: 72, objectFit: 'cover', borderRadius: 6,
+    width: 72, height: 72, objectFit: 'cover', borderRadius: 8,
     background: 'var(--terminal-surface-subtle)',
   },
   nftMeta: {
@@ -1788,7 +1788,7 @@ const localStyles = {
   // ── Wizard chrome ─────────────────────────────────────────────────
   stepHeader: { display: 'flex', flexDirection: 'column', gap: 2, marginBottom: 4 },
   stepTitle:  { fontSize: 17, fontWeight: 600, color: 'var(--terminal-text)' },
-  stepSubtitle: { fontSize: 11, color: 'var(--terminal-text-muted)', letterSpacing: 0.4, textTransform: 'uppercase' },
+  stepSubtitle: { fontSize: 11, color: 'var(--terminal-text-muted)', letterSpacing: '0.1em', textTransform: 'uppercase' },
 
   stepDots: {
     display: 'flex', justifyContent: 'center', gap: 8, marginTop: 6, marginBottom: 2,
@@ -1805,7 +1805,7 @@ const localStyles = {
   // ── Large NFT card (shown on steps 2 + 3) ────────────────────────
   nftCardLarge: {
     display: 'flex', alignItems: 'center', gap: 12,
-    padding: 10, borderRadius: 14,
+    padding: 10, borderRadius: 16,
     background: 'var(--terminal-surface)',
     border: '1px solid var(--terminal-border)',
     boxShadow: 'none',
@@ -1877,7 +1877,7 @@ const localStyles = {
     display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, margin: '4px 0',
   },
   bridgeArrow: { fontSize: 22, color: 'var(--terminal-long)' },
-  bridgeArrowLabel: { fontSize: 10, color: 'var(--terminal-text-muted)', letterSpacing: 0.4, textTransform: 'uppercase' },
+  bridgeArrowLabel: { fontSize: 10, color: 'var(--terminal-text-muted)', letterSpacing: '0.1em', textTransform: 'uppercase' },
 
   confirmMeta: {
     display: 'flex', flexDirection: 'column', gap: 4,
@@ -1897,17 +1897,15 @@ const localStyles = {
 const modalStyles = {
   overlay: {
     position: 'fixed', inset: 0,
-    background: 'var(--terminal-overlay)',
-    backdropFilter: 'blur(2px)',
-    WebkitBackdropFilter: 'blur(2px)',
+    background: 'var(--terminal-overlay)', backdropFilter: 'blur(var(--cb-scrim-blur))', WebkitBackdropFilter: 'blur(var(--cb-scrim-blur))',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     zIndex: 300, pointerEvents: 'all', padding: 16,
   },
   panel: {
     width: 380, maxWidth: '100%', maxHeight: '88vh',
     background: 'var(--terminal-surface)',
-    border: '1px solid var(--terminal-border)', borderRadius: 16,
-    boxShadow: 'none',
+    border: '1px solid var(--terminal-border)', borderRadius: 24,
+    boxShadow: 'var(--cb-shadow-dialog)',
     display: 'flex', flexDirection: 'column',
     fontFamily: 'inherit', overflow: 'hidden',
   },
@@ -1917,7 +1915,7 @@ const modalStyles = {
     background: 'var(--terminal-border)', borderBottom: '1px solid var(--terminal-border-strong)',
   },
   title: { fontSize: 16, fontWeight: 600, color: 'var(--terminal-text)' },
-  closeBtn: uiIconButton('danger', 30),
+  closeBtn: uiIconButton('soft', 32),
   body: {
     padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 12,
     overflowY: 'auto',
@@ -1972,7 +1970,7 @@ const modalStyles = {
 
   batchList: {
     display: 'flex', flexDirection: 'column', gap: 6,
-    padding: 8, borderRadius: 10,
+    padding: 8, borderRadius: 12,
     background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)',
   },
   batchItem: {
@@ -1997,7 +1995,7 @@ const modalStyles = {
   batchPillError: { background: 'var(--terminal-short-soft)', color: 'var(--terminal-short-strong)' },
 
   resultBox: {
-    padding: '10px 12px', borderRadius: 10,
+    padding: '10px 12px', borderRadius: 12,
     background: 'var(--terminal-long-soft)',
     border: '1px solid var(--terminal-long-border)', color: 'var(--terminal-long-strong)',
     display: 'flex', flexDirection: 'column', gap: 6,
@@ -2019,12 +2017,12 @@ const modalStyles = {
   },
 
   pendingBox: {
-    padding: '8px 10px', borderRadius: 10,
+    padding: '8px 10px', borderRadius: 12,
     background: 'var(--terminal-brand-soft)', border: '1px solid var(--terminal-warning)', color: 'var(--terminal-text)',
   },
 
   errorBox: {
-    padding: '8px 10px', borderRadius: 10,
+    padding: '8px 10px', borderRadius: 12,
     background: 'var(--terminal-short-soft)', border: '1px solid var(--terminal-short)', color: 'var(--terminal-short-strong)',
     fontSize: 12, fontWeight: 600,
   },

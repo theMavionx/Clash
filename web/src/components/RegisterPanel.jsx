@@ -980,7 +980,7 @@ export default memo(RegisterPanel);
 const S = {
   overlay: {
     position: 'fixed', inset: 0,
-    background: 'var(--terminal-overlay)',
+    background: 'var(--terminal-overlay)', backdropFilter: 'blur(var(--cb-scrim-blur))', WebkitBackdropFilter: 'blur(var(--cb-scrim-blur))',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     padding: 16,
     zIndex: 30, pointerEvents: 'all',
@@ -990,8 +990,8 @@ const S = {
     maxHeight: 'calc(100dvh - 32px)',
     background: 'var(--terminal-surface)',
     border: '1px solid var(--terminal-border)',
-    borderRadius: 16,
-    boxShadow: 'var(--terminal-shadow-card)',
+    borderRadius: 24,
+    boxShadow: 'var(--cb-shadow-dialog)',
     display: 'flex', flexDirection: 'column',
     overflow: 'hidden',
     fontFamily: 'inherit',
@@ -1110,7 +1110,7 @@ const S = {
     padding: '10px 12px',
     background: 'var(--terminal-surface-muted)',
     border: '1px solid var(--terminal-border)',
-    borderRadius: 14,
+    borderRadius: 16,
   },
   storedWalletText: {
     minWidth: 0,

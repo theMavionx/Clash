@@ -797,7 +797,7 @@ const s = {
     boxShadow: 'none',
   },
   connectBannerText: { display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 },
-  connectBannerTitle: { fontSize: 13, fontWeight: 600, color: 'var(--terminal-text)', letterSpacing: 0.2 },
+  connectBannerTitle: { fontSize: 13, fontWeight: 600, color: 'var(--terminal-text)', letterSpacing: 0 },
   connectBannerSub: { fontSize: 11, fontWeight: 600, color: 'var(--terminal-text)' },
   connectBannerBtn: uiButton('primary', { flexShrink: 0, minHeight: 38, padding: '8px 14px', whiteSpace: 'nowrap' }),
 
@@ -815,7 +815,7 @@ const s = {
   rarityFilterChipUnrevealed: { background: 'var(--terminal-surface-subtle)', color: 'var(--terminal-text-secondary)', border: '1px solid var(--terminal-border-strong)' },
   rarityFilterChipDisabled: { opacity: 0.55, cursor: 'not-allowed' },
 
-  gridMeta: { fontSize: 12, fontWeight: 600, color: 'var(--terminal-text-secondary)', letterSpacing: 0.2 },
+  gridMeta: { fontSize: 12, fontWeight: 600, color: 'var(--terminal-text-secondary)', letterSpacing: 0 },
   emptyState: {
     display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
     padding: '24px 12px', borderRadius: 12,
@@ -839,7 +839,7 @@ const s = {
   cardImgWrap: {
     position: 'relative',
     width: '100%', aspectRatio: '1 / 1',
-    borderRadius: 10, overflow: 'hidden',
+    borderRadius: 12, overflow: 'hidden',
     background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
   },
@@ -848,7 +848,7 @@ const s = {
     position: 'absolute', top: 4, right: 4,
     padding: '2px 6px', borderRadius: 999,
     background: 'var(--terminal-surface-muted)', color: 'var(--terminal-surface)',
-    fontSize: 10, fontWeight: 600, letterSpacing: 0.2,
+    fontSize: 10, fontWeight: 600, letterSpacing: 0,
   },
   cardMeta: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
@@ -875,7 +875,7 @@ const s = {
   // ── List-new form ─────────────────────────────────────────────────
   form: { display: 'flex', flexDirection: 'column', gap: 12 },
   formRow: { display: 'flex', flexDirection: 'column', gap: 6 },
-  formLabel: { fontSize: 12, fontWeight: 600, color: 'var(--terminal-text)', letterSpacing: 0.2, textTransform: 'none' },
+  formLabel: { fontSize: 12, fontWeight: 600, color: 'var(--terminal-text)', letterSpacing: 0, textTransform: 'none' },
   input: {
     padding: '8px 10px', borderRadius: 12, border: '1px solid var(--terminal-border)',
     background: 'var(--terminal-surface)', color: 'var(--terminal-text)', fontSize: 13, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', outline: 'none',
@@ -906,7 +906,7 @@ const s = {
   nftScroll: {
     display: 'flex', gap: 8, overflowX: 'auto', overflowY: 'hidden',
     padding: 6, flex: 1, minWidth: 0,
-    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 10,
+    background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 12,
     scrollSnapType: 'x mandatory',
   },
   scrollBtn: uiIconButton('secondary', 32, { height: 56, fontSize: 14 }),
@@ -917,7 +917,7 @@ const s = {
     scrollSnapAlign: 'start',
   },
   miniCardActive: { border: '1px solid var(--terminal-text-muted)', background: 'var(--terminal-brand-border)', boxShadow: 'none' },
-  miniImg: { width: 72, height: 72, objectFit: 'cover', borderRadius: 6, background: 'var(--terminal-surface-subtle)' },
+  miniImg: { width: 72, height: 72, objectFit: 'cover', borderRadius: 8, background: 'var(--terminal-surface-subtle)' },
   miniMeta: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
     width: '100%', fontSize: 11, fontWeight: 600, color: 'var(--terminal-text)',
@@ -927,21 +927,21 @@ const s = {
 
   // ── Buy confirm modal ─────────────────────────────────────────────
   modalOverlay: {
-    position: 'fixed', inset: 0, background: 'var(--terminal-overlay)',
+    position: 'fixed', inset: 0, background: 'var(--terminal-overlay)', backdropFilter: 'blur(var(--cb-scrim-blur))', WebkitBackdropFilter: 'blur(var(--cb-scrim-blur))',
     display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50,
     padding: 10, overflowY: 'auto', boxSizing: 'border-box', WebkitOverflowScrolling: 'touch',
   },
   modalPanel: {
-    width: 360, maxWidth: 'calc(100vw - 20px)', maxHeight: 'calc(100dvh - 20px)', borderRadius: 16, overflowY: 'auto',
+    width: 360, maxWidth: 'calc(100vw - 20px)', maxHeight: 'calc(100dvh - 20px)', borderRadius: 24, overflowY: 'auto',
     background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)',
-    boxShadow: 'none', boxSizing: 'border-box', WebkitOverflowScrolling: 'touch',
+    boxShadow: 'var(--cb-shadow-dialog)', boxSizing: 'border-box', WebkitOverflowScrolling: 'touch',
   },
   modalHeader: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
     padding: '10px 14px', background: 'var(--terminal-border)', borderBottom: '1px solid var(--terminal-border-strong)',
   },
   modalTitle: { fontSize: 15, fontWeight: 600, color: 'var(--terminal-text)' },
-  modalCloseBtn: uiIconButton('danger', 28, { lineHeight: 1 }),
+  modalCloseBtn: uiIconButton('soft', 32, { lineHeight: 1 }),
   modalBody: { padding: 14, display: 'flex', flexDirection: 'column', gap: 10 },
   modalImgWrap: {
     position: 'relative',

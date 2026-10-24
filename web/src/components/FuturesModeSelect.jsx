@@ -74,7 +74,7 @@ const S = {
     width: '100%', maxWidth: 720, margin: '0 auto',
   },
   title: {
-    fontSize: 24, fontWeight: 700, color: 'var(--terminal-text)',
+    fontSize: 24, fontWeight: 600, color: 'var(--terminal-text)',
     letterSpacing: '-0.02em', textAlign: 'center',
     fontFamily: 'inherit',
   },
@@ -91,10 +91,10 @@ const S = {
     ...uiButton('secondary'),
     flex: '1 1 240px', maxWidth: 320, minHeight: 240,
     background: 'var(--terminal-surface)',
-    border: '1px solid var(--terminal-border)', borderRadius: 16, padding: 18,
+    border: '1px solid var(--terminal-border)', borderRadius: 24, padding: 18,
     display: 'flex', flexDirection: 'column', alignItems: 'center',
     gap: 10, cursor: 'pointer',
-    boxShadow: '0 8px 24px var(--terminal-shadow-soft)',
+    boxShadow: 'var(--cb-shadow-dialog)',
     transition: 'all 0.15s ease',
     fontFamily: 'inherit',
   },
@@ -108,7 +108,7 @@ const S = {
     opacity: 0.7, cursor: 'wait', transform: 'scale(0.98)',
   },
   cardName: {
-    fontSize: 22, fontWeight: 700, color: 'var(--terminal-text)', letterSpacing: 0,
+    fontSize: 22, fontWeight: 600, color: 'var(--terminal-text)', letterSpacing: 0,
   },
   cardDesc: {
     fontSize: 13, fontWeight: 600, color: 'var(--terminal-text-muted)',

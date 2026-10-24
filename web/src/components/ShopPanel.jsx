@@ -428,7 +428,7 @@ const styles = {
   overlay: {
     position: 'fixed',
     inset: 0,
-    background: 'var(--terminal-overlay)',
+    background: 'var(--terminal-overlay)', backdropFilter: 'blur(var(--cb-scrim-blur))', WebkitBackdropFilter: 'blur(var(--cb-scrim-blur))',
     display: 'flex',
     alignItems: 'flex-end',
     justifyContent: 'center',
@@ -551,7 +551,7 @@ const styles = {
     position: 'absolute', inset: 0, zIndex: 10,
     display: 'flex', flexDirection: 'column',
     alignItems: 'center', justifyContent: 'center',
-    gap: 4, borderRadius: 14,
+    gap: 4, borderRadius: 16,
   },
   lockIcon: { fontSize: 32 },
   lockName: {
@@ -652,7 +652,7 @@ const styles = {
     display: 'flex',
     gap: 4,
   },
-  closeBtn: uiIconButton('danger', 40, {
+  closeBtn: uiIconButton('soft', 40, {
     position: 'absolute',
     zIndex: 40,
   }),

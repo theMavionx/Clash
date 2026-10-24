@@ -538,7 +538,7 @@ const S = {
   backBtn: uiIconButton('secondary', 36, { transition: 'opacity 0.2s ease' }),
   errorBanner: {
     margin: '0 14px 8px', padding: '10px 14px',
-    borderRadius: 10,
+    borderRadius: 12,
     background: 'var(--terminal-brand-soft)',
     border: `1px solid ${colors.aggressive}`,
     color: colors.shortDark,

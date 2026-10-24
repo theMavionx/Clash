@@ -17,7 +17,7 @@ export default function OndoDepositNetworkSelector({
         gridTemplateColumns: `repeat(${rows.length}, minmax(0, 1fr))`,
         gap: 4,
         padding: 4,
-        borderRadius: 10,
+        borderRadius: 12,
         border: '1px solid var(--terminal-border)',
         background: 'var(--terminal-surface-subtle)',
       }}

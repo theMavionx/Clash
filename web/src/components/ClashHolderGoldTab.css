@@ -22,7 +22,7 @@
 .clash-holder__secondary, .clash-holder__refresh { flex: 0 0 auto; min-height: 36px; padding: 0 11px; border: 1px solid var(--terminal-border-strong); border-radius: 999px; background: var(--terminal-surface); color: var(--terminal-text); font-size: 12px; font-weight: 600; cursor: pointer; }
 .clash-holder__secondary:hover:not(:disabled), .clash-holder__refresh:hover:not(:disabled) { background: var(--terminal-hover); }
 .clash-holder__claim { padding: 20px; border: 1px solid var(--terminal-warning-border); border-radius: 16px; background: var(--terminal-surface); text-align: center; }
-.clash-holder__claim strong { display: block; margin: 4px 0; color: var(--terminal-text); font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.clash-holder__claim strong { display: block; margin: 4px 0; color: var(--terminal-text); font-size: 28px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.1; }
 .clash-holder__claim strong small { font-size: 14px; }
 .clash-holder__claim p { min-height: 16px; margin: 6px 0 15px; color: var(--terminal-text-secondary); font-size: 11px; line-height: 1.4; }
 .clash-holder__claim button:hover:not(:disabled) { background: var(--terminal-brand-strong); }

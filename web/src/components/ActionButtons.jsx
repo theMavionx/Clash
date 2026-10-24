@@ -814,7 +814,7 @@ function AttackHUD({
                 {previewTroops.map((troop, index) => {
                   const info = TROOP_IMG_MAP[normalizeTroopKey(troop)] || {};
                   return (
-                    <span key={`${troop}-${index}`} style={{ width: mobile ? 11 : 13, height: mobile ? 11 : 13, borderRadius: 3, overflow: 'hidden', border: '1px solid var(--terminal-border)', background: 'var(--terminal-surface-muted)' }}>
+                    <span key={`${troop}-${index}`} style={{ width: mobile ? 11 : 13, height: mobile ? 11 : 13, borderRadius: 4, overflow: 'hidden', border: '1px solid var(--terminal-border)', background: 'var(--terminal-surface-muted)' }}>
                       <TroopPortrait info={info} style={{ width: '100%', height: '100%', objectFit: 'cover' }} fallbackStyle={{ fontSize: 6, border: 'none', borderRadius: 0 }} />
                     </span>
                   );
@@ -862,7 +862,7 @@ function AttackHUD({
                       const info = TROOP_IMG_MAP[key] || {};
                       return (
                         <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 3, background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 999, padding: '2px 8px 2px 3px' }}>
-                          <div style={{ width: 22, height: 22, borderRadius: 3, overflow: 'hidden' }}>
+                          <div style={{ width: 22, height: 22, borderRadius: 4, overflow: 'hidden' }}>
                             <TroopPortrait info={info} style={{ width: '100%', height: '100%', objectFit: 'cover' }} fallbackStyle={{ fontSize: 7, border: 'none' }} />
                           </div>
                           <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--terminal-text)' }}>{info.label || key} x{count}</span>
@@ -1606,14 +1606,14 @@ function ReinforceModal({ casualties, cost: serverCost, onConfirm, onClose }) {
 
 const rf = {
   overlay: {
-    position: 'fixed', inset: 0, background: 'var(--terminal-overlay)',
+    position: 'fixed', inset: 0, background: 'var(--terminal-overlay)', backdropFilter: 'blur(var(--cb-scrim-blur))', WebkitBackdropFilter: 'blur(var(--cb-scrim-blur))',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     zIndex: 200, pointerEvents: 'all',
   },
   panel: {
     width: 400, maxWidth: '95vw', background: 'var(--terminal-surface)',
-    border: '1px solid var(--terminal-border)', borderRadius: 16,
-    boxShadow: 'var(--terminal-shadow-card)',
+    border: '1px solid var(--terminal-border)', borderRadius: 24,
+    boxShadow: 'var(--cb-shadow-dialog)',
     overflow: 'hidden', fontFamily: 'inherit',
   },
   header: {
@@ -1621,12 +1621,12 @@ const rf = {
     padding: '12px 12px 12px 20px', background: 'transparent', borderBottom: '1px solid var(--terminal-border)',
   },
   title: { fontSize: 18, fontWeight: 600, color: 'var(--terminal-text)' },
-  closeBtn: uiIconButton('ghost', 40),
+  closeBtn: uiIconButton('soft', 40),
   body: { padding: 20, display: 'flex', flexDirection: 'column', gap: 16, alignItems: 'center' },
   grid: { display: 'flex', flexWrap: 'wrap', gap: 14, justifyContent: 'center' },
   card: { width: 90, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 },
   imgWrap: {
-    width: 80, height: 80, borderRadius: 14, background: 'var(--terminal-surface-muted)',
+    width: 80, height: 80, borderRadius: 16, background: 'var(--terminal-surface-muted)',
     border: '1px solid var(--terminal-border)', position: 'relative', overflow: 'hidden',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
   },
@@ -1683,7 +1683,7 @@ const hud = {
     background: 'rgba(17,20,27,0.95)',
     border: '1px solid var(--terminal-border)',
     borderRadius: 999,
-    fontSize: 20, fontWeight: 700,
+    fontSize: 20, fontWeight: 600,
     color: 'var(--terminal-text)',
     boxShadow: 'var(--terminal-shadow-card)',
     fontVariantNumeric: 'tabular-nums',
@@ -1759,7 +1759,7 @@ const hud = {
     color: 'var(--terminal-text-faint)',
     fontSize: 10,
     fontWeight: 600,
-    letterSpacing: '0.06em',
+    letterSpacing: '0.1em',
     lineHeight: 1.1,
     marginBottom: 4,
     textTransform: 'uppercase',
@@ -1767,7 +1767,7 @@ const hud = {
   replayCountdownTime: {
     color: 'var(--terminal-text)',
     fontSize: 30,
-    fontWeight: 700,
+    fontWeight: 600,
     lineHeight: 1,
     fontVariantNumeric: 'tabular-nums',
   },
@@ -1821,7 +1821,7 @@ const hud = {
     borderWidth: 1,
     borderStyle: 'solid',
     borderColor: 'var(--terminal-border)',
-    borderRadius: 14,
+    borderRadius: 16,
     display: 'flex', flexDirection: 'column',
     alignItems: 'center', justifyContent: 'flex-start',
     padding: '4px 3px 2px',
@@ -1832,7 +1832,7 @@ const hud = {
   },
   cardImgWrap: {
     width: 64, height: 62,
-    borderRadius: 9,
+    borderRadius: 8,
     flexShrink: 0,
     overflow: 'hidden',
   },
@@ -1851,16 +1851,16 @@ const hud = {
     color: 'var(--terminal-orange)', fontSize: 9, lineHeight: 1,
   },
   shipModal: {
-    position: 'fixed', inset: 0, background: 'var(--terminal-overlay)',
+    position: 'fixed', inset: 0, background: 'var(--terminal-overlay)', backdropFilter: 'blur(var(--cb-scrim-blur))', WebkitBackdropFilter: 'blur(var(--cb-scrim-blur))',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     zIndex: 200, pointerEvents: 'all',
   },
   shipModalPanel: {
     background: 'var(--terminal-surface)',
-    border: '1px solid var(--terminal-border)', borderRadius: 16,
+    border: '1px solid var(--terminal-border)', borderRadius: 24,
     padding: '16px 20px', maxWidth: 320, width: 'calc(100% - 32px)',
     display: 'flex', flexDirection: 'column', alignItems: 'center',
-    boxShadow: 'var(--terminal-shadow-card)',
+    boxShadow: 'var(--cb-shadow-dialog)',
     color: 'var(--terminal-text)',
   },
   cardLabel: {
@@ -1875,7 +1875,7 @@ const hud = {
     borderWidth: 1,
     borderStyle: 'solid',
     borderColor: 'var(--terminal-border)',
-    borderRadius: 18,
+    borderRadius: 20,
     display: 'flex', flexDirection: 'column',
     alignItems: 'center', justifyContent: 'center', gap: 4,
     cursor: 'pointer', flexShrink: 0,
@@ -2065,7 +2065,7 @@ const hud = {
     height: 18,
   },
   energyValue: {
-    fontSize: 22, fontWeight: 700, color: 'var(--terminal-text)',
+    fontSize: 22, fontWeight: 600, color: 'var(--terminal-text)',
     fontVariantNumeric: 'tabular-nums',
   },
   energyValueMobile: {
@@ -2116,7 +2116,7 @@ const styles = {
     minWidth: 50,
     height: 26,
     padding: '0 8px 0 5px',
-    borderRadius: 13,
+    borderRadius: 12,
     background: 'rgba(17,20,27,0.95)',
     border: '1px solid var(--terminal-border-strong)',
     boxShadow: 'var(--terminal-shadow-card)',

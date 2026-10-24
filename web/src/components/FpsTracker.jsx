@@ -57,7 +57,7 @@ const styles = {
   },
   fpsNumber: {
     fontSize: 16,
-    fontWeight: 'bold',
+    fontWeight: 600,
     lineHeight: 1,
     opacity: 0.8,
   },

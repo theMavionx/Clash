@@ -10,7 +10,7 @@ import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { useOptionalPrivy } from './PrivyAuthProvider';
-import { uiButton, uiIconButton } from '../styles/theme';
+import { uiButton, uiIconButton, rangeProgress } from '../styles/theme';
 import EvmWalletModal from './EvmWalletModal';
 import { BASE_CHAIN_ID, TRADING_ADDRESS, ensureBaseChain } from '../lib/avantisContract';
 import { ARBITRUM_CHAIN_ID, ensureArbitrumChain } from '../lib/gmxConfig';
@@ -3054,10 +3054,10 @@ function AiJobsModal({
                 ))}
               </div>
               <label style={styles.jobLabel}>Interval: {form.interval_minutes}m
-                <input type="range" min="0" max={HERMES_JOB_INTERVALS.length - 1} step="1" value={Math.max(0, HERMES_JOB_INTERVALS.indexOf(Number(form.interval_minutes)))} onChange={(e) => setForm({ interval_minutes: HERMES_JOB_INTERVALS[Number(e.target.value)] || 60 })} />
+                <input type="range" min="0" max={HERMES_JOB_INTERVALS.length - 1} step="1" value={Math.max(0, HERMES_JOB_INTERVALS.indexOf(Number(form.interval_minutes)))} style={rangeProgress(Math.max(0, HERMES_JOB_INTERVALS.indexOf(Number(form.interval_minutes))), 0, HERMES_JOB_INTERVALS.length - 1)} onChange={(e) => setForm({ interval_minutes: HERMES_JOB_INTERVALS[Number(e.target.value)] || 60 })} />
               </label>
               <label style={styles.jobLabel}>Max runs/day: {form.max_runs_per_day}
-                <input type="range" min="1" max="24" value={form.max_runs_per_day} onChange={(e) => setForm({ max_runs_per_day: Number(e.target.value) })} />
+                <input type="range" min="1" max="24" value={form.max_runs_per_day} style={rangeProgress(form.max_runs_per_day, 1, 24)} onChange={(e) => setForm({ max_runs_per_day: Number(e.target.value) })} />
               </label>
               <div style={styles.jobFieldRow}>
                 <label style={styles.jobLabel}>Timeframe
@@ -3070,13 +3070,13 @@ function AiJobsModal({
                 </label>
               </div>
               <label style={styles.jobLabel}>Max collateral: ${form.policy.max_collateral_usd}
-                <input type="range" min="1" max="100" value={form.policy.max_collateral_usd} onChange={(e) => setPolicy('max_collateral_usd', Number(e.target.value))} />
+                <input type="range" min="1" max="100" value={form.policy.max_collateral_usd} style={rangeProgress(form.policy.max_collateral_usd, 1, 100)} onChange={(e) => setPolicy('max_collateral_usd', Number(e.target.value))} />
               </label>
               <label style={styles.jobLabel}>Max leverage: {form.policy.max_leverage}x
-                <input type="range" min="1" max="50" value={form.policy.max_leverage} onChange={(e) => setPolicy('max_leverage', Number(e.target.value))} />
+                <input type="range" min="1" max="50" value={form.policy.max_leverage} style={rangeProgress(form.policy.max_leverage, 1, 50)} onChange={(e) => setPolicy('max_leverage', Number(e.target.value))} />
               </label>
               <label style={styles.jobLabel}>Max trades/day: {form.policy.max_trades_per_day}
-                <input type="range" min="0" max="6" value={form.policy.max_trades_per_day} onChange={(e) => setPolicy('max_trades_per_day', Number(e.target.value))} />
+                <input type="range" min="0" max="6" value={form.policy.max_trades_per_day} style={rangeProgress(form.policy.max_trades_per_day, 0, 6)} onChange={(e) => setPolicy('max_trades_per_day', Number(e.target.value))} />
               </label>
               <div style={styles.jobActions}>
                 <button type="button" style={styles.jobSmallButton} disabled={!isDecibel || !!busy} onClick={onSaveDraft}>Save draft</button>
@@ -3304,7 +3304,7 @@ function AvantisAgentPolicyControls({
             value={normalized.max_leverage}
             disabled={disabled}
             onChange={(e) => update({ max_leverage: e.target.value })}
-            style={topUpStyles.range}
+            style={{ ...topUpStyles.range, ...rangeProgress(normalized.max_leverage, 1, maxPolicyLeverage) }}
           />
           <input
             type="number"
@@ -3357,7 +3357,7 @@ function AvantisAgentPolicyControls({
               value={normalized.max_balance_pct}
               disabled={disabled}
               onChange={(e) => update({ max_balance_pct: e.target.value })}
-              style={topUpStyles.range}
+              style={{ ...topUpStyles.range, ...rangeProgress(normalized.max_balance_pct, 1, 100) }}
             />
             <input
               type="number"
@@ -3381,7 +3381,7 @@ function AvantisAgentPolicyControls({
               value={normalized.max_collateral_usd}
               disabled={disabled}
               onChange={(e) => update({ max_collateral_usd: e.target.value })}
-              style={topUpStyles.range}
+              style={{ ...topUpStyles.range, ...rangeProgress(normalized.max_collateral_usd, 1, maxPolicyCollateral) }}
             />
             <input
               type="number"
@@ -3767,7 +3767,7 @@ const styles = {
     inset: 0,
     zIndex: 80,
     pointerEvents: 'auto',
-    background: 'var(--terminal-overlay)',
+    background: 'var(--terminal-overlay)', backdropFilter: 'blur(var(--cb-scrim-blur))', WebkitBackdropFilter: 'blur(var(--cb-scrim-blur))',
     display: 'flex',
     // Bottom-center on desktop — sits above the action button row but
     // not stuck to either edge of the viewport. Mobile sheet inherits
@@ -3787,8 +3787,8 @@ const styles = {
     height: 'min(640px, calc(100vh - 32px))',
     background: 'var(--terminal-surface)',
     border: '1px solid var(--terminal-border)',
-    borderRadius: 16,
-    boxShadow: 'none',
+    borderRadius: 24,
+    boxShadow: 'var(--cb-shadow-dialog)',
     color: 'var(--terminal-text)',
     display: 'flex',
     flexDirection: 'column',
@@ -3804,7 +3804,7 @@ const styles = {
     alignItems: 'flex-end',
     justifyContent: 'center',
     padding: 0,
-    background: 'var(--terminal-overlay)',
+    background: 'var(--terminal-overlay)', backdropFilter: 'blur(var(--cb-scrim-blur))', WebkitBackdropFilter: 'blur(var(--cb-scrim-blur))',
   },
   panelMobile: {
     width: '100%',
@@ -3837,7 +3837,7 @@ const styles = {
   },
   dragHandle: {
     width: 40, height: 4,
-    borderRadius: 3,
+    borderRadius: 4,
     background: 'var(--terminal-border-strong)',
     boxShadow: 'none',
   },
@@ -3897,7 +3897,7 @@ const styles = {
     color: 'var(--terminal-long)',
     fontSize: 9,
     fontWeight: 600,
-    letterSpacing: 0.4,
+    letterSpacing: 0,
     textTransform: 'none',
     lineHeight: 1,
   },
@@ -3929,13 +3929,13 @@ const styles = {
   },
   title: {
     fontSize: 15, fontWeight: 600, color: 'var(--terminal-text)',
-    letterSpacing: 0.2,
+    letterSpacing: 0,
     lineHeight: 1.1,
     textShadow: 'none',
   },
   sub: {
     fontSize: 11, fontWeight: 600, color: 'var(--terminal-long)',
-    textTransform: 'none', letterSpacing: 0.4, marginTop: 2,
+    textTransform: 'none', letterSpacing: 0, marginTop: 2,
     display: 'inline-flex', alignItems: 'center', gap: 5,
   },
   onlineDot: {
@@ -3982,7 +3982,7 @@ const styles = {
     fontWeight: 600,
     color: 'var(--terminal-text)',
     textTransform: 'none',
-    letterSpacing: 0.35,
+    letterSpacing: 0,
   },
   quotaSummaryTotal: {
     fontSize: 11,
@@ -3998,7 +3998,7 @@ const styles = {
   quotaStat: {
     minWidth: 0,
     padding: '6px 7px',
-    borderRadius: 9,
+    borderRadius: 8,
     border: '1px solid var(--terminal-border)',
     background: 'var(--terminal-surface-muted)',
   },
@@ -4033,7 +4033,7 @@ const styles = {
   },
   shopToggle: {
     ...uiButton('secondary', { minHeight: 34, padding: '6px 11px 6px 9px', fontSize: 11 }),
-    letterSpacing: 0.3,
+    letterSpacing: 0,
     textTransform: 'none',
   },
 
@@ -4042,7 +4042,7 @@ const styles = {
   // backdrop sits at zIndex 80 so this layer sits above it.
   newChatToggle: {
     ...uiButton('secondary', { minHeight: 34, padding: '6px 10px 6px 8px', fontSize: 11 }),
-    letterSpacing: 0.25,
+    letterSpacing: 0,
     textTransform: 'none',
     whiteSpace: 'nowrap',
   },
@@ -4057,9 +4057,7 @@ const styles = {
   shopBackdrop: {
     position: 'fixed', inset: 0,
     zIndex: 90,
-    background: 'var(--terminal-overlay)',
-    backdropFilter: 'blur(2px)',
-    WebkitBackdropFilter: 'blur(2px)',
+    background: 'var(--terminal-overlay)', backdropFilter: 'blur(var(--cb-scrim-blur))', WebkitBackdropFilter: 'blur(var(--cb-scrim-blur))',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -4097,7 +4095,7 @@ const styles = {
   },
   shopHeaderTitle: {
     fontSize: 15, fontWeight: 600, color: 'var(--terminal-text)',
-    lineHeight: 1.1, letterSpacing: 0.2,
+    lineHeight: 1.1, letterSpacing: 0,
   },
   shopHeaderSub: {
     fontSize: 11, fontWeight: 600, color: 'var(--terminal-text-secondary)',
@@ -4147,7 +4145,7 @@ const styles = {
     justifyContent: 'space-between',
     gap: 10,
     padding: '8px 10px',
-    borderRadius: 10,
+    borderRadius: 12,
     background: 'var(--terminal-surface)',
     border: '1px solid var(--terminal-border)',
   },
@@ -4313,7 +4311,7 @@ const styles = {
     color: 'var(--terminal-text)',
     background: 'var(--terminal-brand-soft)',
     border: '1px solid var(--terminal-warning-border)',
-    borderRadius: 9,
+    borderRadius: 8,
     padding: '7px 9px',
     fontSize: 12,
     fontWeight: 600,
@@ -4334,11 +4332,11 @@ const styles = {
     fontWeight: 600,
     color: 'var(--terminal-text-secondary)',
     textTransform: 'none',
-    letterSpacing: 0.35,
+    letterSpacing: 0,
   },
   jobsEmpty: {
     border: '1px dashed var(--terminal-border)',
-    borderRadius: 10,
+    borderRadius: 12,
     padding: 12,
     color: 'var(--terminal-text-secondary)',
     fontSize: 12,
@@ -4445,7 +4443,7 @@ const styles = {
     fontWeight: 600,
     color: 'var(--terminal-text-secondary)',
     textTransform: 'none',
-    letterSpacing: 0.25,
+    letterSpacing: 0,
   },
   jobInput: {
     width: '100%',
@@ -4524,7 +4522,7 @@ const styles = {
     background: 'var(--terminal-brand-soft)',
     border: '1px solid var(--terminal-brand-border)',
     borderRadius: 999,
-    letterSpacing: 0.6,
+    letterSpacing: 0,
     textShadow: 'none',
   },
 
@@ -4584,13 +4582,13 @@ const styles = {
   },
   aiProductBonus: {
     padding: '2px 6px',
-    borderRadius: 6,
+    borderRadius: 8,
     background: 'var(--terminal-long-soft)',
     color: 'var(--terminal-long)',
     border: '1px solid var(--terminal-long-border)',
     fontSize: 9.5,
     fontWeight: 600,
-    letterSpacing: 0.3,
+    letterSpacing: 0,
   },
 
   // Column that stacks the optional CLASH-bonus chip on top of the Buy
@@ -4650,7 +4648,7 @@ const styles = {
   },
   role: {
     fontSize: 10, color: 'var(--terminal-text-secondary)', fontWeight: 600,
-    textTransform: 'none', letterSpacing: 0.5, marginBottom: 3,
+    textTransform: 'none', letterSpacing: 0, marginBottom: 3,
   },
   text: { fontSize: 13, fontWeight: 600, whiteSpace: 'pre-wrap' },
   meta: { fontSize: 10, color: 'var(--terminal-text-muted)', marginTop: 6, fontStyle: 'italic' },
@@ -4685,7 +4683,7 @@ const styles = {
     alignItems: 'stretch',
     background: 'var(--terminal-surface)',
     border: '1px solid var(--terminal-border)',
-    borderRadius: 14,
+    borderRadius: 16,
     padding: '0 4px 0 12px',
     boxShadow: 'none',
     transition: 'border-color 0.18s ease, box-shadow 0.18s ease',
@@ -4771,7 +4769,7 @@ const styles = {
     fontSize: 15,
     fontWeight: 600,
     color: 'var(--terminal-text)',
-    letterSpacing: 0.3,
+    letterSpacing: 0,
     margin: '4px 0 4px',
   },
   welcomeSub: {
@@ -4806,7 +4804,7 @@ const styles = {
     fontSize: 10,
     fontWeight: 600,
     color: 'var(--terminal-brand-strong)',
-    letterSpacing: 0.6,
+    letterSpacing: 0,
     textTransform: 'none',
   },
   starterChipText: {
@@ -4873,24 +4871,22 @@ const styles = {
 const topUpStyles = {
   overlay: {
     position: 'fixed', inset: 0,
-    background: 'var(--terminal-overlay)',
-    backdropFilter: 'blur(2px)',
-    WebkitBackdropFilter: 'blur(2px)',
+    background: 'var(--terminal-overlay)', backdropFilter: 'blur(var(--cb-scrim-blur))', WebkitBackdropFilter: 'blur(var(--cb-scrim-blur))',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     zIndex: 320, pointerEvents: 'all', padding: 16,
   },
   panel: {
     width: 380, maxWidth: '100%', maxHeight: '88vh',
     background: 'var(--terminal-surface)',
-    border: '1px solid var(--terminal-border)', borderRadius: 16,
-    boxShadow: 'none',
+    border: '1px solid var(--terminal-border)', borderRadius: 24,
+    boxShadow: 'var(--cb-shadow-dialog)',
     display: 'flex', flexDirection: 'column',
     fontFamily: 'inherit', overflow: 'hidden',
   },
   panelWide: {
     width: 460, maxWidth: '100%', maxHeight: '88vh',
     background: 'var(--terminal-surface)',
-    border: '1px solid var(--terminal-border)', borderRadius: 18,
+    border: '1px solid var(--terminal-border)', borderRadius: 20,
     boxShadow: 'none',
     display: 'flex', flexDirection: 'column',
     fontFamily: 'inherit', overflow: 'hidden',
@@ -4901,7 +4897,7 @@ const topUpStyles = {
     background: 'var(--terminal-border)', borderBottom: '1px solid var(--terminal-border-strong)',
   },
   title: { fontSize: 16, fontWeight: 600, color: 'var(--terminal-text)' },
-  closeBtn: uiIconButton('danger', 30),
+  closeBtn: uiIconButton('soft', 32),
   body: {
     padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 12,
     overflowY: 'auto',
@@ -4979,7 +4975,7 @@ const topUpStyles = {
   },
 
   pendingBox: {
-    padding: '9px 10px', borderRadius: 10,
+    padding: '9px 10px', borderRadius: 12,
     background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)',
     color: 'var(--terminal-text-secondary)', fontSize: 12, fontWeight: 600, lineHeight: 1.35,
   },
@@ -5029,7 +5025,7 @@ const topUpStyles = {
     fontSize: 10,
     fontWeight: 600,
     color: 'var(--terminal-brand-strong)',
-    letterSpacing: 0.5,
+    letterSpacing: 0,
     textTransform: 'none',
   },
   fieldRow: {
@@ -5081,7 +5077,7 @@ const topUpStyles = {
   },
   policySummary: {
     padding: '7px 9px',
-    borderRadius: 9,
+    borderRadius: 8,
     background: 'var(--terminal-surface-muted)',
     border: '1px solid var(--terminal-border)',
     color: 'var(--terminal-text-muted)',
@@ -5091,7 +5087,7 @@ const topUpStyles = {
   },
 
   errorBox: {
-    padding: '8px 10px', borderRadius: 10,
+    padding: '8px 10px', borderRadius: 12,
     background: 'var(--terminal-short-soft)', border: '1px solid var(--terminal-short)', color: 'var(--terminal-short-strong)',
     fontSize: 12, fontWeight: 600,
   },
@@ -5106,7 +5102,7 @@ const topUpStyles = {
   },
   infoLabel: {
     fontSize: 10, fontWeight: 600, color: 'var(--terminal-brand-strong)',
-    letterSpacing: 0.5, textTransform: 'none',
+    letterSpacing: 0, textTransform: 'none',
   },
   infoValue: {
     fontSize: 12, fontWeight: 600, color: 'var(--terminal-text)',

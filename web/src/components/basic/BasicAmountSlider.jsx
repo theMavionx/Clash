@@ -277,7 +277,7 @@ const S = {
   tightTitle: {
     fontSize: 'clamp(16px, 3vh, 20px)',
     fontWeight: 600, color: colors.ink,
-    textAlign: 'center', letterSpacing: '0.3px',
+    textAlign: 'center', letterSpacing: 0,
     margin: '2px 0 4px', lineHeight: 1.1,
   },
   bigUsd: {

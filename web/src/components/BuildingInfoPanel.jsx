@@ -3099,7 +3099,7 @@ const styles = {
   },
   actionName: {
     fontSize: 18,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-on-accent)',
     textShadow: 'none',
     whiteSpace: 'nowrap',
@@ -3231,7 +3231,7 @@ const styles = {
     fontWeight: 600,
     color: 'var(--terminal-text-faint)',
     textTransform: 'uppercase',
-    letterSpacing: '0.06em',
+    letterSpacing: '0.1em',
     marginBottom: 4,
   },
   statBoxValues: {
@@ -3251,7 +3251,7 @@ const styles = {
   },
   statUpgraded: {
     fontSize: 24,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-long)',
   },
   altarTabs: {
@@ -3266,7 +3266,7 @@ const styles = {
     background: 'var(--terminal-surface-muted)',
     color: 'var(--terminal-text-secondary)',
     padding: '9px 10px',
-    fontWeight: 700,
+    fontWeight: 600,
     cursor: 'pointer',
     display: 'flex',
     flexDirection: 'column',
@@ -3356,7 +3356,7 @@ const styles = {
   altarTreeBranchSub: {
     color: 'var(--terminal-text-secondary)',
     fontSize: 14,
-    fontWeight: 700,
+    fontWeight: 600,
     textAlign: 'center',
     marginTop: 4,
   },
@@ -3415,7 +3415,7 @@ const styles = {
   altarTreeNode: {
     width: 88,
     height: 88,
-    borderRadius: 18,
+    borderRadius: 20,
     borderWidth: 1,
     borderStyle: 'solid',
     borderColor: 'var(--terminal-border)',
@@ -3447,7 +3447,7 @@ const styles = {
   },
   altarTreeNodeLevel: {
     fontSize: 22,
-    fontWeight: 700,
+    fontWeight: 600,
     textShadow: 'none',
   },
   altarTreeNodeLevelMobile: {
@@ -3455,7 +3455,7 @@ const styles = {
   },
   altarTreeNodeValue: {
     fontSize: 16,
-    fontWeight: 700,
+    fontWeight: 600,
     opacity: 0.95,
   },
   altarTreeNodeValueMobile: {
@@ -3477,7 +3477,7 @@ const styles = {
   altarTreeNodeName: {
     color: 'var(--terminal-text)',
     fontSize: 17,
-    fontWeight: 700,
+    fontWeight: 600,
     textShadow: 'none',
   },
   altarTreeNodeNameMobile: {
@@ -3486,7 +3486,7 @@ const styles = {
   altarTreeNodeBonus: {
     color: 'var(--terminal-text-secondary)',
     fontSize: 13,
-    fontWeight: 700,
+    fontWeight: 600,
     marginTop: 2,
   },
   altarTreeNodeBonusMobile: {
@@ -3510,7 +3510,7 @@ const styles = {
     background: 'var(--terminal-surface-muted)',
     border: '1px solid var(--terminal-border)',
     color: 'var(--terminal-text)',
-    fontWeight: 700,
+    fontWeight: 600,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -3521,7 +3521,7 @@ const styles = {
     minWidth: 0,
     height: 23,
     padding: '0 5px',
-    borderRadius: 6,
+    borderRadius: 8,
     gap: 3,
     fontSize: 10,
   },
@@ -3550,7 +3550,7 @@ const styles = {
   altarTreeSideTitle: {
     color: 'var(--terminal-text)',
     fontSize: 21,
-    fontWeight: 700,
+    fontWeight: 600,
     marginBottom: 5,
   },
   altarTreeSideTitleMobile: {
@@ -3560,7 +3560,7 @@ const styles = {
   altarTreeSideText: {
     color: 'var(--terminal-text-secondary)',
     fontSize: 14,
-    fontWeight: 700,
+    fontWeight: 600,
     lineHeight: 1.35,
     marginBottom: 12,
   },
@@ -3574,7 +3574,7 @@ const styles = {
     textAlign: 'center',
     color: 'var(--terminal-text)',
     fontSize: 22,
-    fontWeight: 700,
+    fontWeight: 600,
     background: 'var(--terminal-long-soft)',
     border: '1px solid var(--terminal-long-border)',
   },
@@ -3589,7 +3589,7 @@ const styles = {
   altarBranchTitle: {
     color: 'var(--terminal-text)',
     fontSize: 17,
-    fontWeight: 700,
+    fontWeight: 600,
     marginBottom: 4,
   },
   altarHeaderRow: {
@@ -3607,7 +3607,7 @@ const styles = {
   altarResourceHint: {
     color: 'var(--terminal-text-muted)',
     fontSize: 12,
-    fontWeight: 700,
+    fontWeight: 600,
     textAlign: 'right',
     lineHeight: 1.4,
   },
@@ -3618,7 +3618,7 @@ const styles = {
   },
   altarLevelCard: {
     minHeight: 196,
-    borderRadius: 18,
+    borderRadius: 20,
     padding: 10,
     background: 'var(--terminal-surface-muted)',
     border: '1px solid var(--terminal-border)',
@@ -3631,13 +3631,13 @@ const styles = {
   altarLevelTitle: {
     color: 'var(--terminal-text)',
     fontSize: 16,
-    fontWeight: 700,
+    fontWeight: 600,
     marginBottom: 10,
   },
   altarBonus: {
     color: 'var(--terminal-text-secondary)',
     fontSize: 13,
-    fontWeight: 700,
+    fontWeight: 600,
     lineHeight: 1.3,
     minHeight: 34,
   },
@@ -3668,7 +3668,7 @@ const styles = {
   altarReqBoxMobile: {
     width: 68,
     height: 52,
-    borderRadius: 10,
+    borderRadius: 12,
   },
   altarReqIcon: {
     width: 34,
@@ -3683,7 +3683,7 @@ const styles = {
   altarReqAmt: {
     color: 'var(--terminal-text)',
     fontSize: 18,
-    fontWeight: 700,
+    fontWeight: 600,
   },
   altarReqAmtMobile: {
     fontSize: 13,
@@ -3691,7 +3691,7 @@ const styles = {
   altarError: {
     marginTop: 12,
     color: 'var(--terminal-short-strong)',
-    fontWeight: 700,
+    fontWeight: 600,
     textAlign: 'center',
   },
 
@@ -3764,7 +3764,7 @@ const styles = {
   },
   badgeLvlNumber: {
     fontSize: 32,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-on-accent)',
   },
 
@@ -3811,7 +3811,7 @@ const styles = {
   },
   reqAmt: {
     fontSize: 16,
-    fontWeight: 700,
+    fontWeight: 600,
     color: 'var(--terminal-text)',
   },
   trophyUpgradeNotice: {
@@ -3821,7 +3821,7 @@ const styles = {
     width: '100%',
     padding: '10px 12px',
     boxSizing: 'border-box',
-    borderRadius: 10,
+    borderRadius: 12,
     border: '1px solid var(--terminal-brand-border)',
     background: 'var(--terminal-brand-soft)',
   },
@@ -3888,7 +3888,7 @@ const styles = {
   flagLibraryImageWrap: {
     width: 84,
     height: 84,
-    borderRadius: 9,
+    borderRadius: 8,
     overflow: 'hidden',
     background: 'var(--bim-surface-muted)',
     border: '1px solid var(--bim-line)',
@@ -3911,7 +3911,7 @@ const styles = {
   flagDefaultThumb: {
     width: 84,
     height: 84,
-    borderRadius: 9,
+    borderRadius: 8,
     background: 'var(--terminal-neutral-button)',
     border: '1px solid var(--bim-line)',
     display: 'flex',
@@ -3960,7 +3960,7 @@ const styles = {
   },
   flagPreviewEmpty: {
     color: 'var(--bim-text-muted)',
-    fontWeight: 700,
+    fontWeight: 600,
     fontSize: 22,
   },
   flagCopy: {
@@ -3972,11 +3972,11 @@ const styles = {
   },
   flagFileLabel: {
     minHeight: 46,
-    borderRadius: 10,
+    borderRadius: 12,
     border: '1px dashed var(--bim-line-strong)',
     background: 'var(--bim-surface-subtle)',
     color: 'var(--bim-text-secondary)',
-    fontWeight: 700,
+    fontWeight: 600,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -3992,7 +3992,7 @@ const styles = {
     borderRadius: 8,
     padding: '10px 12px',
     fontSize: 13,
-    fontWeight: 700,
+    fontWeight: 600,
     textAlign: 'center',
   },
   flagStatusOk: {
@@ -4018,7 +4018,7 @@ const styles = {
 const LT = {
   overlay: {
     position: 'fixed', inset: 0,
-    background: 'var(--terminal-overlay)',
+    background: 'var(--terminal-overlay)', backdropFilter: 'blur(var(--cb-scrim-blur))', WebkitBackdropFilter: 'blur(var(--cb-scrim-blur))',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     zIndex: 30, pointerEvents: 'all',
   },
@@ -4026,8 +4026,8 @@ const LT = {
     width: 680, maxWidth: '98vw', maxHeight: '90vh',
     background: 'var(--terminal-surface)',
     border: '1px solid var(--terminal-border)',
-    borderRadius: 16,
-    boxShadow: '0 20px 60px var(--terminal-shadow)',
+    borderRadius: 24,
+    boxShadow: 'var(--cb-shadow-dialog)',
     display: 'flex', flexDirection: 'column',
     overflow: 'hidden', position: 'relative', fontFamily: 'inherit',
   },
@@ -4040,7 +4040,7 @@ const LT = {
     fontSize: 18, fontWeight: 600, color: 'var(--terminal-text)',
     textShadow: 'none',
   },
-  closeBtn: uiIconButton('ghost', 40, {
+  closeBtn: uiIconButton('soft', 40, {
     position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)',
     fontSize: 20, fontWeight: 600
   }),
@@ -4072,7 +4072,7 @@ const LT = {
     background: 'var(--terminal-neutral-button)',
     border: '1px solid var(--terminal-border-strong)',
     color: 'var(--terminal-on-accent)',
-    fontWeight: 700,
+    fontWeight: 600,
     lineHeight: 1,
     textAlign: 'center',
     boxShadow: 'none',
@@ -4083,18 +4083,18 @@ const LT = {
     left: 5,
     bottom: 5,
     padding: '3px 5px',
-    borderRadius: 5,
+    borderRadius: 8,
     background: 'var(--terminal-neutral-button)',
     color: 'var(--terminal-on-accent)',
     border: '1px solid var(--terminal-border-strong)',
-    fontWeight: 700,
+    fontWeight: 600,
     lineHeight: 1,
     textShadow: 'none',
     zIndex: 18,
   },
   emptySlot: {
     width: 70, height: 90, background: 'var(--terminal-surface-subtle)', border: '1px dashed var(--terminal-border-strong)', borderRadius: 8,
-    display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--terminal-text-muted)', fontSize: 24, fontWeight: 700, cursor: 'pointer',
+    display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--terminal-text-muted)', fontSize: 24, fontWeight: 600, cursor: 'pointer',
     transition: 'filter 0.1s',
   },
   freeSlotSummary: {
@@ -4108,7 +4108,7 @@ const LT = {
     alignItems: 'center',
     justifyContent: 'center',
     color: 'var(--terminal-text-secondary)',
-    fontWeight: 700,
+    fontWeight: 600,
     cursor: 'pointer',
     textAlign: 'center',
     gap: 4,
@@ -4120,7 +4120,7 @@ const LT = {
   },
   freeSlotNumber: {
     color: 'var(--terminal-text)',
-    fontWeight: 700,
+    fontWeight: 600,
     lineHeight: 1,
   },
   freeSlotText: {
@@ -4198,7 +4198,7 @@ const LT = {
     justifyContent: 'center',
     fontFamily: 'inherit',
     fontSize: 15,
-    fontWeight: 700,
+    fontWeight: 600,
     lineHeight: 1,
     cursor: 'pointer',
     boxShadow: 'none',
@@ -4212,10 +4212,10 @@ const LT = {
   },
   demonIdBadge: {
     position: 'absolute', top: 6, left: 6, zIndex: 12,
-    maxWidth: '58%', padding: '3px 5px', borderRadius: 5,
+    maxWidth: '58%', padding: '3px 5px', borderRadius: 8,
     background: 'var(--terminal-neutral-button)', color: 'var(--terminal-on-accent)',
     border: '1px solid var(--terminal-border-strong)',
-    fontWeight: 700, lineHeight: 1, whiteSpace: 'nowrap',
+    fontWeight: 600, lineHeight: 1, whiteSpace: 'nowrap',
     overflow: 'hidden', textOverflow: 'ellipsis',
     textShadow: 'none',
   },
@@ -4228,7 +4228,7 @@ const LT = {
     left: 4,
     maxWidth: '72%',
     padding: '3px 5px',
-    borderRadius: 6,
+    borderRadius: 8,
   },
   demonUseBadge: {
     position: 'absolute',
@@ -4236,11 +4236,11 @@ const LT = {
     left: 6,
     zIndex: 12,
     padding: '3px 5px',
-    borderRadius: 5,
+    borderRadius: 8,
     background: 'var(--terminal-warning-soft)',
     color: 'var(--terminal-warning)',
     border: '1px solid var(--terminal-warning-border)',
-    fontWeight: 700,
+    fontWeight: 600,
     lineHeight: 1,
     textShadow: 'none',
   },
@@ -4262,7 +4262,7 @@ const LT = {
     display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10,
     padding: '0 4px',
   },
-  costText: { fontSize: 13, fontWeight: 700, color: 'var(--terminal-warning)', textShadow: 'none' },
+  costText: { fontSize: 13, fontWeight: 600, color: 'var(--terminal-warning)', textShadow: 'none' },
   troopInfoBackdrop: {
     position: 'absolute',
     inset: 0,
@@ -4271,7 +4271,7 @@ const LT = {
     alignItems: 'center',
     justifyContent: 'center',
     padding: 14,
-    background: 'var(--terminal-overlay)',
+    background: 'var(--terminal-overlay)', backdropFilter: 'blur(var(--cb-scrim-blur))', WebkitBackdropFilter: 'blur(var(--cb-scrim-blur))',
   },
   troopInfoDialog: {
     position: 'relative',
@@ -4281,16 +4281,16 @@ const LT = {
     overflowY: 'auto',
     padding: 18,
     border: '1px solid var(--terminal-border)',
-    borderRadius: 16,
+    borderRadius: 24,
     background: 'var(--terminal-surface)',
     color: 'var(--terminal-text)',
-    boxShadow: '0 14px 34px var(--terminal-shadow)',
+    boxShadow: 'var(--cb-shadow-dialog)',
   },
   troopInfoDialogMobile: {
     width: '100%',
     padding: 14,
   },
-  troopInfoCloseButton: uiIconButton('secondary', 36, {
+  troopInfoCloseButton: uiIconButton('soft', 36, {
     position: 'absolute',
     top: 9,
     right: 9,
@@ -4348,7 +4348,7 @@ const LT = {
     margin: '14px 0 12px',
     color: 'var(--terminal-text-secondary)',
     fontSize: 14,
-    fontWeight: 700,
+    fontWeight: 600,
     lineHeight: 1.4,
   },
   troopInfoStats: {
@@ -4367,7 +4367,7 @@ const LT = {
     display: 'block',
     color: 'var(--terminal-text-faint)',
     fontSize: 11,
-    fontWeight: 700,
+    fontWeight: 600,
     lineHeight: 1.1,
   },
   troopInfoStatValue: {
@@ -4375,7 +4375,7 @@ const LT = {
     marginTop: 3,
     color: 'var(--terminal-text)',
     fontSize: 13,
-    fontWeight: 700,
+    fontWeight: 600,
     lineHeight: 1.2,
     overflowWrap: 'anywhere',
   },
@@ -4387,7 +4387,7 @@ const LT = {
     background: 'var(--terminal-warning-soft)',
     color: 'var(--terminal-warning)',
     fontSize: 12,
-    fontWeight: 700,
+    fontWeight: 600,
     lineHeight: 1.3,
     textAlign: 'center',
     overflowWrap: 'anywhere',
@@ -4395,17 +4395,17 @@ const LT = {
   troopPriceNote: {
     width: '100%',
     color: 'var(--terminal-text-muted)',
-    fontWeight: 700,
+    fontWeight: 600,
     textAlign: 'center',
     lineHeight: 1.25,
   },
   swapBadge: {
     position: 'absolute', top: -2, right: -2,
-    background: 'var(--terminal-short)', color: 'var(--terminal-on-accent)', fontSize: 10, fontWeight: 700,
+    background: 'var(--terminal-short)', color: 'var(--terminal-on-accent)', fontSize: 10, fontWeight: 600,
     padding: '2px 5px', borderRadius: 999, lineHeight: 1, boxShadow: 'none', zIndex: 20
   },
   swapHint: {
-    textAlign: 'center', fontSize: 14, fontWeight: 700, color: 'var(--terminal-short)',
+    textAlign: 'center', fontSize: 14, fontWeight: 600, color: 'var(--terminal-short)',
     background: 'transparent',
   },
   swapActionBar: {

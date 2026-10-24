@@ -6,6 +6,8 @@
   place-items: center;
   padding: 18px;
   background: var(--terminal-overlay);
+  backdrop-filter: blur(var(--cb-scrim-blur));
+  -webkit-backdrop-filter: blur(var(--cb-scrim-blur));
 }
 
 .ranked-attack-panel {
@@ -198,7 +200,7 @@
   height: 42px;
   place-items: center;
   border: 1px solid var(--terminal-border);
-  border-radius: 10px;
+  border-radius: 12px;
   background: var(--terminal-surface);
   box-shadow: none;
 }

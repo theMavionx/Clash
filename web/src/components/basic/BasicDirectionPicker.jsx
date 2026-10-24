@@ -94,7 +94,7 @@ const S = {
   tightTitle: {
     fontSize: 'clamp(16px, 3vh, 20px)',
     fontWeight: 600, color: colors.ink,
-    textAlign: 'center', letterSpacing: '0.3px',
+    textAlign: 'center', letterSpacing: 0,
     margin: '2px 0 4px', lineHeight: 1.1,
   },
   symbolBlock: {
@@ -116,7 +116,7 @@ const S = {
   },
   symbol: {
     fontSize: 14, fontWeight: 600,
-    color: colors.inkSoft, letterSpacing: '1.2px',
+    color: colors.inkSoft, letterSpacing: 0,
   },
   price: {
     // Scales 22pt (cramped) → 32pt (full panel).
@@ -154,13 +154,13 @@ const S = {
   arrowUp: { fontSize: 28, lineHeight: 1 },
   arrowDown: { fontSize: 28, lineHeight: 1 },
   bigBtnLabel: {
-    fontSize: 26, fontWeight: 700, letterSpacing: '1.5px',
+    fontSize: 26, fontWeight: 600, letterSpacing: 0,
     marginRight: 'auto', // push hint to the right end
     marginLeft: 4,
   },
   bigBtnHint: {
     fontSize: 12, fontWeight: 600, opacity: 0.85,
-    letterSpacing: '0.3px',
+    letterSpacing: 0,
     fontStyle: 'italic',
   },
 };

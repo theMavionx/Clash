@@ -191,7 +191,7 @@ export default memo(ShareTradeModal);
 const S = {
   backdrop: {
     position: 'fixed', inset: 0,
-    background: 'var(--terminal-overlay)',
+    background: 'var(--terminal-overlay)', backdropFilter: 'blur(var(--cb-scrim-blur))', WebkitBackdropFilter: 'blur(var(--cb-scrim-blur))',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     padding: 16, zIndex: 10000,
     // GameUI's outer overlay div sets `pointer-events: none` so clicks
@@ -205,11 +205,11 @@ const S = {
     width: '100%', maxWidth: 460,
     background: 'var(--terminal-surface)',
     borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--terminal-border)',
-    borderRadius: 16,
+    borderRadius: 24,
     padding: 14,
-    boxShadow: 'var(--terminal-shadow-card)',
+    boxShadow: 'var(--cb-shadow-dialog)',
     display: 'flex', flexDirection: 'column', gap: 12,
-    fontFamily: '"Inter","Segoe UI",sans-serif',
+    fontFamily: 'inherit',
     boxSizing: 'border-box',
   },
   header: {
@@ -217,9 +217,9 @@ const S = {
   },
   title: {
     fontSize: 16, fontWeight: 600, color: colors.ink,
-    letterSpacing: '0.4px',
+    letterSpacing: 0,
   },
-  closeBtn: uiIconButton('secondary', 32),
+  closeBtn: uiIconButton('soft', 32),
   previewWrap: {
     width: '100%',
     aspectRatio: '1200 / 742',  // matches generateShareImage canvas

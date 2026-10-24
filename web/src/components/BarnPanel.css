@@ -217,7 +217,7 @@
   z-index: 4;
   color: var(--bum-brand-text);
   font-size: 26px;
-  font-weight: 700;
+  font-weight: 600;
   pointer-events: none;
   white-space: nowrap;
 }

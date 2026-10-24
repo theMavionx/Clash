@@ -1,6 +1,6 @@
 import { memo, useCallback, useMemo, useState, useEffect, useRef } from 'react';
 import { useLayout } from '../hooks/useIsMobile';
-import { uiButton, uiIconButton } from '../styles/theme';
+import { uiButton, uiIconButton, rangeProgress } from '../styles/theme';
 import { colors, shared } from './basic/styles';
 import { usePlayer } from '../hooks/useGodot';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
@@ -107,8 +107,8 @@ const BOT_TYPES = [
     id: 'ping_pong',
     name: 'Ping-Pong',
     code: 'ping_pong',
-    accent: '#FB8C00',
-    accentDark: '#EF6C00',
+    accent: 'var(--terminal-warning)',
+    accentDark: 'var(--terminal-warning)',
     tagline: 'Open → short hold → close → repeat.',
     description: 'Opens a market order, holds a few seconds, then closes. Delay between open/close is randomized (1–20s) so it does not look like rigid spam.',
     bestFor: 'Simple Decibel volume cycling without quoting both sides.',
@@ -1219,6 +1219,7 @@ function SliderField({
         max={max}
         step={step}
         value={clamped}
+        style={rangeProgress(clamped, lo, hi)}
         onChange={(event) => onChange(Number(event.target.value))}
         aria-label={label}
       />
@@ -4943,25 +4944,23 @@ const STYLE = `
     outline: none;
     box-shadow: 0 0 0 3px var(--terminal-brand-soft) !important;
   }
-  .bots-range {
-    width: 100%;
-    accent-color: var(--terminal-info);
-    cursor: pointer;
-  }
-  .bots-range::-webkit-slider-thumb {
-    box-shadow: none;
-  }
   .bots-market-select {
     width: 100%;
     min-height: 44px;
-    border: 2px solid var(--terminal-border-strong);
-    border-radius: 10px;
-    background: var(--terminal-surface);
+    border: 1px solid var(--terminal-border);
+    border-radius: 12px;
+    background: var(--terminal-input);
     color: var(--terminal-text);
     cursor: pointer;
-    font: 900 14px/1.2 "Inter", "Segoe UI", sans-serif;
-    padding: 0 10px;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.2;
+    padding: 0 12px;
+    transition: border-color 150ms ease, box-shadow 150ms ease;
   }
+  .bots-market-select:hover { border-color: var(--cb-accent-border); }
+  .bots-market-select:focus { border-color: var(--cb-accent); box-shadow: var(--cb-ring-focus); outline: none; }
   .bots-focusable:focus-visible {
     outline: none !important;
     box-shadow: 0 0 0 3px var(--terminal-brand-soft) !important;
@@ -5062,13 +5061,13 @@ const S = {
     width: 'min(760px, calc(100vw - 32px))',
     background: 'var(--terminal-canvas)',
     border: '1px solid var(--terminal-border)',
-    borderRadius: 16,
+    borderRadius: 24,
     display: 'flex',
     flexDirection: 'column',
     pointerEvents: 'auto',
     overflow: 'hidden',
     zIndex: 101,
-    boxShadow: 'var(--terminal-shadow-card)',
+    boxShadow: 'var(--cb-shadow-dialog)',
     fontFamily: 'inherit',
     boxSizing: 'border-box',
   },
@@ -5126,7 +5125,7 @@ const S = {
     color: 'var(--terminal-text-muted)',
     marginTop: 3,
   },
-  closeButton: uiIconButton('danger', 32, { fontSize: 16, lineHeight: 1 }),
+  closeButton: uiIconButton('soft', 32, { fontSize: 16, lineHeight: 1 }),
   body: {
     flex: 1,
     minHeight: 0,
@@ -5183,9 +5182,11 @@ const S = {
     boxShadow: 'var(--terminal-shadow-card)',
   },
   summaryLabel: {
-    fontSize: 13,
-    fontWeight: 500,
-    color: 'var(--terminal-text-muted)',
+    fontSize: 10,
+    fontWeight: 600,
+    letterSpacing: '0.12em',
+    textTransform: 'uppercase',
+    color: 'var(--terminal-text-faint)',
   },
   summaryValue: {
     color: 'var(--terminal-text)',
@@ -5226,10 +5227,10 @@ const S = {
   dashTitle: {
     margin: 0,
     color: 'var(--terminal-text)',
-    fontSize: 28,
-    fontWeight: 600,
-    letterSpacing: '-0.02em',
-    lineHeight: 1.1,
+    fontSize: 32,
+    fontWeight: 500,
+    letterSpacing: '-0.025em',
+    lineHeight: 1,
   },
   dashSubtitle: {
     margin: '6px 0 0',
@@ -5246,10 +5247,10 @@ const S = {
   },
   segment: {
     display: 'flex',
-    gap: 4,
+    gap: 0,
     padding: 4,
-    background: 'var(--terminal-surface-muted)',
-    border: '1px solid var(--terminal-border)',
+    background: 'var(--cb-soft)',
+    border: '1px solid transparent',
     borderRadius: 999,
   },
   segmentButton: {
@@ -5258,19 +5259,19 @@ const S = {
     borderColor: 'transparent',
     background: 'transparent',
     color: 'var(--terminal-text-muted)',
-    fontSize: 13,
-    fontWeight: 500,
+    fontSize: 12,
+    fontWeight: 600,
     borderRadius: 999,
-    padding: '7px 14px',
+    padding: '7px 16px',
     cursor: 'pointer',
     fontFamily: 'inherit',
   },
   segmentActive: {
-    background: 'var(--terminal-neutral-button)',
-    borderColor: 'var(--terminal-neutral-button)',
+    background: 'var(--cb-neutral)',
+    borderColor: 'var(--cb-neutral)',
     color: '#ffffff',
     fontWeight: 600,
-    boxShadow: 'none',
+    boxShadow: 'var(--cb-shadow-sm)',
   },
   launchButton: {
     minHeight: 40,
@@ -5318,7 +5319,7 @@ const S = {
     minHeight: 250,
     padding: '32px 20px',
     border: '1px solid var(--terminal-border)',
-    borderRadius: 16,
+    borderRadius: 28,
     background: 'var(--terminal-surface)',
     display: 'flex',
     flexDirection: 'column',
@@ -5365,7 +5366,7 @@ const S = {
   botCard: {
     background: 'var(--terminal-surface)',
     border: '1px solid var(--terminal-border)',
-    borderRadius: 16,
+    borderRadius: 20,
     padding: 16,
     display: 'flex',
     flexDirection: 'column',
@@ -5443,7 +5444,7 @@ const S = {
     color: 'var(--terminal-text-muted)',
     fontSize: 11,
     fontWeight: 600,
-    letterSpacing: '0.06em',
+    letterSpacing: '0.1em',
     textTransform: 'uppercase',
     flexShrink: 0,
   },
@@ -5510,7 +5511,7 @@ const S = {
   botAvatar: {
     width: 44,
     height: 44,
-    borderRadius: 14,
+    borderRadius: 16,
     border: '1px solid var(--terminal-border)',
     display: 'flex',
     alignItems: 'center',
@@ -5577,7 +5578,7 @@ const S = {
     fontSize: 13,
     fontWeight: 600,
     color: 'var(--terminal-text)',
-    letterSpacing: '0.02em',
+    letterSpacing: 0,
   },
   expandIcon: {
     width: 32,
@@ -5613,7 +5614,7 @@ const S = {
     fontWeight: 600,
     color: 'var(--terminal-text-faint)',
     textTransform: 'uppercase',
-    letterSpacing: '0.06em',
+    letterSpacing: '0.1em',
   },
   metricValue: {
     fontSize: 16,
@@ -5782,7 +5783,7 @@ const S = {
     fontSize: 9,
     fontWeight: 600,
     textTransform: 'none',
-    letterSpacing: 0.25,
+    letterSpacing: 0,
     whiteSpace: 'nowrap',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
@@ -5859,7 +5860,7 @@ const S = {
     fontSize: 9,
     fontWeight: 600,
     textTransform: 'none',
-    letterSpacing: 0.4,
+    letterSpacing: 0,
   },
   strategyText: {
     display: 'flex',
@@ -5932,7 +5933,7 @@ const S = {
   exchangeSearchBox: {
     minHeight: 38,
     border: '1px solid var(--terminal-border)',
-    borderRadius: 9,
+    borderRadius: 8,
     background: 'var(--terminal-surface-subtle)',
     display: 'flex',
     alignItems: 'center',
@@ -5964,7 +5965,7 @@ const S = {
   },
   exchangeOption: {
     minHeight: 48,
-    borderRadius: 9,
+    borderRadius: 8,
     padding: '7px 8px',
     display: 'flex',
     alignItems: 'center',
@@ -6113,7 +6114,7 @@ const S = {
     padding: '4px 7px',
     fontSize: 9,
     fontWeight: 600,
-    letterSpacing: 0.35,
+    letterSpacing: 0,
   },
   connectionChecking: {
     background: 'var(--terminal-surface-muted)',
@@ -6170,7 +6171,7 @@ const S = {
     alignItems: 'center',
     gap: 8,
     padding: '8px 10px',
-    borderRadius: 10,
+    borderRadius: 12,
     background: 'var(--terminal-info-soft)',
     color: 'var(--terminal-info)',
     fontSize: 11,
@@ -6222,7 +6223,7 @@ const S = {
     fontSize: 11,
     fontWeight: 600,
     textTransform: 'none',
-    letterSpacing: 0.4,
+    letterSpacing: 0,
   },
   sliderValue: {
     color: 'var(--terminal-text)',
@@ -6262,7 +6263,7 @@ const S = {
   },
   aggressivePlanCell: {
     background: 'var(--terminal-surface-subtle)',
-    borderRadius: 10,
+    borderRadius: 12,
     padding: '8px 9px',
     display: 'flex',
     flexDirection: 'column',
@@ -6274,7 +6275,7 @@ const S = {
     fontSize: 10,
     fontWeight: 600,
     textTransform: 'none',
-    letterSpacing: 0.3,
+    letterSpacing: 0,
   },
   aggressivePlanVal: {
     color: 'var(--terminal-text)',
@@ -6476,7 +6477,7 @@ const S = {
   gameAuthRow: {
     background: 'var(--terminal-surface)',
     border: '1px solid var(--terminal-border)',
-    borderRadius: 10,
+    borderRadius: 12,
     padding: 10,
     display: 'flex',
     flexDirection: 'column',
@@ -6505,7 +6506,7 @@ const S = {
     padding: '3px 8px',
     borderRadius: 999,
     border: '1px solid var(--terminal-surface)',
-    letterSpacing: 0.4,
+    letterSpacing: 0,
   },
   gameAuthStatusReady: {
     background: 'var(--terminal-info)',
@@ -6614,7 +6615,7 @@ const S = {
   accountRow: {
     background: 'var(--terminal-surface)',
     border: '1px solid var(--terminal-border)',
-    borderRadius: 10,
+    borderRadius: 12,
     padding: '8px 10px',
     display: 'flex',
     alignItems: 'center',
@@ -6624,7 +6625,7 @@ const S = {
   accountRowActive: {
     background: 'var(--terminal-surface)',
     border: '1px solid var(--terminal-long)',
-    borderRadius: 10,
+    borderRadius: 12,
     padding: '8px 10px',
     display: 'flex',
     alignItems: 'center',

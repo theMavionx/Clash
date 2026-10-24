@@ -896,7 +896,7 @@ function ProfileModal({ onClose, onSwitchDex }) {
               <div style={{flex: 1, minWidth: 0}}>
                 <div style={{
                   fontSize: 9, fontWeight: 600, color: 'var(--terminal-text-muted)',
-                  letterSpacing: '0.6px',
+                  letterSpacing: 0,
                 }}>Futures mode</div>
                 <div style={{
                   fontSize: 12, fontWeight: 600, color: 'var(--terminal-text)',
@@ -1373,13 +1373,13 @@ function ProfileModal({ onClose, onSwitchDex }) {
           {/* Base self-custody funding callout */}
           {(dex === 'avantis' || dex === 'domfi') && activeWallet && (
             <div style={{
-              padding: '12px 14px', borderRadius: 14,
+              padding: '12px 14px', borderRadius: 16,
               background: 'var(--terminal-brand-soft)',
               border: '1px solid var(--terminal-brand-border)',
             }}>
               <div style={{
                 fontSize: 12, fontWeight: 600, color: 'var(--terminal-brand-text)',
-                letterSpacing: '1px', marginBottom: 4,
+                letterSpacing: 0, marginBottom: 4,
               }}>💰 Fund Base wallet</div>
               <div style={{
                 fontSize: 12, color: 'var(--terminal-text-secondary)', fontWeight: 600,
@@ -1490,11 +1490,11 @@ function ProfileModal({ onClose, onSwitchDex }) {
 export default memo(ProfileModal);
 
 const S = {
-  backdrop: { position: 'fixed', inset: 0, background: 'var(--terminal-overlay)', zIndex: 200, pointerEvents: 'auto' },
+  backdrop: { position: 'fixed', inset: 0, background: 'var(--terminal-overlay)', backdropFilter: 'blur(var(--cb-scrim-blur))', WebkitBackdropFilter: 'blur(var(--cb-scrim-blur))', zIndex: 200, pointerEvents: 'auto' },
   modal: {
     position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-    width: '90%', maxWidth: 370, maxHeight: '85vh', background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 16,
-    boxShadow: 'var(--terminal-shadow-card)', display: 'flex', flexDirection: 'column',
+    width: '90%', maxWidth: 370, maxHeight: '85vh', background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)', borderRadius: 24,
+    boxShadow: 'var(--cb-shadow-dialog)', display: 'flex', flexDirection: 'column',
     zIndex: 201, pointerEvents: 'auto', overflow: 'hidden', fontFamily: 'inherit',
   },
   header: {
@@ -1502,7 +1502,7 @@ const S = {
     padding: '14px 16px', background: 'var(--terminal-surface)', borderBottom: '1px solid var(--terminal-border)',
   },
   levelBadge: {
-    width: 44, height: 44, borderRadius: 10,
+    width: 44, height: 44, borderRadius: 12,
     background: 'var(--terminal-surface-muted)',
     border: '1px solid var(--terminal-border)', display: 'flex', alignItems: 'center', justifyContent: 'center',
     boxShadow: 'none',
@@ -1537,24 +1537,24 @@ const S = {
     lineHeight: 1.2,
     marginTop: 2,
   },
-  closeBtn: uiIconButton('ghost', 30, { borderRadius: 999 }),
+  closeBtn: uiIconButton('soft', 32, { borderRadius: 999 }),
   body: { flex: 1, padding: 16, display: 'flex', flexDirection: 'column', gap: 8, overflowY: 'auto' },
   soundBox: {
     display: 'flex', alignItems: 'center', gap: 10,
-    padding: '10px 12px', borderRadius: 14,
+    padding: '10px 12px', borderRadius: 16,
     background: 'var(--terminal-surface-subtle)',
     border: '1px solid var(--terminal-border)',
   },
   soundInfo: { flex: 1, minWidth: 0 },
   futuresThemeBox: {
     display: 'flex', alignItems: 'center', gap: 10,
-    padding: '10px 12px', borderRadius: 14,
+    padding: '10px 12px', borderRadius: 16,
     background: 'var(--terminal-surface-subtle)',
     border: '1px solid var(--terminal-border-strong)',
   },
   futuresThemeLabel: {
     fontSize: 10, fontWeight: 600, color: 'var(--terminal-text-muted)',
-    letterSpacing: '0.06em', textTransform: 'uppercase',
+    letterSpacing: '0.1em', textTransform: 'uppercase',
   },
   futuresThemeState: {
     marginTop: 2, fontSize: 12, fontWeight: 600, color: 'var(--terminal-text)',
@@ -1582,7 +1582,7 @@ const S = {
   },
   soundLabel: {
     fontSize: 10, fontWeight: 600, color: 'var(--terminal-text-muted)',
-    letterSpacing: '0.06em', textTransform: 'uppercase',
+    letterSpacing: '0.1em', textTransform: 'uppercase',
   },
   soundState: {
     marginTop: 2, fontSize: 12, fontWeight: 600, color: 'var(--terminal-text)',
@@ -1608,7 +1608,7 @@ const S = {
   },
   referralBox: {
     display: 'flex', flexDirection: 'column', gap: 8,
-    padding: '10px 12px', borderRadius: 14,
+    padding: '10px 12px', borderRadius: 16,
     background: 'var(--terminal-long-soft)',
     border: '1px solid var(--terminal-long-border)',
   },
@@ -1620,7 +1620,7 @@ const S = {
   },
   referralCopyBtn: uiButton('secondary', { minHeight: 34, height: 34, padding: '0 12px', fontSize: 11 }),
   referralLink: {
-    padding: '8px 9px', borderRadius: 9,
+    padding: '8px 9px', borderRadius: 8,
     background: 'var(--terminal-chip-overlay)',
     border: '1px solid var(--terminal-long-border)',
     color: 'var(--terminal-long-strong)', fontSize: 12, fontWeight: 600,
@@ -1635,7 +1635,7 @@ const S = {
   },
   referralStat: {
     display: 'flex', flexDirection: 'column', gap: 2,
-    minWidth: 0, padding: '7px 5px', borderRadius: 9,
+    minWidth: 0, padding: '7px 5px', borderRadius: 8,
     background: 'var(--terminal-chip-overlay)',
     border: '1px solid var(--terminal-long-border)',
     color: 'var(--terminal-long-strong)', fontSize: 11, fontWeight: 600,
@@ -1655,11 +1655,11 @@ const S = {
   },
   walletListTitle: {
     color: 'var(--terminal-text-faint)', fontSize: 11, fontWeight: 600,
-    textTransform: 'uppercase', letterSpacing: '0.06em',
+    textTransform: 'uppercase', letterSpacing: '0.1em',
   },
   walletRow: {
     display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 8,
-    alignItems: 'center', padding: '11px 10px', borderRadius: 10,
+    alignItems: 'center', padding: '11px 10px', borderRadius: 12,
     background: 'var(--terminal-surface-muted)', border: '1px solid var(--terminal-border)',
     boxShadow: 'none',
   },
@@ -1728,14 +1728,14 @@ const S = {
   },
   credentialRow: {
     display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 8,
-    alignItems: 'center', padding: '8px 9px', borderRadius: 10,
+    alignItems: 'center', padding: '8px 9px', borderRadius: 12,
     background: 'var(--terminal-surface)', border: '1px solid var(--terminal-border)',
   },
   credentialMain: {
     display: 'flex', alignItems: 'center', gap: 8, minWidth: 0,
   },
   credentialLogo: {
-    width: 24, height: 24, objectFit: 'contain', borderRadius: 6, flexShrink: 0,
+    width: 24, height: 24, objectFit: 'contain', borderRadius: 8, flexShrink: 0,
     background: 'var(--terminal-chip-overlay)',
   },
   credentialTitleLine: {
@@ -1750,12 +1750,12 @@ const S = {
   credentialActiveChip: {
     padding: '2px 7px', borderRadius: 999,
     background: 'var(--terminal-long-soft)', border: '1px solid var(--terminal-long-border)',
-    color: 'var(--terminal-long-strong)', fontSize: 8, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.35,
+    color: 'var(--terminal-long-strong)', fontSize: 8, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em',
   },
   credentialIdleChip: {
     padding: '2px 7px', borderRadius: 999,
     background: 'var(--terminal-surface-muted)', border: '1px solid var(--terminal-border)',
-    color: 'var(--terminal-text-secondary)', fontSize: 8, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.35,
+    color: 'var(--terminal-text-secondary)', fontSize: 8, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em',
   },
   credentialActions: {
     display: 'flex', alignItems: 'center', gap: 5,
@@ -1808,19 +1808,19 @@ const S = {
   },
   statRow: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    padding: '8px 12px', background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 10,
+    padding: '8px 12px', background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 12,
   },
   statLabel: { fontSize: 13, fontWeight: 600, color: 'var(--terminal-text-secondary)' },
   statVal: { fontSize: 15, fontWeight: 600, color: 'var(--terminal-text)' },
   resCard: {
     flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
-    background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 10, padding: 8,
+    background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)', borderRadius: 12, padding: 8,
   },
   resVal: { fontSize: 16, fontWeight: 600 },
   resLabel: { fontSize: 10, fontWeight: 600, color: 'var(--terminal-text-muted)', textTransform: 'uppercase' },
   goldCard: {
     background: 'var(--terminal-warning-soft)',
-    border: '1px solid var(--terminal-warning-border)', borderRadius: 14, padding: 14,
+    border: '1px solid var(--terminal-warning-border)', borderRadius: 16, padding: 14,
   },
   goldStat: {
     flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1,

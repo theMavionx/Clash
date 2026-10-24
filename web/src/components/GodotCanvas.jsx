@@ -2028,9 +2028,9 @@ function GodotCanvas({ onEngineReady }) {
               <div style={{
                 color: 'rgba(255,255,255,0.75)',
                 marginTop: '10px',
-                fontFamily: '"Inter", "Segoe UI", sans-serif',
+                fontFamily: 'inherit',
                 fontSize: '13px',
-                fontWeight: 700,
+                fontWeight: 600,
                 textAlign: 'center',
               }}>
                 Reloading after WebGL context loss...

@@ -38,14 +38,14 @@ export default function LighterOneTapConnect({ label = 'Lighter', wallet, connec
         <label style={{display: 'grid', gap: 6, textAlign: 'left', fontSize: 13}}>
           Choose your {label} account
           <select aria-label={label + ' account'} value={selected} onChange={e => setSelected(e.target.value)} disabled={locked}
-            style={{padding: 12, minHeight: 44, width: '100%', borderRadius: 10, color: 'var(--terminal-text)', background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)'}}>
+            style={{padding: 12, minHeight: 44, width: '100%', borderRadius: 12, color: 'var(--terminal-text)', background: 'var(--terminal-surface-subtle)', border: '1px solid var(--terminal-border)'}}>
             <option value="">Select an account</option>
             {accounts.map(row => <option key={row.accountIndex} value={row.accountIndex}>Account {row.accountIndex} · {row.kind}</option>)}
           </select>
         </label>
       )}
       <button type="button" onClick={start} disabled={locked || (accounts.length > 1 && selected === '')}
-        style={{minHeight: 48, width: '100%', padding: '13px 16px', border: 0, borderRadius: 12, background: '#ff7b29', color: '#fff', fontSize: 15, fontWeight: 800, cursor: locked ? 'wait' : 'pointer', opacity: locked ? 0.65 : 1}}>
+        style={{minHeight: 48, width: '100%', padding: '13px 16px', border: '1px solid var(--cb-accent)', borderRadius: 999, background: 'var(--cb-accent)', color: '#ffffff', boxShadow: 'var(--cb-shadow-sm)', fontSize: 14, fontWeight: 600, cursor: locked ? 'wait' : 'pointer', opacity: locked ? 0.65 : 1}}>
         {busy ? (STATUS[status] || 'Connecting…') : 'Connect ' + label + ' with wallet'}
       </button>
       <div style={{fontSize: 11, lineHeight: 1.5, color: 'var(--terminal-text-faint)'}}>
@@ -53,7 +53,7 @@ export default function LighterOneTapConnect({ label = 'Lighter', wallet, connec
         Clash routing approval is {feeBps} bps and may require another wallet confirmation.
         The generated key is encrypted on this device. Encrypted server sync requires wallet verification; it does not enable bots or server-side trading.
       </div>
-      {error && <div role="alert" style={{padding: 12, borderRadius: 10, fontSize: 12, lineHeight: 1.5, color: 'var(--terminal-danger, #ff7777)', background: 'var(--terminal-danger-soft, #4b2222)'}}>{error}</div>}
+      {error && <div role="alert" style={{padding: 12, borderRadius: 12, fontSize: 12, lineHeight: 1.5, color: 'var(--terminal-danger, #ff7777)', background: 'var(--terminal-danger-soft, #4b2222)'}}>{error}</div>}
     </section>
   );
 }

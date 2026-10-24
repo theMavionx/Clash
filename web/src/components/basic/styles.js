@@ -1,5 +1,5 @@
 // Shared ClashBot Light styles for the Basic-mode trade wizard.
-import { uiIconButton } from '../../styles/theme';
+import { uiCloseButton } from '../../styles/theme';
 
 export const colors = {
   parchment: 'var(--terminal-surface)',
@@ -29,7 +29,7 @@ export const shared = {
     // to display:grid with explicit row template, so their content auto-
     // fits the available height and never triggers the scrollbar.
     overflow: 'auto',
-    fontFamily: '"Inter","Segoe UI",sans-serif',
+    fontFamily: 'inherit',
     boxSizing: 'border-box',
     minHeight: 0,
     minWidth: 0,
@@ -41,7 +41,7 @@ export const shared = {
     display: 'flex', alignItems: 'center', gap: 10,
     marginBottom: 4,
   },
-  backBtn: uiIconButton('secondary', 36, { fontSize: 20 }),
+  backBtn: uiCloseButton(36, { fontSize: 20 }),
   stepDots: {
     flex: 1, display: 'flex', gap: 6, justifyContent: 'center',
   },
@@ -59,13 +59,13 @@ export const shared = {
   },
   spacer36: { width: 36, flexShrink: 0 },  // mirrors back button width to keep dots centered
   title: {
-    fontSize: 24, fontWeight: 750, color: colors.ink,
-    letterSpacing: '0.3px', textAlign: 'center',
+    fontSize: 24, fontWeight: 600, color: colors.ink,
+    letterSpacing: '-0.025em', textAlign: 'center',
     margin: '6px 0 2px',
     lineHeight: 1.2,
   },
   subtitle: {
-    fontSize: 13, fontWeight: 600, color: colors.inkFaint,
+    fontSize: 13, fontWeight: 500, color: colors.inkFaint,
     textAlign: 'center', marginBottom: 6,
     lineHeight: 1.4,
   },

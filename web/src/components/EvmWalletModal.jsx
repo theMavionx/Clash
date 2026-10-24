@@ -352,15 +352,15 @@ export default function EvmWalletModal({ open, onClose, onConnected, targetChain
 const M = {
   overlay: {
     position: 'fixed', inset: 0, zIndex: 1000,
-    background: 'var(--terminal-overlay)',
+    background: 'var(--terminal-overlay)', backdropFilter: 'blur(var(--cb-scrim-blur))', WebkitBackdropFilter: 'blur(var(--cb-scrim-blur))',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     pointerEvents: 'all',
   },
   panel: {
     width: 380, maxWidth: 'calc(100vw - 24px)', maxHeight: 'calc(100dvh - 24px)',
     background: 'var(--terminal-surface)',
-    border: '1px solid var(--terminal-border)', borderRadius: 16,
-    boxShadow: 'var(--terminal-shadow-card)',
+    border: '1px solid var(--terminal-border)', borderRadius: 24,
+    boxShadow: 'var(--cb-shadow-dialog)',
     display: 'flex', flexDirection: 'column',
     overflow: 'auto',
     fontFamily: 'inherit',
@@ -373,7 +373,7 @@ const M = {
   headerTitle: {
     fontSize: 17, fontWeight: 600, color: 'var(--terminal-text)',
   },
-  closeBtn: uiIconButton('ghost', 34, {
+  closeBtn: uiIconButton('soft', 34, {
     position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)',
     fontSize: 14, fontWeight: 600,
   }),
@@ -412,10 +412,10 @@ const M = {
     borderColor: 'var(--terminal-brand-border)',
   },
   providerIcon: {
-    width: 28, height: 28, borderRadius: 6,
+    width: 28, height: 28, borderRadius: 8,
   },
   providerFallbackIcon: {
-    width: 28, height: 28, borderRadius: 6,
+    width: 28, height: 28, borderRadius: 8,
     background: 'var(--terminal-surface-muted)', border: '1px solid var(--terminal-border)',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     fontSize: 14, fontWeight: 600, color: 'var(--terminal-text)',
