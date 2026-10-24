@@ -5661,7 +5661,7 @@ function FuturesPanel() {
 
   const renderTradeControls = ({ compactMobile = false, parentScroll = false } = {}) => (
     <div
-      className={`futures-order-ticket${fullscreen && !parentScroll ? ' grad-scrollbar futures-trade-controls-scroll' : ''}${compactMobile ? ' futures-order-ticket--compact' : ''}`}
+      className={`futures-order-ticket${fullscreen && !parentScroll ? ' grad-scrollbar futures-trade-controls-scroll' : ''}${!fullscreen && !parentScroll ? ' futures-order-ticket--inline' : ''}${compactMobile ? ' futures-order-ticket--compact' : ''}`}
       onWheelCapture={event => {
         // Scrolling the ticket must not silently change a focused order amount.
         if (event.target instanceof HTMLInputElement && event.target.type === 'number') event.target.blur();
@@ -12307,14 +12307,23 @@ function FuturesPanel() {
             </button>
           </div>
         )}
-        <main className="futures-panel-body futures-terminal-body" style={S.body}>
+        {/* Compact (side-panel) Trade stacks chart + ticket taller than the
+            body, so its wrapper must grow with content (flex 0 0 auto) —
+            a 100%-height wrapper lets the ticket overflow past the body's
+            bottom padding and butt against the footer. Symmetric scrollbar
+            gutter keeps the cards centred instead of hugging the scrollbar. */}
+        <main className="futures-panel-body futures-terminal-body" style={fullscreen ? S.body : {...S.body, scrollbarGutter: 'stable both-edges'}}>
           <div key={activeTab} style={{
             animation: 'fadeIn 0.25s ease-out',
             display: 'flex',
             flexDirection: 'column',
             gap: 10,
-            height: activeTab === 'Trade' && fullscreen && isMobile ? 'auto' : '100%',
-            minHeight: activeTab === 'Trade' && fullscreen && isMobile ? '100%' : 0,
+            ...(activeTab === 'Trade' && !fullscreen
+              ? {flex: '0 0 auto', height: 'auto', minHeight: '100%'}
+              : {
+                  height: activeTab === 'Trade' && isMobile ? 'auto' : '100%',
+                  minHeight: activeTab === 'Trade' && isMobile ? '100%' : 0,
+                }),
           }}>
             {renderContent()}
           </div>

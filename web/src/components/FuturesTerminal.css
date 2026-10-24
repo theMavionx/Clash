@@ -473,6 +473,15 @@ html {
   min-height: 44px;
   box-sizing: border-box;
 }
+/* Compact side panel: the ticket sits directly in the padded panel body next
+   to the chart card, so the wrapper adds no extra inset and the fields block
+   becomes the card itself (same edges/radius as the chart card above). */
+.futures-order-ticket--inline { padding: 0 !important; }
+.futures-order-ticket--inline .futures-order-ticket__fields {
+  border: 1px solid var(--terminal-border) !important;
+  border-radius: 16px !important;
+  padding: 12px !important;
+}
 .futures-order-ticket button { box-shadow: none !important; }
 .futures-order-ticket__submit { border-radius: 12px !important; }
 .futures-size-presets button {
@@ -692,6 +701,11 @@ html {
 
   .futures-order-ticket--compact {
     padding: 10px 10px max(18px, env(safe-area-inset-bottom)) !important;
+  }
+
+  /* Body padding is 0 here, so keep the card bottom clear of the footer. */
+  .futures-order-ticket--inline {
+    padding-bottom: max(12px, env(safe-area-inset-bottom)) !important;
   }
 
   .futures-terminal-workspace--mobile { gap: 8px; }
