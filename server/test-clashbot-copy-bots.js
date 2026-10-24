@@ -27,7 +27,9 @@ function verify(call, secret = SECRET) {
   const url = new URL(call.url);
   const h = call.init.headers;
   const raw = call.init.body || '';
-  const canonical = ['clash-partner-copy-v2', h['x-clash-partner-id'], h['x-clash-partner-user'], h['x-clash-partner-wallet'] || '',
+  if (h['x-clash-partner-version'] !== '3') return false;
+  const canonical = ['clash-partner-copy-v3', h['x-clash-partner-id'], h['x-clash-partner-user'], h['x-clash-partner-link-wallet'] || '',
+    h['x-clash-partner-link-verified'] || '', h['x-clash-partner-wallet'] || '',
     h['x-clash-partner-client-ip'] || '', h['x-clash-partner-timestamp'],
     // ClashBot signs the API path from /v1/ (its public edge strips /copy-api).
     h['x-clash-partner-nonce'], call.init.method, url.pathname.replace(/^\/copy-api/, '') + url.search, crypto.createHash('sha256').update(raw).digest('hex')].join('\n');
@@ -212,6 +214,38 @@ async function run() {
     await onboardingHandler(request({ ...probe, body: {} }), res);
     assert.equal(res.statusCode, 404, JSON.stringify(probe));
   }
+
+  // Wallet linking: only signature-proven wallets are attested (v3 link wallet + verified flag).
+  const PROVEN_A = `0x${'a1'.repeat(20)}`, PROVEN_B = `0x${'b2'.repeat(20)}`;
+  const linking = createClashbotCopyBots({ apiUrl: 'https://clashbot.example/copy-api', secret: SECRET, fetchImpl,
+    verifiedWallets: (playerId) => (playerId === 'player-1' ? [PROVEN_A.toUpperCase().replace('0X', '0x'), 'So11111111111111111111111111111111111111112', PROVEN_B] : []) });
+  res = mockRes();
+  await linking(request({ path: '/bots' }), res);
+  call = calls.at(-1);
+  assert.equal(call.init.headers['x-clash-partner-link-wallet'], PROVEN_A, 'oldest proven EVM wallet by default');
+  assert.equal(call.init.headers['x-clash-partner-link-verified'], '1');
+  assert.ok(verify(call));
+  const connectedReq = request({ path: '/bots' });
+  connectedReq.headers['x-copy-wallet'] = PROVEN_B;
+  res = mockRes();
+  await linking(connectedReq, res);
+  assert.equal(calls.at(-1).init.headers['x-clash-partner-link-wallet'], PROVEN_B, 'the connected wallet when it is proven');
+  const unprovenReq = request({ path: '/bots' });
+  unprovenReq.headers['x-copy-wallet'] = OWNER;
+  res = mockRes();
+  await linking(unprovenReq, res);
+  assert.equal(calls.at(-1).init.headers['x-clash-partner-link-wallet'], PROVEN_A, 'an unproven connected wallet is never attested');
+  res = mockRes();
+  await linking(request({ path: '/bots', player: { id: 'player-2' } }), res);
+  assert.equal(calls.at(-1).init.headers['x-clash-partner-link-wallet'], undefined, 'no proof -> isolated namespace');
+  assert.equal(calls.at(-1).init.headers['x-clash-partner-link-verified'], undefined);
+  res = mockRes();
+  await linking(request({ path: '/status' }), res);
+  assert.equal(res.body.linkedWallet, PROVEN_A);
+  const broken = createClashbotCopyBots({ apiUrl: 'https://clashbot.example/copy-api', secret: SECRET, fetchImpl, verifiedWallets: () => { throw new Error('db down'); } });
+  res = mockRes();
+  await broken(request({ path: '/bots' }), res);
+  assert.equal(calls.at(-1).init.headers['x-clash-partner-link-wallet'], undefined);
 
   // Delete shreds the now-idle saved connection for that route.
   reply = { status: 200, body: { items: [{ id: 9, destinationVenue: 'hyperliquid', destinationAccount: OWNER }], deleted: { id: 9 } } };

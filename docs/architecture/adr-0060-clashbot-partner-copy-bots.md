@@ -60,6 +60,20 @@ ClashBot sign-in, and for the Bot panel to be copy trading only.
 | QFEX | the QFEX API key pair the game already registered for the player |
 | Hotstuff, Katana, Pacifica, Aster | not offered: ClashBot's native runtime has no executor for them (Aster retired) |
 
+## Shared bot list with the ClashBot website (2026-10-24)
+- The game server signs partner requests with signature v3, which adds a **link wallet** and a **verified flag**.
+  The link wallet is only ever a wallet the player proved with a wallet signature in the game:
+  `trading_credential_owners` (written only after `verifyWalletAuthProof` succeeds, never reassigned). The
+  connected wallet is used when it is one of them, else the oldest proof. `player_wallets` alone is NOT used:
+  dex-select / dex-link can attach a wallet without a signature.
+- ClashBot (`1acaab7d`) then acts as that wallet's website user (the principal its SIWE login binds,
+  `followerWallet` = wallet): bots and saved connections created in the game appear in "My bots" on
+  copy.clashbot.fun and vice versa. The player's earlier isolated `clash:<playerId>` bots and keys are moved
+  into the linked owner on the first linked request (all-or-nothing, waits while an execution is in flight).
+- Players without a proven EVM wallet keep the isolated namespace.
+- Expanded trust: the partner secret can act for every proven wallet's ClashBot account (website-created bots
+  and saved connections included). Documented in ClashBot `docs/partner-copy-api.md`.
+
 ## Consequences
 - The partner secret is equivalent to control of every partner namespace: keep it only in the game
   server env; rotation = rotate ClashBot's credential key or the HKDF label, then update the env.

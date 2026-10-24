@@ -300,15 +300,20 @@ function partnerUserId(playerId) {
   return `h${crypto.createHash('sha256').update(id, 'utf8').digest('hex').slice(0, 40)}`;
 }
 
-function signRequest({ secret, partnerId, user, method, path, rawBody, now, wallet = '', clientIp = '' }) {
+/**
+ * Partner signature v3: also binds the player's verified EVM wallet (link wallet + verified flag).
+ * ClashBot then acts as that wallet's website user, so game and website share one bot list.
+ */
+function signRequest({ secret, partnerId, user, method, path, rawBody, now, wallet = '', clientIp = '', linkWallet = '' }) {
   const timestamp = String(now());
   const nonce = crypto.randomBytes(18).toString('base64url');
-  const canonical = ['clash-partner-copy-v2', partnerId, user, wallet, clientIp, timestamp, nonce, method.toUpperCase(), path,
-    crypto.createHash('sha256').update(rawBody, 'utf8').digest('hex')].join('\n');
+  const canonical = ['clash-partner-copy-v3', partnerId, user, linkWallet, linkWallet ? '1' : '', wallet, clientIp, timestamp, nonce,
+    method.toUpperCase(), path, crypto.createHash('sha256').update(rawBody, 'utf8').digest('hex')].join('\n');
   return {
     'x-clash-partner-id': partnerId,
     'x-clash-partner-user': user,
-    'x-clash-partner-version': '2',
+    'x-clash-partner-version': '3',
+    ...(linkWallet ? { 'x-clash-partner-link-wallet': linkWallet, 'x-clash-partner-link-verified': '1' } : {}),
     ...(wallet ? { 'x-clash-partner-wallet': wallet } : {}),
     ...(clientIp ? { 'x-clash-partner-client-ip': clientIp } : {}),
     'x-clash-partner-timestamp': timestamp,
@@ -337,6 +342,8 @@ function createClashbotCopyBots({
   now = Date.now,
   log = (...args) => console.warn(...args),
   clientIp = playerClientIp,
+  /** EVM wallets the player proved with a wallet signature in the game (trading_credential_owners), oldest first. */
+  verifiedWallets = () => [],
 } = {}) {
   const base = String(apiUrl || DEFAULT_API).trim().replace(/\/+$/, '');
   if (!/^https:\/\/[^/?#]+(\/[A-Za-z0-9._~-]+)*$/i.test(base) && !/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/[A-Za-z0-9._~-]+)*$/i.test(base)) {
@@ -347,9 +354,10 @@ function createClashbotCopyBots({
   if (!/^[a-z0-9][a-z0-9_-]{2,39}$/.test(partnerId)) throw new Error('CLASHBOT_PARTNER_ID is invalid');
   const limit = createWindow({ now });
 
-  async function upstream(user, method, path, body, { wallet = '', ip = '', headers = {} } = {}) {
+  /** `who` = { user: partner user id, link: the player's verified EVM wallet or '' }. */
+  async function upstream(who, method, path, body, { wallet = '', ip = '', headers = {} } = {}) {
     const rawBody = body === undefined ? '' : JSON.stringify(body);
-    const signed = signRequest({ secret: key, partnerId, user, method, path, rawBody, now, wallet, clientIp: ip });
+    const signed = signRequest({ secret: key, partnerId, user: who.user, method, path, rawBody, now, wallet, clientIp: ip, linkWallet: who.link });
     const all = { accept: 'application/json', ...headers, ...signed };
     if (rawBody) all['content-type'] = 'application/json';
     const controller = new AbortController();
@@ -378,6 +386,19 @@ function createClashbotCopyBots({
   }
 
   const send = (res, result) => res.status(result.status).json(result.payload);
+
+  /**
+   * The wallet whose ClashBot account this player acts as: only a wallet the player proved
+   * with a signature (never a merely linked one). The connected wallet wins when it is one of
+   * them, else the oldest proof; no proof keeps the isolated clash:<player> namespace.
+   */
+  function linkWalletFor(req, playerId) {
+    let owners = [];
+    try { owners = (verifiedWallets(playerId) || []).map((w) => String(w || '').toLowerCase()).filter((w) => EVM_RE.test(w)); } catch { owners = []; }
+    if (!owners.length) return '';
+    const connected = String(req.headers?.['x-copy-wallet'] || '').toLowerCase();
+    return owners.includes(connected) ? connected : owners[0];
+  }
 
   function botId(raw) {
     const id = String(raw || '');
@@ -467,7 +488,7 @@ function createClashbotCopyBots({
     const path = String(req.path || '/').replace(/\/+$/, '') || '/';
     const method = req.method;
     if (method === 'GET' && path === '/status') {
-      return res.json({ configured, liveVenues: [...LIVE_VENUES], executionModes: ['live'] });
+      return res.json({ configured, liveVenues: [...LIVE_VENUES], executionModes: ['live'], linkedWallet: linkWalletFor(req, playerId) || null });
     }
     if (!configured) {
       return res.status(503).json({ error: 'In-game copy bots are not configured yet', code: 'COPY_BOTS_NOT_CONFIGURED' });
@@ -476,7 +497,7 @@ function createClashbotCopyBots({
     if (!limit(`copy-bots:${write ? 'w' : 'r'}:${playerId}`, write ? writeLimitPerMinute : readLimitPerMinute).ok) {
       return res.status(429).json({ error: 'Too many copy-bot requests. Try again shortly.', code: 'COPY_BOTS_RATE_LIMITED' });
     }
-    const user = partnerUserId(playerId);
+    const user = { user: partnerUserId(playerId), link: linkWalletFor(req, playerId) };
     const body = req.body && typeof req.body === 'object' ? req.body : {};
     try {
       let match;

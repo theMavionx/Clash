@@ -27903,7 +27903,17 @@ try {
 // secret stays on this server.
 try {
   const { mountClashbotCopyBots } = require('./clashbot_copy_bots');
-  mountClashbotCopyBots(router, { auth });
+  // Wallets the player proved with a wallet signature (recorded only after verifyWalletAuthProof,
+  // trading_credential_owners); with one, the player's bots are shared with that wallet's ClashBot account.
+  const verifiedWallets = (playerId) => {
+    try {
+      return db.db.prepare('SELECT wallet FROM trading_credential_owners WHERE player_id = ? ORDER BY verified_at, wallet')
+        .all(String(playerId)).map((row) => row.wallet);
+    } catch {
+      return [];
+    }
+  };
+  mountClashbotCopyBots(router, { auth, verifiedWallets });
 } catch (err) {
   console.warn('[clashbot-copy-bots] failed to mount:', err?.message || err);
 }
