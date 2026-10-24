@@ -284,6 +284,25 @@ function normalizeOrder(o, marketMap) {
   };
 }
 
+// fetchMarkets (activation effect) and fetchPrices (first poll tick) fire in
+// the same render; share one /markets/tickers response across them (and
+// across hook instances) instead of downloading the payload twice.
+const TICKERS_REUSE_MS = 3_000;
+let sharedTickers = { at: 0, data: null, inflight: null };
+async function fetchTickersShared(sdk) {
+  if (sharedTickers.data && Date.now() - sharedTickers.at < TICKERS_REUSE_MS) return sharedTickers.data;
+  if (sharedTickers.inflight) return sharedTickers.inflight;
+  const inflight = sdk.fetchMarketsTickers().then((data) => {
+    sharedTickers = { at: Date.now(), data, inflight: null };
+    return data;
+  }, (e) => {
+    sharedTickers = { ...sharedTickers, inflight: null };
+    throw e;
+  });
+  sharedTickers = { ...sharedTickers, inflight };
+  return inflight;
+}
+
 const POLL_INTERVAL_MS = 45_000;
 const TX_TIMEOUT_MS = 90_000;
 
@@ -520,11 +539,33 @@ export function useGmx() {
   // weekly listings. Used by the V2-classic close path to map a position's
   // `collateralTokenAddress` to the `collateralToken: "USDC"` string the
   // GMX prepareOrder API expects.
+  // Shared /tokens fetch (5-min TTL + in-flight coalescing). The first poll
+  // tick fires fetchPositions and fetchOrders together, and both need the
+  // market map; without coalescing that was 2x /markets + 2x /tokens, plus
+  // a third /tokens for the collateral-symbol map on close / TP-SL.
+  const tokensCacheRef = useRef({ tokens: null, fetchedAt: 0, inflight: null });
+  const fetchTokensCached = useCallback(async () => {
+    const cached = tokensCacheRef.current;
+    if (cached.tokens && Date.now() - cached.fetchedAt < 300_000) return cached.tokens;
+    if (cached.inflight) return cached.inflight;
+    const inflight = (async () => {
+      const sdk = await ensureSdk();
+      return sdk.fetchTokens();
+    })().then((tokens) => {
+      tokensCacheRef.current = { tokens: tokens || [], fetchedAt: Date.now(), inflight: null };
+      return tokens || [];
+    }, (e) => {
+      tokensCacheRef.current = { ...tokensCacheRef.current, inflight: null };
+      throw e;
+    });
+    tokensCacheRef.current = { ...cached, inflight };
+    return inflight;
+  }, [ensureSdk]);
+
   const ensureTokenSymbolMap = useCallback(async () => {
     const cached = tokenSymbolMapRef.current;
     if (cached.map && Date.now() - cached.fetchedAt < 300_000) return cached.map;
-    const sdk = await ensureSdk();
-    const tokens = await sdk.fetchTokens();
+    const tokens = await fetchTokensCached();
     const map = {};
     for (const t of tokens || []) {
       if (!t?.address || !t?.symbol) continue;
@@ -532,20 +573,18 @@ export function useGmx() {
     }
     tokenSymbolMapRef.current = { map, fetchedAt: Date.now() };
     return map;
-  }, [ensureSdk]);
+  }, [fetchTokensCached]);
 
   // marketAddress → { indexTokenAddress, indexTokenDecimals, baseSymbol }.
   // Built from `/markets` (gives marketAddress + indexTokenAddress) joined
   // with `/tokens` (gives address → decimals + symbol). 5-min TTL because
   // new market listings are weekly at most. Required to display order
   // prices — see normalizeOrder above for why.
-  const ensureMarketInfoMap = useCallback(async () => {
-    const cached = marketInfoMapRef.current;
-    if (cached.map && Date.now() - cached.fetchedAt < 300_000) return cached.map;
+  const buildMarketInfoMap = useCallback(async () => {
     const sdk = await ensureSdk();
     const [marketsList, tokens] = await Promise.all([
       sdk.fetchMarkets(),
-      sdk.fetchTokens(),
+      fetchTokensCached(),
     ]);
     const tokenByAddr = {};
     for (const t of tokens || []) {
@@ -567,9 +606,21 @@ export function useGmx() {
         baseSymbol,
       };
     }
-    marketInfoMapRef.current = { map, fetchedAt: Date.now() };
+    marketInfoMapRef.current = { map, fetchedAt: Date.now(), inflight: null };
     return map;
-  }, [ensureSdk]);
+  }, [ensureSdk, fetchTokensCached]);
+
+  const ensureMarketInfoMap = useCallback(async () => {
+    const cached = marketInfoMapRef.current;
+    if (cached.map && Date.now() - cached.fetchedAt < 300_000) return cached.map;
+    if (cached.inflight) return cached.inflight;
+    const inflight = buildMarketInfoMap().catch((e) => {
+      marketInfoMapRef.current = { ...marketInfoMapRef.current, inflight: null };
+      throw e;
+    });
+    marketInfoMapRef.current = { ...cached, inflight };
+    return inflight;
+  }, [buildMarketInfoMap]);
 
   // ───── Public market data ─────
   // GMX exposes multiple markets per asset (different collateral pools), so
@@ -592,7 +643,7 @@ export function useGmx() {
   const fetchMarkets = useCallback(async () => {
     try {
       const sdk = await ensureSdk();
-      const tickers = await sdk.fetchMarketsTickers();
+      const tickers = await fetchTickersShared(sdk);
       // Cache the raw, non-deduped tickers so `findGmxMarketSymbol` can
       // pick the USDC-collateral pool when opening/closing positions.
       // Without this, `markets` (deduped first-wins) would sometimes have
@@ -614,7 +665,10 @@ export function useGmx() {
   const fetchPrices = useCallback(async () => {
     try {
       const sdk = await ensureSdk();
-      const tickers = await sdk.fetchMarketsTickers();
+      const tickers = await fetchTickersShared(sdk);
+      // Keep the raw pool list current so markets listed after page load
+      // stay resolvable by findGmxMarketSymbol for opens.
+      if (Array.isArray(tickers) && tickers.length) marketsRawRef.current = tickers;
       const fresh = dedupBySymbol((tickers || []).map(normalizePrice));
       // Merge by symbol so we don't lose entries during transient gaps.
       setPrices(prev => {

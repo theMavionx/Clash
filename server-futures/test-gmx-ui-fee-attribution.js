@@ -9,14 +9,16 @@ const {
 const {
   GMX_UI_FEE_ATTRIBUTION_CUTOVER_TS,
   applyUiFeeAttributionCutover,
+  classifyOrderAction,
   importActionsForRow,
+  sqlDateFromUnixSeconds,
 } = require('./gmx-rewards-worker');
 
-assert.equal(GMX_UI_FEE_RECEIVER, '0x412a02ba415e5969596e6f0a35f9439760a3468f');
+assert.equal(GMX_UI_FEE_RECEIVER, '0x39b36f1edf2ef5a6f2e02991b3a85fb356eb5005');
 assert.equal(GMX_UI_FEE_BPS, 1);
 assert.equal(GMX_UI_FEE_FACTOR, 100000000000000000000000000n);
 assert.equal(hasClashGmxUiFee({
-  uiFeeReceiver: '0x412A02Ba415e5969596E6f0A35f9439760a3468F',
+  uiFeeReceiver: '0x39B36f1EDF2eF5a6f2e02991b3a85Fb356eB5005',
   uiFeeFactor: GMX_UI_FEE_FACTOR.toString(),
 }), true);
 assert.equal(hasClashGmxUiFee({
@@ -98,7 +100,53 @@ async function assertLegacyRowPreserved() {
   legacyDb.close();
 }
 
+assert.equal(sqlDateFromUnixSeconds(expectedCutover + 61), '2026-08-14 00:01:01');
+assert.equal(sqlDateFromUnixSeconds(null), null);
+assert.equal(sqlDateFromUnixSeconds('garbage'), null);
+assert.deepEqual(classifyOrderAction({ orderType: 8 }), { isOpen: true, orderType: 'stop-market' },
+  'GMX StopIncrease (8) is an executed open and must be credited');
+assert.equal(classifyOrderAction({ orderType: 7 }), null, 'liquidations are never credited');
+assert.equal(classifyOrderAction({ orderType: 0 }), null, 'swaps are never credited');
+
+async function assertAttributedRowUsesExecutionTime() {
+  const inserted = [];
+  const action = {
+    id: 'exec-action',
+    account: '0x0000000000000000000000000000000000000002',
+    timestamp: expectedCutover + 3600,
+    eventName: 'OrderExecuted',
+    orderType: 2,
+    isLong: false,
+    sizeDeltaUsd: (250n * (10n ** 30n)).toString(),
+    marketAddress: '0x0000000000000000000000000000000000000003',
+    orderKey: '0xorder',
+    transactionHash: '0xtx',
+    uiFeeReceiver: GMX_UI_FEE_RECEIVER,
+    uiFeeFactor: GMX_UI_FEE_FACTOR.toString(),
+  };
+  const result = await importActionsForRow(
+    { id: 7, wallet: action.account },
+    { [action.marketAddress]: { symbol: 'ETH' } },
+    {
+      since: expectedCutover,
+      updateCursor: false,
+      queryActions: async () => [action],
+      tradeStore: { addTrade(playerId, trade) { inserted.push({ playerId, trade }); return { id: 1 }; } },
+    }
+  );
+  assert.equal(result.imported, 1);
+  assert.equal(inserted.length, 1);
+  const { trade } = inserted[0];
+  // Tournament windows and quest days filter on created_at, so a trade
+  // imported late (worker restart, Subsquid lag) must keep its on-chain time.
+  assert.equal(trade.createdAt, '2026-08-14 01:00:00');
+  assert.equal(trade.side, 'short');
+  assert.equal(trade.notional_usd, 250);
+  assert.equal(trade.clientOrderId, 'gmx:open:0x0000000000000000000000000000000000000002:0xorder');
+}
+
 assertLegacyRowPreserved()
+  .then(assertAttributedRowUsesExecutionTime)
   .then(() => console.log('GMX_UI_FEE_ATTRIBUTION_TEST_PASS'))
   .catch((error) => {
     console.error(error);

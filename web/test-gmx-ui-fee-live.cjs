@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const { GmxApiSdk } = require('@gmx-io/sdk/v2');
 
-const RECEIVER = '0x412A02Ba415e5969596E6f0A35f9439760a3468F';
+const RECEIVER = '0x39B36f1EDF2eF5a6f2e02991b3a85Fb356eB5005';
 const READ_ONLY_FROM = '0x39B36f1EDF2eF5a6f2e02991b3a85Fb356eB5005';
 const SUBSQUID = 'https://gmx.squids.live/gmx-synthetics-arbitrum/graphql';
 

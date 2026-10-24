@@ -32,6 +32,8 @@ const ARBITRUM_RPC = process.env.ARBITRUM_RPC_URL || 'https://arb1.arbitrum.io/r
 // HttpClientWithFallback.
 const GMX_API_PRIMARY = 'https://arbitrum.gmxapi.io/v1';
 const GMX_API_FALLBACK = 'https://arbitrum.gmxapi.ai/v1';
+// A hung primary must not stall the route; fall through to the failover.
+const GMX_API_TIMEOUT_MS = 10_000;
 
 // USDC on Arbitrum (native, not bridged). Used for balance reads.
 const USDC_ADDRESS = '0xaf88d065e77c8cC2239327C5EDb3A432268e5831';
@@ -46,7 +48,7 @@ async function fetchJsonWithFallback(path, query) {
   const qs = query ? `?${new URLSearchParams(query).toString()}` : '';
   for (const base of [GMX_API_PRIMARY, GMX_API_FALLBACK]) {
     try {
-      const r = await fetch(`${base}${path}${qs}`);
+      const r = await fetch(`${base}${path}${qs}`, { signal: AbortSignal.timeout(GMX_API_TIMEOUT_MS) });
       if (!r.ok) {
         if (base === GMX_API_FALLBACK) {
           throw new Error(`GMX REST ${r.status}: ${(await r.text()).slice(0, 200)}`);
@@ -60,6 +62,28 @@ async function fetchJsonWithFallback(path, query) {
     }
   }
   throw new Error('GMX REST unreachable');
+}
+
+// /markets and /prices are polled by every open GMX panel and both hit the
+// same ~200KB tickers payload. Share one upstream request per short window
+// (and coalesce concurrent callers) instead of one per client request.
+const TICKERS_TTL_MS = 5_000;
+let _tickersCache = { at: 0, data: null, inflight: null };
+async function fetchTickersCached() {
+  const now = Date.now();
+  if (_tickersCache.data && now - _tickersCache.at < TICKERS_TTL_MS) return _tickersCache.data;
+  if (_tickersCache.inflight) return _tickersCache.inflight;
+  const inflight = fetchJsonWithFallback('/markets/tickers')
+    .then((data) => {
+      _tickersCache = { at: Date.now(), data, inflight: null };
+      return data;
+    })
+    .catch((e) => {
+      _tickersCache = { ..._tickersCache, inflight: null };
+      throw e;
+    });
+  _tickersCache = { ..._tickersCache, inflight };
+  return inflight;
 }
 
 // ---------- Symbol parsing ----------
@@ -102,7 +126,7 @@ function fmtUsd(big) {
 // Markets list — Pacifica/Avantis shape so the cross-DEX `/markets` route
 // can return whatever the active DEX gives it without schema branching.
 async function getMarketInfo() {
-  const tickers = await fetchJsonWithFallback('/markets/tickers');
+  const tickers = await fetchTickersCached();
   const rows = (tickers || []).map(t => {
     const parsed = parseGmxMarketName(t?.symbol);
     if (parsed.isSwapOnly || !parsed.base) return null;
@@ -128,7 +152,7 @@ async function getMarketInfo() {
 }
 
 async function getPrices() {
-  const tickers = await fetchJsonWithFallback('/markets/tickers');
+  const tickers = await fetchTickersCached();
   const rows = (tickers || []).map(t => {
     const parsed = parseGmxMarketName(t?.symbol);
     if (parsed.isSwapOnly || !parsed.base) return null;
@@ -203,7 +227,9 @@ async function getPositionsByAddress(address) {
     return { success: false, error: 'invalid address', code: 400 };
   }
   try {
-    const data = await fetchJsonWithFallback('/positions/info', { account: address });
+    // Same path/query as GmxApiSdk.fetchPositionsInfo. The old
+    // `/positions/info?account=` form returns HTTP 400 from the v1 API.
+    const data = await fetchJsonWithFallback('/positions', { address });
     return { success: true, data: Array.isArray(data) ? data : (data?.positions || []) };
   } catch (e) {
     return { success: false, error: e?.message || 'GMX positions read failed', code: 500 };
@@ -215,7 +241,8 @@ async function getOrdersByAddress(address) {
     return { success: false, error: 'invalid address', code: 400 };
   }
   try {
-    const data = await fetchJsonWithFallback('/orders', { account: address });
+    // GmxApiSdk.fetchOrders uses `address`; `account` is rejected with 400.
+    const data = await fetchJsonWithFallback('/orders', { address });
     return { success: true, data: Array.isArray(data) ? data : (data?.orders || []) };
   } catch (e) {
     return { success: false, error: e?.message || 'GMX orders read failed', code: 500 };

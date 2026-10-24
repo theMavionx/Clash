@@ -1,6 +1,6 @@
 import { encodeAbiParameters, getAddress, keccak256 } from 'viem';
 
-const DEFAULT_GMX_UI_FEE_RECEIVER = '0x412A02Ba415e5969596E6f0A35f9439760a3468F';
+const DEFAULT_GMX_UI_FEE_RECEIVER = '0x39B36f1EDF2eF5a6f2e02991b3a85Fb356eB5005';
 const DEFAULT_GMX_UI_FEE_BPS = 1;
 
 function readViteEnv(name) {

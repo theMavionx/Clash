@@ -4773,6 +4773,13 @@ function EarningsDexCard({ row, snapshot = null, refreshing = false, onRefresh }
       <div className="earnings-meta">
         {address ? <span className="admin-mono">{short(address, 10, 5)}</span> : null}
         {extra.map((item) => <span key={item}>{item}</span>)}
+        {row.dex === 'gmx' && <>
+          <span>UI fee receiver <span className="admin-mono">{short(row.ui_fee_receiver || '', 10, 5)}</span> · {row.ui_fee_configured
+            ? `active ${row.ui_fee_factor_bps_onchain} bps on-chain`
+            : `NOT ACTIVE on-chain (${row.ui_fee_factor_bps_onchain || 0} bps). Connect this wallet in the GMX terminal and press "Activate ${row.ui_fee_bps || 1} bps"`}</span>
+          <span>Referral <span className="admin-mono">{short(row.affiliate_address || '', 10, 5)}</span> · code clashofperps</span>
+          <span>Claimable UI fees {fmtUsd(Number(row.claimable_ui_fee_usd || 0), 6)}</span>
+        </>}
         {row.dex === 'imperial' && <>
           <span>Builder {row.builder_code || 'CLASH'} · {row.active ? 'active' : 'unavailable'}</span>
           <span>{row.builder_fee_bps ?? '—'} bps on collateral per open/close</span>

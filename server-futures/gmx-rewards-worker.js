@@ -36,11 +36,34 @@ const ORDER_TYPE = {
   LIMIT_DECREASE: 5,
   STOP_LOSS_DECREASE: 6,
   LIQUIDATION: 7,
+  // gmx-synthetics Order.OrderType (v2.2+): stop-market increase.
+  STOP_INCREASE: 8,
 };
+
+// Network bounds. Subsquid can hang for minutes on a slow query; without a
+// timeout one stuck wallet stalls the whole poll loop.
+const SUBSQUID_TIMEOUT_MS = Math.max(1000, Number(process.env.GMX_SUBSQUID_TIMEOUT_MS || 20_000));
+const GMX_API_TIMEOUT_MS = 10_000;
+const POLL_CONCURRENCY = Math.max(1, Math.min(16, Number(process.env.GMX_POLL_CONCURRENCY || 4)));
+
+// GMX trade timestamp (unix seconds) -> SQLite UTC datetime, the same format
+// as trade_history's datetime('now') default. Tournament windows and quest
+// days filter on created_at, so it must be execution time, not import time.
+function sqlDateFromUnixSeconds(ts) {
+  const n = Number(ts);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return new Date(Math.floor(n) * 1000).toISOString().slice(0, 19).replace('T', ' ');
+}
 
 function fmtUsd30(big) {
   if (big == null) return null;
-  try { return Number(BigInt(big)) / 1e30; } catch { return null; }
+  // Split integer/fraction in BigInt first: Number(x) / 1e30 turns an exact
+  // $250 into 249.99999999999997 in trade_history.amount/notional_usd.
+  try {
+    const value = BigInt(big);
+    const scale = 10n ** 30n;
+    return Number(value / scale) + Number((value % scale) / (10n ** 18n)) / 1e12;
+  } catch { return null; }
 }
 
 let _marketsByAddr = null;
@@ -53,7 +76,7 @@ async function getMarketsCache() {
     let rows = null;
     for (const u of urls) {
       try {
-        const r = await fetch(u);
+        const r = await fetch(u, { signal: AbortSignal.timeout(GMX_API_TIMEOUT_MS) });
         if (r.ok) { rows = await r.json(); break; }
       } catch {}
     }
@@ -119,6 +142,7 @@ async function querySubsquid(account, sinceTs) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ query, variables: { acc: account, since: sinceTs } }),
+    signal: AbortSignal.timeout(SUBSQUID_TIMEOUT_MS),
   });
   if (!r.ok) throw new Error(`subsquid HTTP ${r.status}`);
   const j = await r.json();
@@ -128,14 +152,18 @@ async function querySubsquid(account, sinceTs) {
 
 function classifyOrderAction(a) {
   const ot = Number(a?.orderType);
-  const isOpen = ot === ORDER_TYPE.MARKET_INCREASE || ot === ORDER_TYPE.LIMIT_INCREASE;
+  const isOpen = ot === ORDER_TYPE.MARKET_INCREASE
+    || ot === ORDER_TYPE.LIMIT_INCREASE
+    || ot === ORDER_TYPE.STOP_INCREASE;
   const isClose = ot === ORDER_TYPE.MARKET_DECREASE
     || ot === ORDER_TYPE.LIMIT_DECREASE
     || ot === ORDER_TYPE.STOP_LOSS_DECREASE;
   if (!isOpen && !isClose) return null;
   const orderType = ot === ORDER_TYPE.LIMIT_INCREASE
     ? 'limit'
-    : ot === ORDER_TYPE.LIMIT_DECREASE
+    : ot === ORDER_TYPE.STOP_INCREASE
+      ? 'stop-market'
+      : ot === ORDER_TYPE.LIMIT_DECREASE
       ? 'take-profit'
       : ot === ORDER_TYPE.STOP_LOSS_DECREASE
         ? 'stop-loss'
@@ -221,6 +249,7 @@ async function importActionsForRow(row, marketsByAddr, {
         dex: 'gmx',
         notional_usd: notionalUsd,
         verifiedSource: 'worker',
+        createdAt: sqlDateFromUnixSeconds(a.timestamp),
         fee: String(builderFeeUsd),
         proofJson: JSON.stringify({
           attribution: 'gmx_ui_fee',
@@ -266,10 +295,22 @@ async function pollOnce(mainDb) {
 
   const marketsByAddr = await getMarketsCache();
   let creditsQueued = 0;
-  for (const row of rows) {
-    const result = await importActionsForRow(row, marketsByAddr, { updateCursor: true });
-    creditsQueued += result.imported;
-  }
+  // Cursors are per wallet, so wallets are independent. A small worker pool
+  // keeps one tick well under POLL_MS as the GMX player list grows, instead
+  // of N sequential Subsquid round-trips.
+  let next = 0;
+  const workers = Array.from({ length: Math.min(POLL_CONCURRENCY, rows.length) }, async () => {
+    while (next < rows.length) {
+      const row = rows[next++];
+      try {
+        const result = await importActionsForRow(row, marketsByAddr, { updateCursor: true });
+        creditsQueued += result.imported;
+      } catch (e) {
+        console.warn('[gmx-rewards-worker] wallet import failed:', conciseRpcError(e));
+      }
+    }
+  });
+  await Promise.all(workers);
   return creditsQueued;
 }
 
@@ -304,12 +345,19 @@ function start() {
     return;
   }
 
+  // A slow tick (Subsquid lag) must not overlap the next one: overlapping
+  // ticks race on the shared per-wallet cursor maps and double the load.
+  let running = false;
   const tick = async () => {
+    if (running) return;
+    running = true;
     try {
       const n = await pollOnce(mainDb);
       if (n > 0) console.log(`[gmx-rewards-worker] Recorded ${n} GMX trade(s)`);
     } catch (e) {
       console.error('[gmx-rewards-worker] tick failed:', e?.message || e);
+    } finally {
+      running = false;
     }
   };
 
@@ -331,4 +379,5 @@ module.exports = {
   GMX_UI_FEE_FACTOR,
   GMX_UI_FEE_ATTRIBUTION_CUTOVER_TS,
   applyUiFeeAttributionCutover,
+  sqlDateFromUnixSeconds,
 };

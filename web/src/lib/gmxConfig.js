@@ -62,8 +62,10 @@ export async function ensureArbitrumChain(provider) {
   }
 }
 
-// Subsquid GraphQL — used by GmxSdk v1 for trade history. Phase 2 wires this.
-export const GMX_SUBSQUID_URL = 'https://gmx.squids.live/gmx-synthetics-arbitrum:live/api/graphql';
+// Subsquid GraphQL — trade history. The old `:live/api/graphql` path now
+// returns 404; this is the endpoint server-futures/gmx-rewards-worker.js
+// polls (`:prod/api/graphql` is an equivalent alias).
+export const GMX_SUBSQUID_URL = 'https://gmx.squids.live/gmx-synthetics-arbitrum/graphql';
 
 // Oracle keeper URL — required by GmxSdk v1 (`oracle.fetchTickers()`,
 // `tokens.getTokenRecentPrices`). The SDK has internal defaults but does
@@ -80,7 +82,13 @@ export const GMX_ORACLE_URL = 'https://arbitrum-api.gmxinfra.io';
 // `sdk.orders.long(...)` write will revert with "InsufficientAllowance" if
 // allowance(account, router) < payAmount.
 export const GMX_SYNTHETICS_ROUTER = '0x7452c558d45f8afC8c83dAe62C3f8A5BE19c71f6';
-export const GMX_EXCHANGE_ROUTER = '0x1C3fa76e6E1088bCE750f23a5BFcffa1efEF6A41';
+// Current ExchangeRouter. The SDK-bundled 0x1C3fa76e...6A41 lost its
+// CONTROLLER role in GMX's RoleStore (calls revert with Unauthorized,
+// selector 0xa35b150b). This router holds CONTROLLER, points at the same
+// Router + DataStore, and is the `to` that GMX's /orders/txns/prepare API
+// returns. Called directly only for `setUiFeeFactor`; trades are sent to
+// whatever router the prepare payload names.
+export const GMX_EXCHANGE_ROUTER = '0x7dE39FF2e232A2203196788d37e234cF8F1b83f1';
 
 // Native USDC on Arbitrum (Circle's official, post-bridge migration). The
 // bridged variant (USDC.e, 0xff97...DDB5CC8) still exists but liquidity has
