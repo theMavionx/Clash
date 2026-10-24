@@ -428,8 +428,8 @@ html {
 .futures-terminal-header { flex-shrink: 0; }
 .futures-terminal-header button { box-shadow: none !important; }
 .futures-market-strip {
-  border: 1px solid var(--terminal-border);
-  border-radius: 16px;
+  /* No outer frame: the symbol, margin and balance pills carry their own borders. */
+  border: 0;
   min-height: 64px;
   padding: 10px 12px !important;
   margin-bottom: 8px;
