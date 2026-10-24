@@ -187,7 +187,7 @@ export default function MyCopyBots({ token, onEdit, onBrowse, refreshKey = 0 }) 
                   )}
                   {bot.status !== 'stopped' && <Btn size="sm" icon="stop" disabled={Boolean(busyLabel)} onClick={() => setConfirm({ bot, kind: 'stop' })}>Stop</Btn>}
                   {bot.executionMode === 'live' && <Btn size="sm" icon="close" disabled={Boolean(busyLabel)} onClick={() => setConfirm({ bot, kind: 'flatten' })}>Close all</Btn>}
-                  <Btn size="sm" icon="edit" disabled={Boolean(busyLabel) || locked} onClick={() => onEdit?.(bot)}>Edit</Btn>
+                  <Btn size="sm" icon="edit" disabled={Boolean(busyLabel) || locked} onClick={() => onEdit?.(bot)}>Budget</Btn>
                   <Btn size="sm" variant="ghost" icon="trash" disabled={Boolean(busyLabel)} onClick={() => setConfirm({ bot, kind: 'delete' })}>Delete</Btn>
                 </div>
               </article>

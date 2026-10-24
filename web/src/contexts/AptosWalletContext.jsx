@@ -140,7 +140,9 @@ export function AptosWalletProvider({ children }) {
     loginSignAndSubmit,
     getLoginAccountAddress,
     walletName: wallet?.name || null,
-  }), [address, publicKey, chainId, connected, hasProvider, connect, disconnect, loginSignMessage, loginSignAndSubmit, getLoginAccountAddress, wallet?.name]);
+    // Adapter key object (single/multi-key accounts) for ClashBot's Decibel ownership proof scheme.
+    rawPublicKey: account?.publicKey || null,
+  }), [address, publicKey, chainId, connected, hasProvider, connect, disconnect, loginSignMessage, loginSignAndSubmit, getLoginAccountAddress, wallet?.name, account?.publicKey]);
 
   return (
     <AptosWalletContext.Provider value={value}>

@@ -27,7 +27,8 @@ function verify(call, secret = SECRET) {
   const url = new URL(call.url);
   const h = call.init.headers;
   const raw = call.init.body || '';
-  const canonical = ['clash-partner-copy-v1', h['x-clash-partner-id'], h['x-clash-partner-user'], h['x-clash-partner-timestamp'],
+  const canonical = ['clash-partner-copy-v2', h['x-clash-partner-id'], h['x-clash-partner-user'], h['x-clash-partner-wallet'] || '',
+    h['x-clash-partner-client-ip'] || '', h['x-clash-partner-timestamp'],
     // ClashBot signs the API path from /v1/ (its public edge strips /copy-api).
     h['x-clash-partner-nonce'], call.init.method, url.pathname.replace(/^\/copy-api/, '') + url.search, crypto.createHash('sha256').update(raw).digest('hex')].join('\n');
   return crypto.createHmac('sha256', secret).update(canonical).digest('hex') === h['x-clash-partner-signature'];
@@ -92,7 +93,8 @@ async function run() {
 
   const before = calls.length;
   const rejects = [
-    { ...createBody, destinationVenue: 'lighter' },
+    { ...createBody, destinationVenue: 'pacifica' },
+    { ...createBody, executionMode: 'dry_run' },
     { ...createBody, executionMode: 'paper' },
     { ...createBody, config: { ...config, poolBot: true } },
     { ...createBody, config: { ...config, windDown: { at: 1 } } },
@@ -140,12 +142,76 @@ async function run() {
   await handler(request({ method: 'POST', path: '/bots/1%2F..%2Fadmin/status', body: { status: 'paused' } }), res);
   assert.equal(res.statusCode, 400);
   res = mockRes();
-  await handler(request({ method: 'PATCH', path: '/bots/9', body: { executionMode: 'dry_run', config, expectedConfigRevision: 'r1' } }), res);
+  await handler(request({ method: 'PATCH', path: '/bots/9', body: { executionMode: 'live', config, expectedConfigRevision: 'r1' } }), res);
   assert.equal(calls.at(-1).init.method, 'PATCH');
   res = mockRes();
   await handler(request({ method: 'GET', path: '/bots/9/diagnostics', query: { limit: '50' } }), res);
   assert.equal(new URL(calls.at(-1).url).search, '?limit=50');
   assert.ok(verify(calls.at(-1)));
+
+
+  // Live only: a PATCH to practice is refused.
+  res = mockRes();
+  await handler(request({ method: 'PATCH', path: '/bots/9', body: { executionMode: 'dry_run', config, expectedConfigRevision: 'r1' } }), res);
+  assert.equal(res.statusCode, 400);
+
+  // Token venues: the onboarding token is the only credential; Lighter needs the signed owner wallet.
+  res = mockRes();
+  reply = { status: 201, body: { item: { id: 11 } } };
+  const lighterReq = request({ method: 'POST', path: '/bots', body: { ...createBody, destinationVenue: 'lighter', destinationAccount: '12345',
+    credential: { onboardingToken: 'tok_abcdefghijklmnopqrstuvwxyz' } } });
+  await handler(lighterReq, res);
+  assert.equal(res.statusCode, 400, 'lighter provision needs the player wallet');
+  lighterReq.headers['x-copy-wallet'] = OWNER;
+  res = mockRes();
+  await handler(lighterReq, res);
+  assert.equal(res.statusCode, 201);
+  call = calls.at(-1);
+  assert.equal(call.init.headers['x-clash-partner-wallet'], OWNER);
+  assert.ok(verify(call));
+  for (const [venue, account, credential] of [
+    ['grvt', OWNER, { onboardingToken: 'tok_abcdefghijklmnopqrstuvwxyz', extra: 1 }],
+    ['decibel', OWNER, { token: 'tok_abcdefghijklmnop' }],
+    ['phoenix', 'So11111111111111111111111111111111111111112', { executionMode: 'agent_account' }],
+    ['gmx', OWNER, { owner: OWNER, subaccount: OWNER, privateKey: AGENT_PK, approval: {}, chainId: 42161, referralCode: 'x', uiFeeReceiver: AGENT, maxUiFeeBps: 1 }],
+  ]) {
+    res = mockRes();
+    await handler(request({ method: 'POST', path: '/bots', body: { ...createBody, destinationVenue: venue, destinationAccount: account, credential } }), res);
+    assert.equal(res.statusCode, 400, venue);
+  }
+  // GRVT provision carries the destination wallet as the signed owner.
+  res = mockRes();
+  await handler(request({ method: 'POST', path: '/bots', body: { ...createBody, destinationVenue: 'grvt', destinationAccount: OWNER,
+    credential: { onboardingToken: 'tok_abcdefghijklmnopqrstuvwxyz' } } }), res);
+  assert.equal(calls.at(-1).init.headers['x-clash-partner-wallet'], OWNER);
+
+  // Venue onboarding proxy: allowlisted ops only, wallet + client IP signed, decibel session forwarded.
+  const onboardingHandler = createClashbotCopyBots({ apiUrl: 'https://clashbot.example/copy-api', secret: SECRET, fetchImpl, clientIp: () => '203.0.113.9' });
+  const ondoReq = request({ method: 'POST', path: '/venues/ondo/challenge', body: { wallet: OWNER } });
+  res = mockRes();
+  await onboardingHandler(ondoReq, res);
+  assert.equal(res.statusCode, 400, 'ondo needs the wallet');
+  ondoReq.headers['x-copy-wallet'] = OWNER;
+  res = mockRes();
+  await onboardingHandler(ondoReq, res);
+  call = calls.at(-1);
+  assert.equal(new URL(call.url).pathname, '/copy-api/v1/partner/clash/copy/venues/ondo/challenge');
+  assert.equal(call.init.headers['x-clash-partner-client-ip'], '203.0.113.9');
+  assert.ok(verify(call));
+  const decibelReq = request({ method: 'POST', path: '/venues/decibel/prepare', body: { owner: '0x1' } });
+  decibelReq.headers['x-decibel-session'] = 'sess_abcdefghijklmnopqrstuvwxyz';
+  res = mockRes();
+  await onboardingHandler(decibelReq, res);
+  assert.equal(calls.at(-1).init.headers['x-decibel-session'], 'sess_abcdefghijklmnopqrstuvwxyz');
+  res = mockRes();
+  await onboardingHandler(request({ path: '/venues/lighter/accounts', query: { owner: OWNER, evil: 'x' } }), res);
+  assert.equal(new URL(calls.at(-1).url).search, `?owner=${OWNER}`);
+  for (const probe of [{ method: 'POST', path: '/venues/decibel/order' }, { method: 'POST', path: '/venues/hyperliquid/anything' },
+    { method: 'DELETE', path: '/venues/ondo/session' }, { path: '/venues/qfex/state' }]) {
+    res = mockRes();
+    await onboardingHandler(request({ ...probe, body: {} }), res);
+    assert.equal(res.statusCode, 404, JSON.stringify(probe));
+  }
 
   // Delete shreds the now-idle saved connection for that route.
   reply = { status: 200, body: { items: [{ id: 9, destinationVenue: 'hyperliquid', destinationAccount: OWNER }], deleted: { id: 9 } } };

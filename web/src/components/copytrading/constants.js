@@ -23,7 +23,7 @@ export const VENUE_NAMES = {
   reya: 'Reya', dydx: 'dYdX', ostium: 'Ostium', hyperliquid: 'Hyperliquid', pacifica: 'Pacifica',
   decibel: 'Decibel', nado: 'NADO', risex: 'RISEx', lighter: 'Lighter', rhlighter: 'Robinhood Lighter',
   phoenix: 'Phoenix', ondo: 'Ondo Perps', grvt: 'GRVT', aster: 'Aster', hotstuff: 'Hotstuff',
-  katana: 'Katana', gmx: 'GMX',
+  katana: 'Katana', gmx: 'GMX', arcus: 'Arcus', bulk: 'BULK', qfex: 'QFEX',
 };
 
 const EXTRA_LOGOS = {

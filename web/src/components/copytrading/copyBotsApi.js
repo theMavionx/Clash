@@ -6,7 +6,7 @@ import { CopyApiError } from './copyTradingApi';
 
 const BASE = '/api/v1/copy-bots';
 
-async function call(token, method, path, { body, query, signal } = {}) {
+async function call(token, method, path, { body, query, signal, headers } = {}) {
   const search = query ? `?${new URLSearchParams(query)}` : '';
   let response;
   try {
@@ -15,6 +15,7 @@ async function call(token, method, path, { body, query, signal } = {}) {
       headers: botAuthHeaders(token, {
         accept: 'application/json',
         ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+        ...(headers || {}),
       }),
       body: body === undefined ? undefined : JSON.stringify(body),
       signal,
@@ -37,7 +38,20 @@ async function call(token, method, path, { body, query, signal } = {}) {
 
 export const copyBotsStatus = (token, signal) => call(token, 'GET', '/status', { signal });
 export const listCopyBots = (token, signal) => call(token, 'GET', '/bots', { signal });
-export const createCopyBot = (token, body) => call(token, 'POST', '/bots', { body });
+/** Create a live bot. `wallet` is the player's EVM wallet (owner for Lighter / GRVT / Ondo onboarding tokens). */
+export const createCopyBot = (token, body, wallet) => call(token, 'POST', '/bots', { body, headers: wallet ? { 'x-copy-wallet': wallet } : undefined });
+/**
+ * ClashBot venue onboarding step through the Clash server (signed partner channel).
+ * `op` is the ClashBot route below /v1/copy/venues/<venue>/, e.g. 'api-key/prepare'.
+ */
+export function copyVenueRequest(token, venue, op, { method = 'POST', body, query, wallet, decibelSession } = {}) {
+  const headers = {};
+  if (wallet) headers['x-copy-wallet'] = wallet;
+  if (decibelSession) headers['x-decibel-session'] = decibelSession;
+  return call(token, method, `/venues/${venue}/${op}`, {
+    body: method === 'GET' ? undefined : (body || {}), query, headers,
+  });
+}
 export const updateCopyBot = (token, id, body) => call(token, 'PATCH', `/bots/${id}`, { body });
 export const setCopyBotStatus = (token, id, status, force) =>
   call(token, 'POST', `/bots/${id}/status`, { body: force === undefined ? { status } : { status, force } });

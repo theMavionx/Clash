@@ -1660,6 +1660,12 @@ function BotsPanel({ onClose }) {
     aptosWalletAddress,
   ]);
 
+  // ClashBot copy connectors also sign Solana (Phoenix) and Aptos (Decibel) transactions.
+  const copyWalletCtx = useMemo(
+    () => ({ ...gameSyncWalletCtx, solWallet, aptosWallet }),
+    [gameSyncWalletCtx, solWallet, aptosWallet],
+  );
+
   const gameSetupSyncOpts = useMemo(() => ({
     evmProvider: evmWallet?.provider,
     walletAddress: evmWallet?.address,
@@ -4936,7 +4942,7 @@ function BotsPanel({ onClose }) {
               </div>
             )}
           >
-            <CopyTradingSection player={player} walletCtx={gameSyncWalletCtx} />
+            <CopyTradingSection player={player} walletCtx={copyWalletCtx} />
           </Suspense>
         ) : view === 'launch'
           ? renderLaunch()
