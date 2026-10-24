@@ -79,27 +79,31 @@ export function hasGameConnection(venue, owner) {
   return false;
 }
 
-async function authorizeHyperliquid(owner, walletCtx, onProgress) {
+async function authorizeHyperliquid(owner, walletCtx, onProgress, onStage) {
   if (!walletCtx?.evmProvider && !walletCtx?.walletClient) throw new Error('Connect your EVM wallet to authorise ClashBot on Hyperliquid.');
   const connected = String(walletCtx.evmWalletAddress || walletCtx.walletAddress || '').toLowerCase();
   if (connected && connected !== owner) throw new Error(`Switch your wallet to ${owner.slice(0, 6)}…${owner.slice(-4)} to authorise this account.`);
+  onStage?.('network');
   if (typeof walletCtx.ensureChain === 'function') await walletCtx.ensureChain(HYPERLIQUID_ARBITRUM_CHAIN_ID);
   const exchange = createHyperliquidExchangeClient(createHyperliquidWalletAdapter({
     address: owner, provider: walletCtx.evmProvider, walletClient: walletCtx.walletClient,
   }));
   const info = createHyperliquidInfoClient();
+  onStage?.('builder');
   const approvedFee = Number(await info.maxBuilderFee({ user: owner, builder: CLASHBOT_HYPERLIQUID_BUILDER }).catch(() => 0)) || 0;
   if (approvedFee < HL_MIN_BUILDER_TENTH_BPS) {
     onProgress?.('Approve the 0.01% ClashBot builder fee in your wallet…');
     const result = await exchange.approveBuilderFee({ builder: CLASHBOT_HYPERLIQUID_BUILDER, maxFeeRate: '0.01%' });
     if (result?.status === 'err' || result?.error) throw new Error(String(result?.response || result?.error || 'Builder fee approval failed'));
   }
+  onStage?.('agent');
   const privateKey = generatePrivateKey();
   const address = privateKeyToAccount(privateKey).address.toLowerCase();
   const validUntil = Date.now() + HL_AGENT_DAYS * 24 * 60 * 60 * 1000;
   onProgress?.('Approve the ClashBot API wallet in your wallet…');
   const approval = await exchange.approveAgent({ agentAddress: address, agentName: `clashbot-copy valid_until ${validUntil}` });
   if (approval?.status === 'err' || approval?.error) throw new Error(String(approval?.response || approval?.error || 'Agent approval failed'));
+  onStage?.('verify');
   onProgress?.('Waiting for Hyperliquid to confirm…');
   for (let attempt = 0; attempt < 40; attempt += 1) {
     const agents = await info.extraAgents({ user: owner }).catch(() => []);
@@ -127,21 +131,24 @@ async function readBulkAgent(owner) {
  * prompts (Hyperliquid). Throws a player-facing message when the game has no
  * usable connection yet.
  */
-export async function obtainTradeOnlyCredential({ venue, owner, walletCtx, onProgress }) {
+export async function obtainTradeOnlyCredential({ venue, owner, walletCtx, onProgress, onStage }) {
   switch (venue) {
     case 'hyperliquid':
-      return authorizeHyperliquid(String(owner).toLowerCase(), walletCtx, onProgress);
+      return authorizeHyperliquid(String(owner).toLowerCase(), walletCtx, onProgress, onStage);
     case 'nado': {
+      onStage?.('signer');
       const signer = readNadoLinkedSigner(owner);
       if (!signer?.privateKey) throw new Error(GAME_COPY_DESTINATIONS.nado.setup);
       return { privateKey: signer.privateKey, signerAddress: signer.address, subaccountName: 'default' };
     }
     case 'risex': {
+      onStage?.('signer');
       const signer = readRisexSigner(owner);
       if (!signer?.privateKey) throw new Error(GAME_COPY_DESTINATIONS.risex.setup);
       return { privateKey: signer.privateKey, expiresAt: Number(signer.expiresAt), builderFeeMaxHundredthBps: 100 };
     }
     case 'bulk':
+      onStage?.('agent');
       return readBulkAgent(owner);
     default:
       throw new Error('This exchange is not available for in-game copy bots yet.');

@@ -43,7 +43,8 @@ function splitSignature(signature) {
  * @returns {Promise<{ destinationAccount: string, credential: object }>}
  */
 export async function connect(ctx) {
-  const { walletCtx, onProgress } = ctx || {};
+  const { walletCtx, onProgress, onStage } = ctx || {};
+  onStage?.('wallet');
   const wallet = walletCtx?.evmProvider;
   if (!wallet?.request) throw new Error('Connect your EVM wallet to set up Arcus.');
   const address = owner(walletCtx);
@@ -71,6 +72,7 @@ export async function connect(ctx) {
     primaryType: 'CreateApiKey',
     message: { apiWalletName: KEY_NAME, apiWalletPublicKey: publicKey, validUntil, nonce, accountIndex: ACCOUNT_INDEX },
   };
+  onStage?.('api_key');
   onProgress?.('Sign the Arcus API key request in your wallet…');
   let signature;
   try {
@@ -80,6 +82,7 @@ export async function connect(ctx) {
     throw error;
   }
 
+  onStage?.('register');
   onProgress?.('Registering the ClashBot API key at Arcus…');
   let response;
   try {

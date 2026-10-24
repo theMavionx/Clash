@@ -96,19 +96,23 @@ const big = (value) => {
  * @returns {Promise<{ destinationAccount: string, credential: object }>}
  */
 export async function connect(ctx) {
-  const { walletCtx, onProgress } = ctx || {};
+  const { walletCtx, onProgress, onStage } = ctx || {};
+  onStage?.('wallet');
   const wallet = provider(walletCtx);
   const owner = address(walletCtx?.evmWalletAddress || walletCtx?.walletAddress, 'GMX wallet');
+  onStage?.('network');
   if (typeof walletCtx?.ensureChain === 'function') await walletCtx.ensureChain(CHAIN_ID);
 
   // GMX's deterministic one-click subaccount: keccak256 of the owner's
   // signature over GMX's fixed 1CT message (same derivation as GMX and ClashBot).
+  onStage?.('session');
   onProgress?.('Sign the GMX one-click trading session in your wallet…');
   const sessionSignature = await personalSign(wallet, owner, SUBACCOUNT_MESSAGE);
   const privateKey = keccak256(sessionSignature);
   const subaccount = privateKeyToAccount(privateKey).address.toLowerCase();
   if (subaccount === owner) throw new Error('GMX subaccount derivation failed');
 
+  onStage?.('approval');
   const status = await gmxApi('/v1/subaccounts/status', { account: owner, subaccountAddress: subaccount });
   const requestedExpiry = BigInt(Math.floor(Date.now() / 1000) + APPROVAL_SECONDS);
   const expiresAt = big(status?.expiresAt) > requestedExpiry ? big(status.expiresAt) : requestedExpiry;
@@ -164,6 +168,7 @@ export async function connect(ctx) {
   };
 
   // Orders draw USDC collateral through the GMX router.
+  onStage?.('collateral');
   const allowances = await gmxApi(`/v1/allowances?address=${owner}&spender=router`);
   const usdcAllowance = big((Array.isArray(allowances) ? allowances : []).find((row) => String(row?.address || '').toLowerCase() === USDC)?.allowance);
   const required = BigInt(Math.max(1, Math.ceil(Number(ctx?.requiredAllocationUsd || 1) * 1_000_000)));

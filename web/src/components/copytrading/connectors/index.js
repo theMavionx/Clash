@@ -1,6 +1,7 @@
 // Every destination ClashBot's production runtime executes, with the in-game
 // step that hands ClashBot a trade-only connection for it. Each connector
-// returns { destinationAccount, credential, ownerWallet? } for provision.
+// returns { destinationAccount, credential, ownerWallet? } for provision and
+// reports progress through `onStage(id)` with the step ids in ./steps.js.
 import { GAME_COPY_DESTINATIONS, defaultDestinationAccount, obtainTradeOnlyCredential } from '../copyConnections';
 import * as arcus from './arcus';
 import * as decibel from './decibel';
@@ -16,10 +17,11 @@ function gameConnection(venue) {
   return {
     chain: info.chain,
     label: info.authorize,
-    async connect({ player, walletCtx, onProgress }) {
+    async connect({ player, walletCtx, onProgress, onStage }) {
+      onStage?.('wallet');
       const owner = defaultDestinationAccount(venue, player, walletCtx);
       if (!owner) throw new Error(info.chain === 'solana' ? 'Connect your Solana wallet in the game first.' : 'Connect your EVM wallet in the game first.');
-      return { destinationAccount: owner, credential: await obtainTradeOnlyCredential({ venue, owner, walletCtx, onProgress }) };
+      return { destinationAccount: owner, credential: await obtainTradeOnlyCredential({ venue, owner, walletCtx, onProgress, onStage }) };
     },
   };
 }

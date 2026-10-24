@@ -20,13 +20,17 @@ function splitSignature(signature) {
   return { r: `0x${hex.slice(0, 64)}`, s: `0x${hex.slice(64, 128)}`, v };
 }
 
-export async function connect({ token, walletCtx, onProgress }) {
+export async function connect({ token, walletCtx, onProgress, onStage }) {
+  onStage?.('wallet');
   const owner = evmOwner(walletCtx);
   const call = (op, options) => copyVenueRequest(token, 'grvt', op, { wallet: owner, ...options });
+  onStage?.('service');
   const config = await call('config', { method: 'GET' });
   if (config && (config.configured === false || config.setupAvailable === false)) throw new Error('GRVT setup is not available on ClashBot right now.');
+  onStage?.('network');
   onProgress?.('Switch your wallet to GRVT Exchange…');
   await ensureGrvtChain(walletCtx.evmProvider);
+  onStage?.('signer');
   const prepared = await call('onboarding/prepare', { body: {} });
   if (String(prepared?.owner || '').toLowerCase() !== owner) throw new Error('GRVT authorisation belongs to another wallet.');
   onProgress?.('Approve the ClashBot trading signer in your wallet…');
@@ -40,6 +44,7 @@ export async function connect({ token, walletCtx, onProgress }) {
       },
     },
   });
+  onStage?.('account');
   if (result?.state === 'selecting') {
     const subAccountId = Array.isArray(result.subAccountIds) ? result.subAccountIds[0] : null;
     if (!subAccountId) throw new Error('No GRVT trading sub-account found. Create one on GRVT first.');

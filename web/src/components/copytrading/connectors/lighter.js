@@ -18,9 +18,11 @@ function pick(object, ...names) {
   return undefined;
 }
 
-export async function connect({ token, walletCtx, onProgress, venue = 'lighter' }) {
+export async function connect({ token, walletCtx, onProgress, onStage, venue = 'lighter' }) {
+  onStage?.('wallet');
   const owner = evmOwner(walletCtx);
   const call = (op, options) => copyVenueRequest(token, venue, op, { wallet: owner, ...options });
+  onStage?.('account');
   onProgress?.('Looking up your Lighter account…');
   const accounts = await call('accounts', { method: 'GET', query: { owner } });
   const list = Array.isArray(accounts?.accounts) ? accounts.accounts : [];
@@ -28,6 +30,7 @@ export async function connect({ token, walletCtx, onProgress, venue = 'lighter' 
   if (!account) throw new Error(`No ${venue === 'rhlighter' ? 'Robinhood Lighter' : 'Lighter'} account belongs to ${owner.slice(0, 6)}…${owner.slice(-4)}. Deposit on Lighter first.`);
   const accountIndex = Number(account.accountIndex);
 
+  onStage?.('api_key');
   let session;
   try {
     const prepared = await call('api-key/prepare', { body: { wallet: owner, accountIndex } });
@@ -53,6 +56,7 @@ export async function connect({ token, walletCtx, onProgress, venue = 'lighter' 
   const keyIndex = Number(pick(session, 'apiKeyIndex'));
   const base = { accountIndex, apiKeyIndex: keyIndex, onboardingToken, deployment: venue };
 
+  onStage?.('verify');
   for (let attempt = 0; attempt < 40; attempt += 1) {
     const status = await call('onboarding/status', { body: { onboardingToken } });
     if (status.status === 'ready') {
@@ -66,6 +70,7 @@ export async function connect({ token, walletCtx, onProgress, venue = 'lighter' 
       continue;
     }
     if (status.status === 'integrator_required' || status.status === 'integrator_signature_required') {
+      onStage?.('integrator');
       const integrator = await call('integrator/prepare', { body: { ...base, apiKeyIndex: Number(status.apiKeyIndex ?? keyIndex) } });
       if (!integrator?.alreadyApproved) {
         const message = pick(integrator, 'message_to_sign', 'message');

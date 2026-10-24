@@ -75,7 +75,8 @@ async function waitForSetup(token, owner, predicate) {
  * @returns {Promise<{ destinationAccount: string, credential: { token: string, expiresAt: number } }>}
  */
 export async function connect(ctx) {
-  const { token, walletCtx, onProgress } = ctx || {};
+  const { token, walletCtx, onProgress, onStage } = ctx || {};
+  onStage?.('wallet');
   const aptos = walletCtx?.aptosWallet;
   if (!aptos?.address || typeof aptos.signMessage !== 'function' || typeof aptos.loginSignAndSubmit !== 'function') {
     throw new Error('Connect your Aptos wallet (Petra) to set up Decibel.');
@@ -85,6 +86,7 @@ export async function connect(ctx) {
   const publicKey = rawPublicKey ? bytesHex(rawPublicKey) : bytesHex(aptos.publicKey);
   if (!publicKey) throw new Error('The Aptos wallet did not return a public key.');
 
+  onStage?.('ownership');
   const challenge = await copyVenueRequest(token, 'decibel', 'challenge', { body: { owner } });
   onProgress?.('Sign the ClashBot Decibel ownership message in your Aptos wallet…');
   let signed;
@@ -116,15 +118,18 @@ export async function connect(ctx) {
     onProgress?.(label);
     await aptos.loginSignAndSubmit({ data: { function: `${entry}::${fn}`, typeArguments: [], functionArguments: args } });
   };
+  onStage?.('account');
   if (!status.exists) {
     await submit('create_new_subaccount', [], 'Approve creating your Decibel trading subaccount in your Aptos wallet…');
     status = await waitForSetup(token, owner, (value) => value.exists);
   }
+  onStage?.('delegation');
   if (!status.delegated) {
     await submit('delegate_trading_to_for_subaccount', [status.subaccount, status.apiWallet, null],
       'Approve delegating Decibel trading to ClashBot in your Aptos wallet…');
     status = await waitForSetup(token, owner, (value) => value.delegated);
   }
+  onStage?.('builder');
   if (!status.builderApproved) {
     await submit('approve_max_builder_fee_for_subaccount', [status.subaccount, status.builderSubaccount, status.builderFeeChainUnits],
       'Approve the ClashBot builder fee in your Aptos wallet…');

@@ -163,16 +163,19 @@ async function ensureTradingAccess({ token, client, connection, solWallet, owner
  * @returns {Promise<{ destinationAccount: string, credential: object }>}
  */
 export async function connect(ctx) {
-  const { token, walletCtx, onProgress } = ctx || {};
+  const { token, walletCtx, onProgress, onStage } = ctx || {};
+  onStage?.('wallet');
   const { solWallet, owner, signMessage } = solanaWallet(walletCtx);
   const connection = new Connection(SAME_ORIGIN_SOLANA_ALCHEMY_URL || DEFAULT_SOLANA_RPC_URL, 'confirmed');
   // No Flight builder wrapper: ClashBot requires builderRoutingEnabled=false.
   const client = createPhoenixTransactionClient(undefined, { disableFlight: true });
   try {
+    onStage?.('agent_key');
     onProgress?.('Sign the ClashBot Phoenix trading key message in your wallet…');
     const agent = await deriveAgent(owner, signMessage);
     if (agent.publicKey.equals(owner)) throw new Error('Phoenix agent derivation failed');
 
+    onStage?.('account');
     let { trader } = await traderAccount(client, connection, owner);
     if (!trader) {
       onProgress?.('Approve your Phoenix trader registration in your wallet…');
@@ -184,9 +187,11 @@ export async function connect(ctx) {
       throw new Error('Phoenix trader account does not belong to this wallet');
     }
 
+    onStage?.('referral');
     const access = await ensureTradingAccess({ token, client, connection, solWallet, owner, onProgress });
     const accessAt = Date.now();
 
+    onStage?.('fees');
     const agentBalance = await connection.getBalance(agent.publicKey, 'confirmed');
     if (agentBalance < MIN_AGENT_LAMPORTS) {
       const missing = MIN_AGENT_LAMPORTS - agentBalance;
@@ -199,6 +204,7 @@ export async function connect(ctx) {
         instructions: [SystemProgram.transfer({ fromPubkey: owner, toPubkey: agent.publicKey, lamports: missing })] });
     }
 
+    onStage?.('delegation');
     let delegationSignature;
     ({ trader } = await traderAccount(client, connection, owner));
     if (String(trader?.positionAuthority || '') !== agent.publicKey.toBase58()) {
@@ -208,6 +214,7 @@ export async function connect(ctx) {
       });
       delegationSignature = await sendOwner({ connection, solWallet, owner, instructions: instruction, label: 'clashbot.phoenix.delegate' });
     }
+    onStage?.('verify');
     let verified = '';
     for (let attempt = 0; attempt < 10; attempt += 1) {
       ({ trader } = await traderAccount(client, connection, owner));

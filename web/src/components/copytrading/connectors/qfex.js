@@ -13,8 +13,10 @@ export const requirements = {
   label: 'ClashBot receives the QFEX API key the game already uses for your account. Connect QFEX in Futures first.',
 };
 
-export async function connect({ walletCtx }) {
+export async function connect({ walletCtx, onStage }) {
+  onStage?.('wallet');
   const owner = evmOwner(walletCtx);
+  onStage?.('credentials');
   const stored = await readQfexCredentials();
   if (!stored?.publicKey || !stored?.secretKey) throw new Error('Connect QFEX in Futures -> QFEX first.');
   if (!/^qfex_pub_/.test(stored.publicKey) || !/^qfex_secret_/.test(stored.secretKey)) {
