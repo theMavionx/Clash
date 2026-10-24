@@ -227,7 +227,9 @@ export default function GameUI() {
   const [showBots, setShowBots] = useState(false);
   const [showVenuePicker, setShowVenuePicker] = useState(false);
   const [mmBotsAccess, setMmBotsAccess] = useState({ loaded: false, enabled: false });
-  const canUseMmBots = playerCanUseMmBots(player, mmBotsAccess);
+  // ClashBot copy trading is open to every signed-in player, so the tile renders
+  // immediately instead of waiting for the legacy MM-bots access check.
+  const canUseMmBots = !!(player?.token || player?.id) || playerCanUseMmBots(player, mmBotsAccess);
 
   useEffect(() => {
     const token = player?.token || (typeof window !== 'undefined' ? window._playerToken : null);
