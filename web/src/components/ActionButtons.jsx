@@ -7,7 +7,7 @@ import buildIcon from '../assets/resources/Gemini_Generated_Image_dl9plxdl9plxdl
 import attackIcon from '../assets/resources/file_000000006858720a8f860ee8da33335a.png';
 import chartIcon from '../assets/resources/chart.png';
 import goldIcon from '../assets/resources/gold_bar.png';
-import clashbotLogo from '../assets/resources/clashbot-logo.svg';
+import clashbotLogo from '../assets/resources/clashbot-logo.png';
 import tournamentIcon from '../assets/resources/tournament-icon.png';
 import buttonBg from '../assets/resources/file_00000000a6f87246844c6271b76cd436.png';
 import shipImg from '../assets/buildings/main_ship.png';

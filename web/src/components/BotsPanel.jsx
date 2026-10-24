@@ -58,7 +58,7 @@ import {
   planCalmFromBalance,
 } from '../lib/calmVolumePlan';
 import buttonBg from '../assets/resources/file_00000000a6f87246844c6271b76cd436.png';
-import clashbotLogo from '../assets/resources/clashbot-logo.svg';
+import clashbotLogo from '../assets/resources/clashbot-logo.png';
 
 // ClashBot copy trading lives in its own lazily loaded chunk.
 const CopyTradingSection = lazy(() => import('./copytrading/CopyTradingSection'));
