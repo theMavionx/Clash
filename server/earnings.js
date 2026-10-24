@@ -3200,6 +3200,16 @@ async function fetchQfexEarnings() {
     note: 'Verified Clash-attributed volume. Builder commission is not counted as revenue without a settlement source.' };
 }
 
+// Throne is an Orderly broker: broker/builder fee revenue accrues to Throne, not Clash.
+// Verified volume is reported for rewards analytics only and never counted as revenue.
+async function fetchThroneEarnings() {
+  const local = readVerifiedFuturesDexStats('throne', 'throne_orderly', { rowWhere: tradeRecon.verifiedSourceClauseForDex('throne') });
+  return { ...local, earned_usd: 0, currency: 'USD (Throne)',
+    user_fee_usd: local.fee_usd, estimated_fee_usd: 0, builder_fee_bps: 0,
+    model: 'throne_verified_volume_no_revenue', source_detail: 'throne_orderly_order_and_fill_proof',
+    note: 'Verified volume on Throne (Orderly broker "throne"). Broker fees go to Throne, so nothing is counted as Clash revenue.' };
+}
+
 async function fetchEtoroEarnings() {
   const local = readVerifiedFuturesDexStats('etoro', 'etoro_api');
   return {
@@ -3728,6 +3738,7 @@ const ANALYTICS_DEXES = [
   { key: 'domfi', label: 'DomFi' },
   { key: 'etoro', label: 'eToro' },
   { key: 'qfex', label: 'QFEX' },
+  { key: 'throne', label: 'Throne' },
   { key: 'gmx', label: 'GMX' },
   { key: 'ostium', label: 'Ostium' },
   { key: 'phoenix', label: 'Phoenix' },
@@ -3813,6 +3824,7 @@ function decibelFeeBpsForDate(value) {
 
 function tradeSourceWhereForAnalytics(dex) {
   if (dex === 'qfex') return tradeRecon.verifiedSourceClauseForDex('qfex');
+  if (dex === 'throne') return tradeRecon.verifiedSourceClauseForDex('throne');
   if (dex === 'domfi') return "verified_source = 'domfi_api'";
   if (dex === 'etoro') return "verified_source = 'etoro_api'";
   if (dex === 'decibel') return "verified_source IN ('decibel_fill', 'server')";
@@ -3874,6 +3886,8 @@ function revenueModelForDex(dex, dateForRate = null) {
       source_detail: 'domfi_api_volume_x_documented_referral_share_range',
     };
   }
+  if (dex === 'throne') return { configured: false, rate: 0, rate_label: 'Broker fees accrue to Throne',
+    builder_fee_bps: 0, builder_fee_pct: 0, model: 'throne_verified_volume_no_revenue', source_detail: 'throne_orderly_order_and_fill_proof' };
   if (dex === 'qfex') return { configured: false, rate: 0, rate_label: 'Commission settlement not indexed',
     builder_fee_bps: 0, builder_fee_pct: 0, model: 'qfex_verified_volume', source_detail: 'qfex_server_order_and_execution_proof' };
   if (dex === 'etoro') {
@@ -4547,6 +4561,7 @@ const EARNINGS_READER_CONFIG = {
   domfi: { source: 'domfi_api_volume_x_documented_referral_share_range', read: () => fetchDomfiEarnings() },
   etoro: { source: 'etoro_api_verified_volume_no_revenue_attribution', read: () => fetchEtoroEarnings() },
   qfex: { source: 'qfex_server_order_and_execution_proof', read: () => fetchQfexEarnings() },
+  throne: { source: 'throne_orderly_order_and_fill_proof', read: () => fetchThroneEarnings() },
   gmx: { source: 'gmx_claimable_ui_fee_datastore_exact', read: () => fetchGmxEarnings() },
   ostium: { source: 'arbitrum_usdc_balance_of_builder', read: ({ mainDb }) => fetchOstiumEarnings({ mainDb }) },
   phoenix: { source: 'phoenix_flight_collateral_transfers', read: ({ mainDb }) => fetchPhoenixEarnings({ mainDb }) },
@@ -4575,7 +4590,7 @@ const EARNINGS_DEX_ORDER = [
   'avantis',
   'domfi',
   'etoro',
-  'qfex',
+  'qfex', 'throne',
   'gmx',
   'ostium',
   'phoenix',

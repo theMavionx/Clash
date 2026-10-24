@@ -5,6 +5,7 @@ import { startDecibelOrderBook } from '../lib/decibelOrderBook';
 import { normalizeBulkOrderBook } from '../lib/bulkClient';
 import { ONDO_WS_URL, buildOndoWsPing, ondoMarketName } from '../lib/ondoClient';
 import { fetchQfexJson } from '../lib/qfexClient';
+import { fetchThroneJson, readThroneCredentials } from '../lib/throneClient';
 
 const PRICE_STEPS = [0.01, 0.02, 0.1, 1];
 const FUTURES_API = import.meta.env.VITE_FUTURES_API || '/api/futures';
@@ -112,6 +113,24 @@ function OrderBook({
       setBook({ bids: [], asks: [] });
       load();
       const timer = window.setInterval(load, 5000);
+      return () => { cancelled = true; controller.abort(); window.clearInterval(timer); };
+    }
+    if (dex === 'throne') {
+      // Orderly's order book is a read-scope private endpoint: use the saved Throne key.
+      let cancelled = false;
+      const controller = new AbortController();
+      let credentials = null;
+      const load = async () => {
+        try {
+          credentials = credentials || await readThroneCredentials();
+          if (!credentials) return;
+          const json = await fetchThroneJson(`/api/futures/throne/orderbook?symbol=${encodeURIComponent(symbol)}`, { token: window._playerToken, credentials, signal: controller.signal });
+          if (!cancelled) setBook(normalizePhoenixBook(json));
+        } catch { if (!cancelled) setBook({ bids: [], asks: [] }); }
+      };
+      setBook({ bids: [], asks: [] });
+      load();
+      const timer = window.setInterval(load, 4000);
       return () => { cancelled = true; controller.abort(); window.clearInterval(timer); };
     }
     if (dex === 'aster') {

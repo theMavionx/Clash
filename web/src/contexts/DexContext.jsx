@@ -23,6 +23,14 @@ export const DEX_CONFIG = {
     borderColor: '#5C78FF', chain: 'QFEX', chainShort: 'API',
     description: 'Trade with your QFEX API key',
   },
+  throne: {
+    id: 'throne', label: 'Throne', shortLabel: 'THRONE', emoji: 'T',
+    // Throne's official favicon, served from /public (fetched from throne.network).
+    logo: '/throne-logo.png', logoIsWordmark: false,
+    color: '#F5C542', colorDark: '#B8871A', colorLight: 'rgba(245,197,66,0.16)',
+    borderColor: '#F5C542', chain: 'Orderly', chainShort: 'ORDERLY',
+    description: 'Yield Court of Robinhood Chain: Orderly perps under broker throne',
+  },
   imperial: {
     id: 'imperial',
     label: 'IMPERIAL',
@@ -452,7 +460,7 @@ export const DEX_ORDER = [
   'avantis',
   'domfi',
   'etoro',
-  'qfex',
+  'qfex', 'throne',
   'ostium',
   'gmx',
   'monad',

@@ -10,7 +10,7 @@ const APTOS_WALLET_RE = /^0x[0-9a-fA-F]{1,64}$/;
 const FUTURES_REWARD_DEXES = new Set([
   'avantis',
   'domfi',
-  'etoro', 'qfex',
+  'etoro', 'qfex', 'throne',
   'decibel',
   'gmx',
   'ostium',
@@ -58,6 +58,7 @@ const DEX_REQUIRED_CHAIN = {
   katana: 'evm',
   lighter: 'evm',
   rhlighter: 'evm',
+  throne: 'evm',
 };
 
 const VERIFIED_SOURCES_BY_DEX = {
@@ -65,6 +66,8 @@ const VERIFIED_SOURCES_BY_DEX = {
   domfi: ['domfi_api'],
   etoro: ['etoro_api'],
   qfex: ['qfex_builder_api'],
+  // Fills of our own accepted orders on Orderly accounts registered under broker `throne`.
+  throne: ['throne_orderly'],
   decibel: ['decibel_fill', 'server'],
   gmx: ['worker', 'server'],
   ostium: ['ostium_api'],
@@ -92,7 +95,7 @@ const VERIFIED_SOURCES_BY_DEX = {
 const USER_SCOPED_IMPORT_DEXES = new Set([
   'decibel',
   'domfi',
-  'etoro', 'qfex',
+  'etoro', 'qfex', 'throne',
   'hyperliquid',
   'ostium',
   'gmtrade',
@@ -111,7 +114,7 @@ const USER_SCOPED_IMPORT_DEXES = new Set([
 ]);
 
 const CREDENTIAL_SCOPED_IMPORT_DEXES = new Set([
-  'etoro', 'qfex',
+  'etoro', 'qfex', 'throne',
   'hibachi',
   'katana',
   'grvt',
@@ -499,10 +502,46 @@ function qfexBuilderEligibilityClause() {
   ) ELSE 0 END)`;
 }
 
+function throneBrokerEligibilityClause() {
+  // Same proof model as QFEX: the fill row must carry Orderly's per-order fill of an order we
+  // placed ourselves (accepted/reconciled add_order intent with that order_id) on an account
+  // claimed by this player and registered under broker 'throne'. Credited once per fill id.
+  return `(CASE WHEN json_valid(trade_history.proof_json) THEN (
+    json_extract(proof_json, '$.broker_id') = 'throne'
+    AND trade_history.client_order_id = 'throne:' || json_extract(proof_json, '$.account_id') || ':fill:' || json_extract(proof_json, '$.fill.id')
+    AND trade_history.order_id = CAST(json_extract(proof_json, '$.fill.order_id') AS TEXT)
+    AND trade_history.order_id = json_extract(proof_json, '$.order_id')
+    AND trade_history.symbol = json_extract(proof_json, '$.fill.symbol')
+    AND CAST(trade_history.amount AS REAL) = abs(CAST(json_extract(proof_json, '$.fill.executed_quantity') AS REAL))
+    AND CAST(trade_history.price AS REAL) = CAST(json_extract(proof_json, '$.fill.executed_price') AS REAL)
+    AND CAST(trade_history.price AS REAL) > 0 AND CAST(trade_history.amount AS REAL) > 0
+    AND abs(trade_history.notional_usd - CAST(trade_history.amount AS REAL) * CAST(trade_history.price AS REAL)) <= max(0.00000001, trade_history.notional_usd * 0.000000001)
+    AND EXISTS (SELECT 1 FROM throne_action_intents ti
+      JOIN throne_account_claims tc ON tc.account_id = ti.account_id AND tc.player_id = ti.player_id AND tc.broker_id = 'throne'
+      WHERE ti.player_id = trade_history.player_id
+        AND ti.account_id = json_extract(trade_history.proof_json, '$.account_id')
+        AND ti.action_id = json_extract(trade_history.proof_json, '$.action_id')
+        AND ti.order_id = trade_history.order_id AND ti.kind = 'add_order'
+        AND ti.status IN ('accepted', 'reconciled') AND ti.broker_id = 'throne'
+        AND json_valid(ti.params_json)
+        AND json_extract(ti.params_json, '$.symbol') = trade_history.symbol
+        AND json_extract(ti.params_json, '$.side') = json_extract(trade_history.proof_json, '$.fill.side')
+        AND CAST(trade_history.amount AS REAL) <= CAST(json_extract(ti.params_json, '$.order_quantity') AS REAL)
+        AND trade_history.side = CASE
+          WHEN json_extract(ti.params_json, '$.reduce_only') = 1 THEN
+            CASE json_extract(ti.params_json, '$.side') WHEN 'SELL' THEN 'close_long' ELSE 'close_short' END
+          ELSE CASE json_extract(ti.params_json, '$.side') WHEN 'BUY' THEN 'open_long' ELSE 'open_short' END END)
+    AND NOT EXISTS (SELECT 1 FROM trade_history earlier
+      WHERE earlier.dex = 'throne' AND earlier.id < trade_history.id
+        AND earlier.client_order_id = trade_history.client_order_id)
+  ) ELSE 0 END)`;
+}
+
 function verifiedSourceClauseForDex(dex) {
   const normalizedDex = String(dex || '').toLowerCase();
   const sources = VERIFIED_SOURCES_BY_DEX[normalizedDex] || ['worker'];
   if (normalizedDex === 'qfex') return `verified_source = ${sqlQuote(sources[0])} AND ${qfexBuilderEligibilityClause()}`;
+  if (normalizedDex === 'throne') return `verified_source = ${sqlQuote(sources[0])} AND ${throneBrokerEligibilityClause()}`;
   if (normalizedDex === 'ostium') {
     return `verified_source = ${sqlQuote(sources[0])} AND ${ostiumBuilderEligibilityClause()}`;
   }
@@ -655,6 +694,13 @@ function adapterCredentials(dex, wallet, headers = {}, opts = {}) {
     const accountId = headerValue(headers, 'x-qfex-account-id') || opts.accountId;
     return publicKey && secretKey ? { publicKey, secretKey, accountId } : null;
   }
+  if (dex === 'throne') {
+    const accountId = headerValue(headers, 'x-throne-account-id') || opts.accountId;
+    const orderlyKey = headerValue(headers, 'x-throne-orderly-key') || opts.orderlyKey;
+    const orderlySecret = headerValue(headers, 'x-throne-orderly-secret') || opts.orderlySecret;
+    const address = headerValue(headers, 'x-throne-address') || opts.address;
+    return accountId && orderlyKey && orderlySecret && address ? { accountId, orderlyKey, orderlySecret, address } : null;
+  }
   if (dex === 'etoro') {
     const apiKey = headerValue(headers, 'x-etoro-api-key') || opts.apiKey || opts.api_key;
     const userKey = headerValue(headers, 'x-etoro-user-key') || opts.userKey || opts.user_key;
@@ -731,6 +777,12 @@ async function runDexAdapter(player, dex, wallet, opts = {}) {
     const creds = adapterCredentials(dex, wallet, opts.headers, opts.credentials || opts);
     if (!creds) return { ok: false, skipped: 'browser_credentials_required', dex };
     return { dex, ...(await require('../server-futures/qfex').importTradesForPlayer(playerId, creds, { limit })) };
+  }
+
+  if (dex === 'throne') {
+    const creds = adapterCredentials(dex, wallet, opts.headers, opts.credentials || opts);
+    if (!creds) return { ok: false, skipped: 'browser_credentials_required', dex };
+    return { dex, ...(await require('../server-futures/throne').importTradesForPlayer(playerId, creds, { maxOrders: Math.min(40, limit) })) };
   }
 
   if (dex === 'etoro') {

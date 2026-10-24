@@ -17,6 +17,7 @@
     "test:domfi-rewards": "node test-domfi-rewards.js",
     "test:etoro-rewards": "node test-etoro-rewards.js",
     "test:qfex-rewards": "node test-qfex-reward-flow.js && node test-qfex-tournament-migration.js",
+    "test:throne-rewards": "node test-throne-reward-flow.js && node test-throne-vault-sync.js",
     "test:ondo-claim": "node test-ondo-claim-reconciliation.js",
     "test:ondo-earnings": "node test-ondo-earnings.js",
     "test:aster-earnings": "node test-aster-earnings.js",

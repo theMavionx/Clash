@@ -3,6 +3,9 @@ import LighterOneTapConnect from './LighterOneTapConnect';
 import EtoroSetupGuide from './trading/EtoroSetupGuide';
 import QfexSetup from './trading/QfexSetup';
 import { useQfex } from '../hooks/useQfex';
+import ThroneSetup from './trading/ThroneSetup';
+import ThroneStandingCard from './trading/ThroneStandingCard';
+import { useThrone } from '../hooks/useThrone';
 import ImperialRouteCard from './trading/ImperialRouteCard';
 import PositionActionDialog from './trading/PositionActionDialog';
 import './trading/OpenTpslEditor.css';
@@ -154,6 +157,7 @@ const DEX_ERROR_LABELS = {
   domfi: 'DomFi',
   etoro: 'eToro',
   qfex: 'QFEX',
+  throne: 'Throne',
   decibel: 'Decibel',
   flash: 'Flash',
   gmtrade: 'GMTrade',
@@ -180,6 +184,7 @@ const DEX_ERROR_LABELS = {
 const OPEN_TPSL_NATIVE_ORDER_ATTACH_DEXES = new Set(['qfex', 'avantis', 'domfi', 'etoro', 'bulk', 'decibel', 'flash', 'gmx', 'hibachi', 'hotstuff', 'hyperliquid', 'imperial', 'katana', 'lighter', 'rhlighter', 'nado', 'ondo', 'ostium', 'pacifica']);
 const OPEN_TPSL_NATIVE_LIMIT_ATTACH_DEXES = new Set([...OPEN_TPSL_NATIVE_ORDER_ATTACH_DEXES, 'grvt', 'leverup', 'phoenix']);
 const OPEN_TPSL_POST_MARKET_DEXES = new Set([
+  'throne',
   'decibel',
   'gmx',
   'hotstuff',
@@ -3693,6 +3698,7 @@ function FuturesPanel() {
   const domfiHook = useDomfi();
   const etoroHook = useEtoro();
   const qfexHook = useQfex();
+  const throneHook = useThrone();
   const decibelHook = useDecibel();
   const gmxHook = useGmx();
   const monadHook = useMonad();
@@ -3728,6 +3734,8 @@ function FuturesPanel() {
     ? etoroHook
     : dex === 'qfex'
     ? qfexHook
+    : dex === 'throne'
+    ? throneHook
     : dex === 'decibel'
     ? decibelHook
     : dex === 'gmx'
@@ -5294,7 +5302,7 @@ function FuturesPanel() {
       // executes against whatever leverage was last persisted (e.g. 40× from
       // a previous session even though the slider shows 20×). Avantis/GMX
       // take leverage per-trade in the place-order call, so no pre-flush.
-      if (dex === 'qfex' || dex === 'pacifica' || dex === 'bulk' || dex === 'decibel' || dex === 'hotstuff' || isLighterDex) {
+      if (dex === 'qfex' || dex === 'throne' || dex === 'pacifica' || dex === 'bulk' || dex === 'decibel' || dex === 'hotstuff' || isLighterDex) {
         if (levTimerRef.current) {
           clearTimeout(levTimerRef.current);
           levTimerRef.current = null;
@@ -7455,6 +7463,10 @@ function FuturesPanel() {
         </div>
       </>
     );
+  }
+  // ==================== THRONE (ORDERLY) ONE-TAP GATE ====================
+  if (dex === 'throne' && setupVerified !== true) {
+    return <div ref={panelRef} className="futures-terminal-shell" style={{ ...(fullscreen ? S.containerFull : S.container), overflowY: 'auto', ...(isMobile ? { left: 8, right: 8, width: 'auto' } : {}) }}><ThroneSetup connectWithWallet={throneHook.connectWithWallet} loading={loading} restoring={throneHook.restoring === true} error={error} onboardingStep={throneHook.onboardingStep} evmAddress={throneHook.evmAddress} onClose={handleClose} /></div>;
   }
   // ==================== ETORO API KEY GATE ====================
   if (dex === 'qfex' && setupVerified !== true) {
@@ -10692,6 +10704,19 @@ function FuturesPanel() {
       : dex === 'ondo' && ondoWalletState === 'error'
       ? 'var(--terminal-short-strong)'
       : 'var(--terminal-text)';
+
+    if (dex === 'throne') return <div style={{ ...S.fullCard, display: 'grid', gap: 14 }}>
+      <h3 style={{ display: 'flex', alignItems: 'center', gap: 8 }}><img src="/throne-logo.png" alt="" width="22" height="22" style={{ borderRadius: 6 }} />Throne account</h3>
+      <div>Wallet: {account?.address ? `${account.address.slice(0, 6)}…${account.address.slice(-4)}` : 'Checking…'} · broker throne</div>
+      <div>Equity: ${Number(account?.equity || 0).toFixed(2)}</div>
+      <div>Free collateral: ${Number(account?.free_collateral || 0).toFixed(2)}</div>
+      <div>USDC holding: ${Number(account?.usdc || 0).toFixed(2)}</div>
+      {throneHook.pendingAction && <div role="alert">A Throne action is awaiting confirmation ({throneHook.pendingAction.status || 'unknown'}). New requests are blocked until its outcome is confirmed. <button style={S.btnSmall} onClick={() => throneHook.reconcilePending().catch(reason => setLocalAlert(reason.message))}>Check outcome</button></div>}
+      <p>Deposit and withdraw USDC on <a href="https://throne.network" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--terminal-orange)' }}>throne.network</a>. Balances update here automatically.</p>
+      <p>Gold, tasks and tournaments use verified fills of orders placed here.</p>
+      <ThroneStandingCard address={account?.address} token={window._playerToken} />
+      <button style={S.btnSmall} disabled={loading} onClick={async () => { try { await disconnect(); } catch (reason) { setLocalAlert(reason.message); } }}>Disconnect Throne key</button>
+    </div>;
 
     if (dex === 'qfex') return <div style={{ ...S.fullCard, display: 'grid', gap: 14 }}>
       <h3>QFEX account</h3>

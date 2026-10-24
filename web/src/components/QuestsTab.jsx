@@ -14,6 +14,7 @@ import { listStoredPacificaMasters, readPacificaAgent } from '../lib/pacificaAge
 import { nftRarityCardStyle, normalizeNftRarity } from '../lib/nftV3Client';
 import { uiButton } from '../styles/theme';
 import { readQfexTaskHeaders, fetchQfexJson } from '../lib/qfexClient';
+import { readThroneTaskHeaders, fetchThroneJson } from '../lib/throneClient';
 
 
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
@@ -613,6 +614,9 @@ function QuestsTab({ markets = [] }) {
     const activeDex = String(dex || '').toLowerCase();
     if (activeDex) base['x-dex'] = activeDex;
     if (activeDex === 'qfex') return readQfexTaskHeaders(tok);
+    if (activeDex === 'throne') {
+      try { return await readThroneTaskHeaders(tok); } catch { return base; }
+    }
     if (activeDex === 'hibachi') {
       try {
         const creds = normalizeHibachiTaskCredentials(await readEncryptedCredential(HIBACHI_STORAGE_KEY));
@@ -684,6 +688,15 @@ function QuestsTab({ markets = [] }) {
             if (current()) setQfexSync({ error: reason?.name === 'TimeoutError' ? 'History request timed out.' : reason.message });
           }
         } else setQfexSync(previous => previous?.error ? previous : { disconnected: true });
+      }
+      if (activeDex === 'throne' && headers['x-throne-orderly-secret']) {
+        // Import verified Throne fills of Clash orders before reading progress; failures keep saved progress.
+        try {
+          await fetchThroneJson('/api/futures/throne/import-trades', { token: tok, credentials: {
+            accountId: headers['x-throne-account-id'], orderlyKey: headers['x-throne-orderly-key'],
+            orderlySecret: headers['x-throne-orderly-secret'], address: headers['x-throne-address'] },
+            method: 'POST', body: {}, signal: AbortSignal.timeout(30000) });
+        } catch (reason) { console.warn('[Quests] Throne trade import failed:', reason?.message || reason); }
       }
       if (!current()) return;
       if (activeDex === 'pacifica') headers['x-skip-live-progress'] = 'browser';

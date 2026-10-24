@@ -31,6 +31,7 @@ const DEX_LABELS = {
   domfi: 'DomFi',
   etoro: 'eToro',
   qfex: 'QFEX',
+  throne: 'Throne',
   decibel: 'Decibel',
   gmx: 'GMX',
   monad: 'Perpl',

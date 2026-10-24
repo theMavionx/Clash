@@ -1329,6 +1329,7 @@ module.exports = {
 
 // Initialize proof tables before read-only game/reward queries reference them.
 require('./qfex').ensureSchema(db);
+require('./throne').ensureSchema(db);
 
 // One-time encryption migration: any row where secret_key doesn't start with
 // our ENC_MARKER is legacy plaintext — encrypt in place.

@@ -13,6 +13,7 @@
     "test:etoro": "node test-etoro-adapter.js",
     "test:qfex": "node test-qfex-adapter.js && node test-qfex-routes.js",
     "test:qfex-live": "node test-qfex-live.js",
+    "test:throne": "node --test test-throne-adapter.js test-throne-routes.js",
     "test:hibachi": "node --test test-hibachi-rate-limit.js test-hibachi-volume-attribution.js",
     "test:domfi-http": "node test-domfi-http.js",
     "test:domfi-live": "node test-domfi-live.js",

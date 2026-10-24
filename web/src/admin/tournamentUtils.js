@@ -1,11 +1,12 @@
 export const TOURNAMENT_DEXES = [
-  'qfex',
+  'qfex', 'throne',
   'pacifica', 'avantis', 'domfi', 'etoro', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid',
   'risex', 'nado', 'ondo', 'leverup', 'hibachi', 'grvt', 'hotstuff', 'katana', 'gmtrade', 'flash', 'lighter', 'rhlighter', 'bulk', 'imperial',
 ];
 
 export const DEX_LABELS = {
   qfex: 'QFEX',
+  throne: 'Throne',
   pacifica: 'Pacifica',
   avantis: 'Avantis',
   domfi: 'DomFi',
