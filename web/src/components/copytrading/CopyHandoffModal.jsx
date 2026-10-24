@@ -49,6 +49,11 @@ export default function CopyHandoffModal({ token, trader, onClose }) {
     () => new Map((status?.capabilities || []).map((item) => [item.venue, item])),
     [status],
   );
+  // Only venues ClashBot reports as Ready are listed; Degraded/Paused/Unknown are hidden.
+  const readyDestinations = useMemo(
+    () => COPY_DESTINATION_VENUES.filter((venue) => destinationState(venue, controls, capabilities).label === 'Ready'),
+    [controls, capabilities],
+  );
   const sourceCapability = capabilities.get(trader.venue);
   const metric = summary?.metric || null;
   const minimumCopyBalance = trader.minimumCopyBalanceUsd ?? metric?.minimumCopyBalanceUsd ?? null;
@@ -117,18 +122,17 @@ export default function CopyHandoffModal({ token, trader, onClose }) {
         <p className="ct-field-hint" style={{ margin: '2px 0 10px' }}>Copies are mapped by base asset; markets missing on the destination are skipped.</p>
         {status == null ? (
           <span className="ct-field-hint"><Spinner size={12} /> Checking execution status…</span>
+        ) : readyDestinations.length === 0 ? (
+          <span className="ct-field-hint">No destination exchanges are ready right now. Check again shortly.</span>
         ) : (
           <div className="ct-venue-grid">
-            {COPY_DESTINATION_VENUES.filter((venue) => controls.has(venue) || capabilities.has(venue)).map((venue) => {
-              const state = destinationState(venue, controls, capabilities);
-              return (
-                <div key={venue} className="ct-venue-option" style={{ cursor: 'default' }}>
-                  <VenueLogo venue={venue} size={20} />
-                  <span className="ct-grow">{venueName(venue)}</span>
-                  <span className={`ct-chip ct-chip--${state.tone}`}>{state.label}</span>
-                </div>
-              );
-            })}
+            {readyDestinations.map((venue) => (
+              <div key={venue} className="ct-venue-option" style={{ cursor: 'default' }}>
+                <VenueLogo venue={venue} size={20} />
+                <span className="ct-grow">{venueName(venue)}</span>
+                <span className="ct-chip ct-chip--long">Ready</span>
+              </div>
+            ))}
           </div>
         )}
       </section>

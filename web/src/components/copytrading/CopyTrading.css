@@ -314,12 +314,37 @@ button.ct-chip { cursor: pointer; }
 .ct-dl > div:last-child { border-bottom: 0; }
 .ct-dl dt { font-size: 12px; color: var(--terminal-text-muted); }
 .ct-dl dd { margin: 0; font-size: 13px; font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; }
-.ct-chart { width: 100%; height: auto; display: block; }
-.ct-chart-bar-pos { fill: var(--terminal-long); }
-.ct-chart-bar-neg { fill: var(--terminal-short); }
-.ct-chart-line { fill: none; stroke: var(--terminal-text-secondary); stroke-width: 1.5; }
-.ct-chart-axis { stroke: var(--terminal-border); stroke-width: 1; }
-.ct-chart-label { fill: var(--terminal-text-faint); font-size: 10px; }
+/* daily performance chart (port of ClashBot DailyPerformanceChart) */
+.ct-dchart { position: relative; overflow: hidden; padding: 0; }
+.ct-dchart-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 16px 16px 0; }
+.ct-dchart-title-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.ct-dchart-badge { border-radius: 999px; padding: 3px 8px; font-size: 10px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; }
+.ct-dchart-badge--long { background: var(--terminal-long-soft); color: var(--terminal-long); }
+.ct-dchart-badge--warning { background: var(--terminal-warning-soft); color: var(--terminal-warning); }
+.ct-dchart-cutoff { color: var(--terminal-warning); }
+.ct-dchart-controls { display: flex; flex-wrap: wrap; gap: 6px; }
+.ct-dchart-value { padding: 12px 16px 0; }
+.ct-dchart-big { font-size: 24px; font-weight: 600; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.ct-dchart-frame { position: relative; margin-top: 4px; min-width: 0; }
+.ct-dchart-plot { position: relative; }
+.ct-dchart-svg { display: block; width: 100%; touch-action: none; user-select: none; }
+.ct-dchart-svg:focus-visible { outline: 2px solid var(--terminal-orange); outline-offset: -2px; }
+.ct-dchart-grid { stroke: var(--terminal-text-faint); stroke-opacity: 0.35; stroke-dasharray: 2 7; }
+.ct-dchart-zero { stroke: var(--terminal-text-faint); stroke-opacity: 0.55; }
+.ct-dchart-crosshair { stroke: var(--terminal-text-muted); stroke-opacity: 0.6; stroke-dasharray: 4 5; }
+.ct-dchart-dot { stroke: var(--terminal-surface); }
+.ct-dchart-tick { fill: var(--terminal-text-faint); font-size: 10px; font-variant-numeric: tabular-nums; }
+.ct-dchart-watermark { fill: var(--terminal-text); fill-opacity: 0.045; font-size: 28px; font-weight: 700; letter-spacing: 4px; pointer-events: none; }
+.ct-dchart-tooltip {
+  position: absolute; top: 12px; z-index: 2; pointer-events: none; min-width: 150px; max-width: min(260px, calc(100% - 28px));
+  padding: 10px 12px; border-radius: 12px; border: 1px solid var(--terminal-border);
+  background: var(--terminal-surface-raised); box-shadow: 0 12px 32px var(--terminal-shadow);
+}
+.ct-dchart-tooltip-value { margin-top: 4px; font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.ct-dchart-tooltip-row { display: flex; justify-content: space-between; gap: 12px; margin-top: 4px; font-size: 11px; color: var(--terminal-text-muted); font-variant-numeric: tabular-nums; }
+.ct-dchart-empty { height: 280px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 0 24px; text-align: center; color: var(--terminal-text-faint); }
+.ct-dchart-empty-title { font-size: 13px; font-weight: 600; color: var(--terminal-text-secondary); }
+.ct-dchart-foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; padding: 10px 16px; border-top: 1px solid var(--terminal-border); font-size: 10px; line-height: 1.5; color: var(--terminal-text-faint); }
 .ct-list-row { display: grid; grid-template-columns: minmax(0, 1.3fr) repeat(4, minmax(0, 1fr)); gap: 8px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--terminal-border); font-size: 12px; }
 .ct-list-row:last-child { border-bottom: 0; }
 .ct-list-head { font-size: 10px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--terminal-text-faint); }

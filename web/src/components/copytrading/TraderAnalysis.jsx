@@ -20,6 +20,7 @@ import {
   tradePositionLabel,
 } from './format';
 import TraderProfileChips from './TraderChips';
+import DailyPerformanceChart from './DailyPerformanceChart';
 import { copyScoreComponents } from './copyScoreModel';
 import { Btn, Modal, Notice, Segmented, Spinner, StateBlock, VenueLogo } from './ui';
 
@@ -47,90 +48,6 @@ function MetricText({ value, kind, quality }) {
       : kind === 'rate' ? plainPercent(value)
         : compactCurrency(value);
   return <span className={`ct-num ${signed ? (value >= 0 ? 'ct-long' : 'ct-short') : ''}`} style={{ fontWeight: 600 }}>{text}</span>;
-}
-
-/* ---------- daily performance chart (inline SVG, no deps) ---------- */
-function DailyChart({ analytics, loading, range, onRange, metric, onMetric }) {
-  const days = range === '7d' ? 7 : range === '90d' ? 90 : 30;
-  const points = arr(analytics?.points).slice(-days);
-  const valueOf = (point) => num(metric === 'volume' ? point.volumeUsd : point.dailyPnlUsd) ?? 0;
-  const values = points.map(valueOf);
-  const total = values.reduce((sum, value) => sum + value, 0);
-  const width = 640;
-  const height = 180;
-  const pad = { top: 12, right: 8, bottom: 22, left: 8 };
-  const innerW = width - pad.left - pad.right;
-  const innerH = height - pad.top - pad.bottom;
-  const maxAbs = Math.max(1, ...values.map((value) => Math.abs(value)));
-  const hasNegative = values.some((value) => value < 0);
-  const zeroY = pad.top + (hasNegative ? innerH / 2 : innerH);
-  const scale = (hasNegative ? innerH / 2 : innerH) / maxAbs;
-  const barW = points.length ? Math.max(1, innerW / points.length - 2) : 0;
-  let cumulative = 0;
-  const cumulativeValues = values.map((value) => { cumulative += value; return cumulative; });
-  const cumMax = Math.max(1, ...cumulativeValues.map((value) => Math.abs(value)));
-  const line = metric === 'pnl' && points.length > 1
-    ? cumulativeValues.map((value, index) => {
-      const x = pad.left + (index + 0.5) * (innerW / points.length);
-      const y = zeroY - (value / cumMax) * (hasNegative ? innerH / 2 : innerH) * 0.95;
-      return `${index === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`;
-    }).join(' ')
-    : '';
-  const metricLabel = metric === 'volume' ? 'Daily volume' : 'Daily PnL';
-
-  return (
-    <section className="ct-card ct-card-pad" aria-label="Daily performance">
-      <div className="ct-toolbar-row" style={{ marginBottom: 10 }}>
-        <div>
-          <h3 className="ct-section-title" style={{ fontSize: 14 }}>Daily performance</h3>
-          <p className="ct-field-hint" style={{ margin: '2px 0 0' }}>
-            {metricLabel} · {range.toUpperCase()} total{' '}
-            <strong className={metric === 'pnl' ? (total >= 0 ? 'ct-long' : 'ct-short') : ''}>
-              {metric === 'pnl' ? signedCurrency(total) : compactCurrency(total)}
-            </strong>
-          </p>
-        </div>
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          <Segmented size="sm" label="Chart metric" value={metric} onChange={onMetric} options={[{ value: 'pnl', label: 'PnL' }, { value: 'volume', label: 'Volume' }]} />
-          <Segmented size="sm" label="Chart range" value={range} onChange={onRange} options={[{ value: '7d', label: '7D' }, { value: '30d', label: '30D' }, { value: '90d', label: '90D' }]} />
-        </div>
-      </div>
-      {loading && points.length === 0 ? (
-        <div className="ct-state" role="status"><Spinner /><span className="ct-state-text">Loading daily analytics…</span></div>
-      ) : points.length === 0 ? (
-        <p className="ct-field-hint" style={{ margin: 0 }}>{analytics?.note || 'Daily analytics are still collecting.'}</p>
-      ) : (
-        <>
-          <svg className="ct-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${metricLabel} bar chart for the last ${points.length} days, total ${metric === 'pnl' ? signedCurrency(total) : compactCurrency(total)}`}>
-            <line className="ct-chart-axis" x1={pad.left} x2={width - pad.right} y1={zeroY} y2={zeroY} />
-            {points.map((point, index) => {
-              const value = values[index];
-              const h = Math.max(value === 0 ? 0 : 1, Math.abs(value) * scale);
-              const x = pad.left + index * (innerW / points.length) + 1;
-              const y = value >= 0 ? zeroY - h : zeroY;
-              return (
-                <rect
-                  key={point.day || index}
-                  x={x}
-                  y={y}
-                  width={barW}
-                  height={h}
-                  rx={Math.min(2, barW / 2)}
-                  className={metric === 'volume' ? 'ct-chart-bar-pos' : value >= 0 ? 'ct-chart-bar-pos' : 'ct-chart-bar-neg'}
-                >
-                  <title>{`${point.day}: ${metric === 'pnl' ? signedCurrency(value) : compactCurrency(value)}`}</title>
-                </rect>
-              );
-            })}
-            {line && <path className="ct-chart-line" d={line} />}
-            <text className="ct-chart-label" x={pad.left} y={height - 6}>{points[0]?.day}</text>
-            <text className="ct-chart-label" x={width - pad.right} y={height - 6} textAnchor="end">{points.at(-1)?.day}</text>
-          </svg>
-          {metric === 'pnl' && <p className="ct-field-hint" style={{ margin: '6px 0 0' }}>Bars show daily PnL; the line shows cumulative PnL over the range.</p>}
-        </>
-      )}
-    </section>
-  );
 }
 
 function PositionsTable({ snapshot, loading }) {
@@ -532,7 +449,7 @@ export default function TraderAnalysis({ token, trader, context, onClose, onCopy
               </div>
               {data.note && <p className="ct-field-hint" style={{ margin: '8px 0 0' }}>{data.note}</p>}
             </section>
-            <DailyChart analytics={daily.data} loading={daily.loading} range={chartRange} onRange={setChartRange} metric={chartMetric} onMetric={setChartMetric} />
+            <DailyPerformanceChart analytics={daily.data} loading={daily.loading} range={chartRange} onRange={setChartRange} metric={chartMetric} onMetric={setChartMetric} rangeMetric={metrics.find((metric) => metric.window === chartRange) || null} />
             <RhythmChips rhythm={daily.data?.activityRhythm} />
           </div>
         </div>
