@@ -445,10 +445,13 @@ async function executeAction(creds, input, options, kind, params, send) {
 
 // ------------------------------------------------------------------ account snapshot
 
+// Orderly rejects list pages larger than 100 rows (-1005 "size must be less than or equal to 100").
+const ORDERLY_PAGE_SIZE = 100;
+
 async function readAllPages(creds, path, query, maximum = 500) {
   const rows = [];
   for (let page = 1; rows.length < maximum; page++) {
-    const size = Math.min(500, maximum - rows.length);
+    const size = Math.min(ORDERLY_PAGE_SIZE, maximum - rows.length);
     const data = await request('GET', path, { creds, query: { ...query, page, size } });
     const batch = Array.isArray(data?.rows) ? data.rows : [];
     rows.push(...batch);
@@ -1023,7 +1026,7 @@ function labelTradeSides(trades, positionRows = [], reduceOnlyOrderIds = new Set
 async function getTradeHistory(credsInput, options = {}) {
   const creds = await resolveAccount(credsInput);
   if (options.playerId) claimAccount(options.playerId, creds);
-  const size = Math.max(1, Math.min(500, Math.floor(Number(options.limit) || 100)));
+  const size = Math.max(1, Math.min(ORDERLY_PAGE_SIZE, Math.floor(Number(options.limit) || 100)));
   const query = { size, page: 1, ...(options.symbol ? { symbol: symbolOf(options.symbol) } : {}) };
   const [data, positionData] = await Promise.all([request('GET', '/v1/trades', { creds, query }),
     request('GET', '/v1/positions', { creds }).catch(() => null)]);
