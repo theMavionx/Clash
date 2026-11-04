@@ -1696,7 +1696,11 @@ try {
   `);
 } catch {}
 
+// One-time: this LIKE scan reads every replay blob (tens of GB), so it must
+// not run on every boot. Live wins are recorded when the battle is submitted.
+const DEMON_KING_BACKFILL_KEY = 'migration.demon_king_win_backfill_v1';
 try {
+  if (db.prepare('SELECT 1 FROM app_settings WHERE key = ?').get(DEMON_KING_BACKFILL_KEY)) throw null;
   const backfillRows = db.prepare(`
     SELECT id, attacker_id, replay_data
       FROM battle_replays
@@ -1749,7 +1753,9 @@ try {
     const inserted = backfillTxn(backfillRows);
     if (inserted) console.log(`[db] backfilled ${inserted} Demon King NFT battle win event(s)`);
   }
-} catch (e) { console.warn('[db] Demon King NFT win backfill:', e.message); }
+  db.prepare("INSERT OR REPLACE INTO app_settings (key, value_json, updated_at) VALUES (?, 'true', datetime('now'))")
+    .run(DEMON_KING_BACKFILL_KEY);
+} catch (e) { if (e) console.warn('[db] Demon King NFT win backfill:', e.message); }
 
 // Battle matchmaking reservations. /find-enemy creates a short-lived session
 // so two attackers cannot be handed the same unshielded defender, play the

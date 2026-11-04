@@ -83,7 +83,7 @@ function pendingBridgeRows(opts) {
     params.push(opts.tx);
   }
 
-  params.push(opts.limit);
+  params.push(Math.max(opts.limit * 5, 50)); // headroom: capped bridges are filtered out below
   return db.prepare(`
     SELECT source_ref, dest_chain, source_chain, burn_tx_hash, dest_address, level, created_at
       FROM used_bridge_refs
@@ -105,6 +105,10 @@ function bridgeLogIsRetryable(row) {
 function retryableBridgeLogRows(opts) {
   if (!opts.includeLogErrors) return [];
 
+  // Aggregate the error rows per bridge first, then run the per-bridge checks
+  // once per group. Checking "is there a later ok row" per error row was
+  // quadratic: one stuck bridge with ~18k failed relays made this query take
+  // minutes and froze the API's event loop.
   const where = [
     "l.phase = 'relay'",
     "l.status = 'error'",
@@ -113,20 +117,6 @@ function retryableBridgeLogRows(opts) {
     'l.dest_address IS NOT NULL',
     "l.dest_address != ''",
     "l.created_at <= datetime('now', ?)",
-    `NOT EXISTS (
-       SELECT 1 FROM used_bridge_refs u
-        WHERE u.burn_tx_hash = l.burn_tx_hash
-          AND u.dest_chain = l.dest_chain
-          AND u.dest_tx_or_asset IS NOT NULL
-     )`,
-    `NOT EXISTS (
-       SELECT 1 FROM bridge_logs ok
-        WHERE ok.phase = 'relay'
-          AND ok.status = 'ok'
-          AND ok.burn_tx_hash = l.burn_tx_hash
-          AND ok.dest_chain = l.dest_chain
-          AND ok.created_at >= l.created_at
-     )`,
   ];
   const params = [`-${opts.minAgeSec} seconds`];
 
@@ -145,16 +135,33 @@ function retryableBridgeLogRows(opts) {
 
   params.push(Math.max(opts.limit * 5, 50));
   const rows = db.prepare(`
-    SELECT l.source_chain, l.dest_chain, l.burn_tx_hash, l.dest_address,
-           COALESCE(l.level, 1) AS level,
-           MIN(l.created_at) AS created_at,
-           MAX(l.error) AS error,
-           MAX(l.data) AS data,
-           COUNT(*) AS error_count
-      FROM bridge_logs l
-     WHERE ${where.join(' AND ')}
-     GROUP BY l.source_chain, l.dest_chain, l.burn_tx_hash, l.dest_address
-     ORDER BY MAX(l.created_at) DESC
+    SELECT g.* FROM (
+      SELECT l.source_chain, l.dest_chain, l.burn_tx_hash, l.dest_address,
+             COALESCE(l.level, 1) AS level,
+             MIN(l.created_at) AS created_at,
+             MAX(l.created_at) AS last_error_at,
+             MAX(l.error) AS error,
+             MAX(l.data) AS data,
+             COUNT(*) AS error_count
+        FROM bridge_logs l
+       WHERE ${where.join(' AND ')}
+       GROUP BY l.source_chain, l.dest_chain, l.burn_tx_hash, l.dest_address
+    ) g
+     WHERE NOT EXISTS (
+             SELECT 1 FROM used_bridge_refs u
+              WHERE u.burn_tx_hash = g.burn_tx_hash
+                AND u.dest_chain = g.dest_chain
+                AND u.dest_tx_or_asset IS NOT NULL
+           )
+       AND NOT EXISTS (
+             SELECT 1 FROM bridge_logs ok
+              WHERE ok.phase = 'relay'
+                AND ok.status = 'ok'
+                AND ok.burn_tx_hash = g.burn_tx_hash
+                AND ok.dest_chain = g.dest_chain
+                AND ok.created_at >= g.last_error_at
+           )
+     ORDER BY g.last_error_at DESC
      LIMIT ?
   `).all(...params);
 
@@ -174,10 +181,29 @@ function retryableBridgeLogRows(opts) {
     }));
 }
 
+// Bridges that already failed this many relays are left for manual recovery
+// (e.g. a permanent bridgeMint revert); retrying them forever only grows
+// bridge_logs and wastes relayer gas.
+const MAX_AUTO_RELAY_ATTEMPTS = Math.max(1, Number(process.env.CLASH_BRIDGE_MAX_RELAY_ATTEMPTS) || 30);
+
+function exhaustedBridgeKeys() {
+  const rows = db.prepare(`
+    SELECT dest_chain, lower(burn_tx_hash) AS burn
+      FROM bridge_logs
+     WHERE phase = 'relay' AND status = 'error' AND burn_tx_hash IS NOT NULL
+     GROUP BY dest_chain, lower(burn_tx_hash)
+    HAVING COUNT(*) >= ?
+  `).all(MAX_AUTO_RELAY_ATTEMPTS);
+  return new Set(rows.map((row) => `${row.dest_chain}|${row.burn}`));
+}
+
 function pendingBridgeRowsAll(opts) {
   const merged = [];
   const seen = new Set();
+  // An explicit --tx run is a manual retry, so it ignores the attempt cap.
+  const exhausted = opts.tx ? new Set() : exhaustedBridgeKeys();
   for (const row of [...pendingBridgeRows(opts), ...retryableBridgeLogRows(opts)]) {
+    if (exhausted.has(`${row.dest_chain}|${String(row.burn_tx_hash || '').toLowerCase()}`)) continue;
     const key = [
       row.source_chain,
       row.dest_chain,
