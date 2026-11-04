@@ -46,6 +46,29 @@ function raidBotTargetsEnabled() {
 
 const db = new Database(DB_PATH);
 
+// Slow-query log: every synchronous statement blocks the event loop, so a
+// single unindexed scan of the (large) main DB stalls every request. Log the
+// SQL of anything over the threshold so stalls can be traced to a query.
+const SLOW_QUERY_MS = Number(process.env.CLASH_SLOW_QUERY_MS) || 1500;
+{
+  const prepare = db.prepare.bind(db);
+  db.prepare = (sql) => {
+    const stmt = prepare(sql);
+    for (const method of ['run', 'get', 'all']) {
+      const original = stmt[method];
+      if (typeof original !== 'function') continue;
+      stmt[method] = function timed(...args) {
+        const started = Date.now();
+        try { return original.apply(this, args); } finally {
+          const ms = Date.now() - started;
+          if (ms >= SLOW_QUERY_MS) console.warn(`[slow-sql] ${ms}ms ${method} ${String(sql).replace(/\s+/g, ' ').slice(0, 600)}`);
+        }
+      };
+    }
+    return stmt;
+  };
+}
+
 // Enable WAL mode for better concurrent read performance
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
