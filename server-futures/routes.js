@@ -5910,6 +5910,12 @@ router.post('/grvt/authorize-builder', auth, async (req, res) => {
     res.json(result);
   } catch (e) {
     console.warn('[grvt] authorize-builder failed:', e.message);
+    if (/invalid main account id/i.test(e.message || '')) {
+      return res.status(400).json({
+        error: 'This wallet has no GRVT account yet',
+        detail: 'Create and fund a GRVT account with this wallet on grvt.io, then connect again.',
+      });
+    }
     res.status(502).json({ error: 'Failed to authorize GRVT builder', detail: e.message });
   }
 });

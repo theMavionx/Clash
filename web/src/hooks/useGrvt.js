@@ -18,6 +18,7 @@ import { fetchGrvtMarketsDirect } from '../lib/grvtClient';
 const STORAGE_KEY = 'clash_grvt_credentials_v1';
 const ONE_TAP_SIGNER_STORAGE_KEY = 'clash_grvt_one_tap_signer_v1';
 const POLL_INTERVAL_MS = 45_000;
+const PRICE_POLL_INTERVAL_MS = 10_000;
 const WALLET_USDC_POLL_INTERVAL_MS = 120_000;
 const GRVT_REF_URL = 'https://grvt.io/?ref=UERIHL5';
 const GRVT_BUILDER_ACCOUNT_ID = String(import.meta.env.VITE_GRVT_BUILDER_ACCOUNT_ID || '').trim();
@@ -207,6 +208,15 @@ function formatStepNumber(value, step, fallbackDecimals = 9) {
   return Number(value).toFixed(places).replace(/\.?0+$/u, '') || '0';
 }
 
+function roundToTick(value, tick) {
+  const n = Number(value);
+  const t = Number(tick);
+  if (!Number.isFinite(n) || n <= 0) return String(value ?? '');
+  if (!Number.isFinite(t) || t <= 0) return String(value);
+  const snapped = Math.round(n / t) * t;
+  return formatStepNumber(snapped > 0 ? snapped : t, tick, 9);
+}
+
 function splitSignature(signature) {
   const hex = String(signature || '').replace(/^0x/u, '');
   if (hex.length !== 130) throw new Error('Invalid GRVT signature length');
@@ -346,6 +356,8 @@ export function useGrvt() {
   const [prices, setPrices] = useState([]);
   const [markets, setMarkets] = useState([]);
   const [leverageSettings, setLeverageSettings] = useState({});
+  // GRVT instruments carry no leverage cap; the account's leverage rows do (equities are lower).
+  const [maxLeverageBySymbol, setMaxLeverageBySymbol] = useState({});
   const [marginModes, setMarginModes] = useState({});
   const [dataReady, setDataReady] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -577,12 +589,15 @@ export function useGrvt() {
 
   const fetchMarkets = useCallback(async () => {
     try {
+      // The server keeps one shared GRVT snapshot (180+ tickers), so it answers instantly;
+      // reading every ticker from the browser is the fallback.
       let payload;
       try {
-        payload = await fetchGrvtMarketsDirect();
-      } catch (directError) {
-        console.warn('[useGrvt] browser markets read failed; using server fallback:', directError?.message || directError);
         payload = await fetchJson('/api/futures/markets?dex=grvt');
+        if (!rows(payload).length) throw new Error('empty GRVT market list');
+      } catch (serverError) {
+        console.warn('[useGrvt] server markets read failed; reading GRVT directly:', serverError?.message || serverError);
+        payload = await fetchGrvtMarketsDirect();
       }
       const next = rows(payload);
       setMarkets(next);
@@ -652,15 +667,19 @@ export function useGrvt() {
         if (row.margin_type) nextModes[sym] = String(row.margin_type).toUpperCase() === 'ISOLATED';
         else if (row.is_isolated != null) nextModes[sym] = !!row.is_isolated;
       });
+      const nextMaxLev = {};
       if (Array.isArray(lev)) {
         lev.forEach(row => {
           const sym = String(row.symbol || '').toUpperCase();
           if (!sym) return;
           const levNum = Number(row.leverage);
           if (Number.isFinite(levNum) && levNum > 0) nextLev[sym] = levNum;
+          const maxNum = Number(row.max_leverage);
+          if (Number.isFinite(maxNum) && maxNum >= 2) nextMaxLev[sym] = maxNum;
           nextModes[sym] = String(row.margin_type || '').toUpperCase() === 'ISOLATED';
         });
       }
+      if (Object.keys(nextMaxLev).length) setMaxLeverageBySymbol(nextMaxLev);
       setLeverageSettings(nextLev);
       setMarginModes(nextModes);
       setDataReady(true);
@@ -749,6 +768,55 @@ export function useGrvt() {
     if (!isActiveDex) return;
     fetchMarkets();
   }, [isActiveDex, fetchMarkets]);
+
+  // Keep marks live after the first load. The server shares one cached GRVT ticker snapshot
+  // across players, so this costs one cheap request instead of one GRVT call per market.
+  useEffect(() => {
+    if (!isActiveDex) return undefined;
+    let cancelled = false;
+    const refresh = async () => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      try {
+        const live = rows(await fetchJson('/api/futures/prices?dex=grvt'));
+        if (cancelled || !live.length) return;
+        const bySymbol = new Map(live.map(p => [String(p.symbol || '').toUpperCase(), p]));
+        setPrices(prev => {
+          const seen = new Set();
+          const next = prev.map((row) => {
+            const key = String(row.symbol || '').toUpperCase();
+            seen.add(key);
+            const p = bySymbol.get(key);
+            return p && Number(p.mark) > 0 ? { ...row, ...p } : row;
+          });
+          live.forEach((p) => {
+            if (!seen.has(String(p.symbol || '').toUpperCase())) next.push(p);
+          });
+          return next;
+        });
+        setMarkets(prev => prev.map((m) => {
+          const p = bySymbol.get(String(m.symbol || '').toUpperCase());
+          const mark = Number(p?.mark);
+          if (!(mark > 0)) return m;
+          const yesterday = Number(p.yesterday_price) || Number(m.yesterday_price) || 0;
+          return {
+            ...m,
+            mark,
+            mid: Number(p.mid) || mark,
+            oracle: Number(p.oracle) || mark,
+            yesterday_price: yesterday,
+            price_change_24h: yesterday > 0 ? ((mark - yesterday) / yesterday) * 100 : m.price_change_24h,
+            volume_24h: p.volume_24h ?? m.volume_24h,
+            open_interest: Number(p.open_interest) || m.open_interest,
+            funding_rate: p.funding_rate ?? m.funding_rate,
+          };
+        }));
+      } catch (e) {
+        console.warn('[useGrvt] price refresh:', e?.message || e);
+      }
+    };
+    const iv = setInterval(refresh, PRICE_POLL_INTERVAL_MS);
+    return () => { cancelled = true; clearInterval(iv); };
+  }, [isActiveDex, fetchJson]);
 
   useEffect(() => {
     if (!isActiveDex) return;
@@ -877,6 +945,7 @@ export function useGrvt() {
     setPositions([]);
     setOrders([]);
     setLeverageSettings({});
+    setMaxLeverageBySymbol({});
     setMarginModes({});
     setDataReady(false);
     setBuilderAuthorized(false);
@@ -1167,6 +1236,10 @@ export function useGrvt() {
     const orderPrice = priceForOrder(symbol, price);
     const margin = Number(marginUsdc);
     const lev = Math.max(1, Number(leverage) || 1);
+    const maxLev = maxLeverageBySymbol[String(symbol || '').toUpperCase()];
+    if (!reduceOnly && maxLev && lev > maxLev) {
+      throw new Error(`GRVT max leverage for ${symbol} is ${maxLev}x. Lower the leverage and try again.`);
+    }
     if (!reduceOnly) {
       try {
         await setGrvtInitialLeverage(instrument, symbol, lev);
@@ -1199,7 +1272,10 @@ export function useGrvt() {
     const clientOrderId = randomClientOrderId();
     const tifInfo = timeInForceValue(tif, isMarket);
     const sizeText = formatStepNumber(contractSize, sizeStep, 9);
-    const limitPriceText = isMarket ? '0' : String(price || orderPrice);
+    // GRVT rejects prices off the instrument tick, so snap typed/limit/trigger prices to it.
+    const tickSize = String(market?._raw?.tick_size || market?.tick_size || '');
+    const limitPriceText = isMarket ? '0' : roundToTick(price || orderPrice, tickSize);
+    const triggerPriceText = trigger ? roundToTick(trigger.price, tickSize) : '';
     const isBuyingAsset = side === 'bid' || side === 'buy' || side === 'long';
     const builderFee = builderFeeSignValue(builderFeeRate);
 
@@ -1286,7 +1362,7 @@ export function useGrvt() {
             trigger_type: trigger.type,
             tpsl: {
               trigger_by: trigger.triggerBy || 'LAST',
-              trigger_price: String(trigger.price),
+              trigger_price: triggerPriceText,
               close_position: !!trigger.closePosition,
               is_split_position: !!trigger.isSplitPosition,
             },
@@ -1303,7 +1379,7 @@ export function useGrvt() {
       sizeText,
       instrument,
     };
-  }, [builderConfig, credentials, evmWallet, hasResolvedCredentials, marketForSymbol, oneTapSigner, priceForOrder, setGrvtInitialLeverage, signTypedDataForGrvt, walletAddr]);
+  }, [builderConfig, credentials, evmWallet, hasResolvedCredentials, marketForSymbol, maxLeverageBySymbol, oneTapSigner, priceForOrder, setGrvtInitialLeverage, signTypedDataForGrvt, walletAddr]);
 
   const postSignedGrvtPayload = useCallback(async (path, payload) => {
     try {
@@ -1512,6 +1588,14 @@ export function useGrvt() {
     }
   }, [fetchAccount, submitSignedOrder]);
 
+  const marketsWithLimits = useMemo(() => {
+    if (!Object.keys(maxLeverageBySymbol).length) return markets;
+    return markets.map((m) => {
+      const cap = maxLeverageBySymbol[String(m.symbol || '').toUpperCase()];
+      return cap ? { ...m, max_leverage: cap } : m;
+    });
+  }, [markets, maxLeverageBySymbol]);
+
   return {
     connected: !!walletAddr,
     walletAddr,
@@ -1519,7 +1603,7 @@ export function useGrvt() {
     positions,
     orders,
     prices,
-    markets,
+    markets: marketsWithLimits,
     walletUsdc,
     walletEth: null,
     leverageSettings,

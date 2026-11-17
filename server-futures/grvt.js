@@ -39,6 +39,9 @@ const GRVT_BUILDER_API_KEY_PERMISSIONS = normalizePermissionString(
 );
 const GRVT_FILL_LOOKBACK_LIMIT = Math.max(10, Math.min(1000, Number(process.env.GRVT_FILL_LOOKBACK_LIMIT || 500)));
 const GRVT_CHAIN_ID = String(process.env.GRVT_CHAIN_ID || process.env.VITE_GRVT_CHAIN_ID || '325').trim();
+const GRVT_REQUEST_TIMEOUT_MS = Math.max(2_000, Number(process.env.GRVT_REQUEST_TIMEOUT_MS || 15_000));
+// Pages of fill_history read per import, so fills made while the panel was closed are not lost.
+const GRVT_IMPORT_MAX_PAGES = Math.max(1, Math.min(50, Number(process.env.GRVT_IMPORT_MAX_PAGES || 10)));
 
 function num(value, fallback = 0) {
   const n = Number(value);
@@ -124,6 +127,7 @@ async function post(base, endpoint, body = {}, headers = {}, apiMode = 'full', a
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...headers },
     body: JSON.stringify(body || {}),
+    signal: AbortSignal.timeout(GRVT_REQUEST_TIMEOUT_MS),
   });
   const text = await r.text();
   let data = null;
@@ -301,10 +305,54 @@ async function ticker(instrument) {
   }
 }
 
+// GRVT has no all-tickers endpoint, so every market costs one ticker call. Fan out with a
+// bounded pool and share one snapshot across callers (GRVT lists 180+ perps, incl. equities).
+const MARKET_INFO_TTL_MS = Math.max(2_000, Number(process.env.GRVT_MARKET_INFO_TTL_MS || 10_000));
+const TICKER_CONCURRENCY = Math.max(1, Number(process.env.GRVT_TICKER_CONCURRENCY || 16));
+let marketInfoCache = { at: 0, value: null, inflight: null };
+
+async function mapPool(items, limit, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const idx = next++;
+      out[idx] = await fn(items[idx], idx);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
+
+function tickerVolume24hUsd(t) {
+  const direct = num(t.volume_24h, NaN);
+  if (Number.isFinite(direct)) return direct;
+  return num(t.buy_volume_24h_q) + num(t.sell_volume_24h_q);
+}
+
 async function getMarketInfo() {
+  const fresh = marketInfoCache.value && Date.now() - marketInfoCache.at < MARKET_INFO_TTL_MS;
+  if (fresh) return marketInfoCache.value;
+  if (!marketInfoCache.inflight) {
+    marketInfoCache.inflight = loadMarketInfo()
+      .then((value) => {
+        marketInfoCache = { at: Date.now(), value, inflight: null };
+        return value;
+      })
+      .catch((error) => {
+        marketInfoCache.inflight = null;
+        throw error;
+      });
+  }
+  // Serve the last snapshot while a refresh runs; only the very first load waits.
+  if (marketInfoCache.value) return marketInfoCache.value;
+  return marketInfoCache.inflight;
+}
+
+async function loadMarketInfo() {
   const instruments = await getInstruments();
-  const tickers = await Promise.all(instruments.slice(0, 120).map(i => ticker(i.instrument)));
-  const data = instruments.slice(0, 120).map((i, idx) => {
+  const tickers = await mapPool(instruments, TICKER_CONCURRENCY, i => ticker(i.instrument));
+  const data = instruments.map((i, idx) => {
     const t = tickers[idx] || {};
     const mark = num(t.mark_price || t.markPrice || t.last_price || t.index_price);
     const open24h = num(t.open_price || t.openPrice || t.price_24h_ago || t.price24hAgo);
@@ -332,9 +380,9 @@ async function getMarketInfo() {
       high_24h: num(t.high_price),
       low_24h: num(t.low_price),
       open_interest: num(t.open_interest),
-      volume_24h: num(t.volume_24h),
+      volume_24h: tickerVolume24hUsd(t),
       funding_rate: normalizeTickerFundingRate(t.funding_rate ?? t.fr2),
-      funding_interval_hours: Number(t.funding_interval_hours || t.fi || 0) || null,
+      funding_interval_hours: Number(t.funding_interval_hours || t.fi || i.funding_interval_hours || 0) || null,
       next_funding_time: t.next_funding_time || t.nf || null,
       _grvt: { instrument: i.instrument, raw: i, ticker: t },
       _raw: i,
@@ -452,11 +500,18 @@ async function getPositions(credsInput) {
 
 async function getInitialLeverage(credsInput) {
   const creds = await resolveCreds(credsInput);
-  const payload = await tradePost('get_all_initial_leverage', {
-    sub_account_id: creds.subAccountId,
-  }, {
-    sa: creds.subAccountId,
-  }, authHeaders(creds));
+  // Full mode first: its field names (max_leverage, min_leverage) are unambiguous, and the
+  // client uses max_leverage as the per-market leverage cap.
+  let payload;
+  try {
+    payload = await post(GRVT_TRADES_API, 'get_all_initial_leverage', { sub_account_id: creds.subAccountId }, authHeaders(creds), 'full');
+  } catch (fullError) {
+    try {
+      payload = await post(GRVT_TRADES_API, 'get_all_initial_leverage', { sa: creds.subAccountId }, authHeaders(creds), 'lite');
+    } catch {
+      throw fullError;
+    }
+  }
   return rows(payload).map(row => ({
     instrument: String(row.instrument || row.i || '').trim(),
     symbol: symbolOf(row.instrument || row.i),
@@ -510,6 +565,10 @@ async function getOrders(credsInput) {
 }
 
 async function getAccountTradeHistory(credsInput, opts = {}) {
+  return (await getAccountFillPage(credsInput, opts)).rows;
+}
+
+async function getAccountFillPage(credsInput, opts = {}) {
   const creds = await resolveCreds(credsInput);
   const payload = await post(GRVT_TRADES_API, 'fill_history', {
     sub_account_id: creds.subAccountId,
@@ -521,19 +580,28 @@ async function getAccountTradeHistory(credsInput, opts = {}) {
     ...(opts.end_time ? { end_time: String(opts.end_time) } : {}),
     ...(opts.cursor ? { cursor: String(opts.cursor) } : {}),
   }, authHeaders(creds));
-  return rows(payload).map(fill => ({
-    ...fill,
-    _dex: 'grvt',
-    id: fill.trade_id || `${fill.event_time || ''}:${fill.instrument || ''}:${fill.size || ''}:${fill.price || ''}`,
-    symbol: symbolOf(fill.instrument),
-    side: fill.is_buyer ? 'open_long' : 'open_short',
-    action: fill.is_buyer ? 'open_long' : 'open_short',
-    amount: String(Math.abs(num(fill.size))),
-    price: String(fill.price || ''),
-    fee: Math.abs(num(fill.fee)),
-    created_at: nsToMs(fill.event_time),
-    realized_pnl_amount: fill.realized_pnl,
-  }));
+  const list = rows(payload).map(fill => {
+    // GRVT fills carry no open/close flag; a fill that realizes PnL is reducing a position.
+    const closing = num(fill.realized_pnl) !== 0;
+    const action = closing
+      ? (fill.is_buyer ? 'close_short' : 'close_long')
+      : (fill.is_buyer ? 'open_long' : 'open_short');
+    return {
+      ...fill,
+      _dex: 'grvt',
+      id: fill.trade_id || `${fill.event_time || ''}:${fill.instrument || ''}:${fill.size || ''}:${fill.price || ''}`,
+      symbol: symbolOf(fill.instrument),
+      side: action,
+      action,
+      amount: String(Math.abs(num(fill.size))),
+      price: String(fill.price || ''),
+      fee: Math.abs(num(fill.fee)),
+      created_at: nsToMs(fill.event_time),
+      realized_pnl_amount: fill.realized_pnl,
+    };
+  });
+  const next = String(payload?.next || payload?.n || '').trim();
+  return { rows: list, next };
 }
 
 function builderConfigured() {
@@ -952,6 +1020,11 @@ function normalizeBuilderFill(fill) {
   const builder = fillBuilderId(fill);
   const isBuyer = Boolean(valueOf(fill, 'is_buyer', 'ib'));
   const eventKey = tradeId || clientOrderId || `${event}:${instrument}:${size}:${price}:${isBuyer ? 'b' : 's'}`;
+  // One order can match several makers: each fill has its own trade_id but they share the
+  // client_order_id, so the per-fill key must lead with trade_id. Rows imported before this
+  // change were keyed by client_order_id; importFillsForPlayer still recognises them.
+  const legacyClientOrderId = clientOrderId ? `grvt:${account}:${clientOrderId}` : `grvt:${account}:${eventKey}`;
+  const realizedPnl = valueOf(fill, 'realized_pnl', 'rp');
   return {
     symbol: symbolOf(instrument),
     side: isBuyer ? 'long' : 'short',
@@ -959,12 +1032,14 @@ function normalizeBuilderFill(fill) {
     amount: String(size),
     price: String(price),
     orderId: orderId || `${event}:${account}`,
-    clientOrderId: clientOrderId ? `grvt:${account}:${clientOrderId}` : `grvt:${account}:${eventKey}`,
+    clientOrderId: tradeId ? `grvt:${account}:t:${tradeId}` : legacyClientOrderId,
+    legacyClientOrderId,
+    tradeId,
     status: 'filled',
     dex: 'grvt',
     notional_usd: notional,
     verifiedSource: 'grvt_builder',
-    pnl: null,
+    pnl: realizedPnl != null && Number.isFinite(Number(realizedPnl)) ? String(realizedPnl) : null,
     fee: String(fee),
     proofJson: JSON.stringify({
       source: 'grvt_builder_fill_history',
@@ -978,6 +1053,9 @@ function normalizeBuilderFill(fill) {
       fill,
     }),
     created_at: nsToMs(event),
+    // Stamp the row with GRVT's fill time (SQLite datetime format) so tournament windows
+    // count the trade when it happened, not when the panel imported it.
+    createdAt: event ? new Date(nsToMs(event)).toISOString().replace('T', ' ').slice(0, 19) : null,
     _raw: fill,
   };
 }
@@ -996,6 +1074,19 @@ async function getBuilderFillHistory(opts = {}) {
   return payload;
 }
 
+/** Existing row for this fill: current trade_id key, or a legacy client_order_id-keyed row of the same trade. */
+function findImportedFill(db, trade) {
+  const current = db.db.prepare('SELECT id, player_id FROM trade_history WHERE client_order_id = ? LIMIT 1').get(trade.clientOrderId);
+  if (current || trade.legacyClientOrderId === trade.clientOrderId) return current || null;
+  const legacy = db.db.prepare(`
+    SELECT id, player_id,
+           CASE WHEN json_valid(proof_json) THEN json_extract(proof_json, '$.trade_id') END AS trade_id
+    FROM trade_history WHERE client_order_id = ? LIMIT 1
+  `).get(trade.legacyClientOrderId);
+  if (!legacy) return null;
+  return !legacy.trade_id || String(legacy.trade_id) === String(trade.tradeId) ? legacy : null;
+}
+
 async function importFillsForPlayer(playerId, accountInput, opts = {}) {
   if (!GRVT_BUILDER_ACCOUNT_ID) {
     return { ok: false, imported: 0, adopted: 0, skipped: 0, total: 0, reason: 'builder_account_not_configured' };
@@ -1008,8 +1099,20 @@ async function importFillsForPlayer(playerId, accountInput, opts = {}) {
   let fills = [];
   let source = 'account_fill_history';
   if (accountCreds) {
-    fills = (await getAccountTradeHistory(accountCreds, opts))
-      .filter(f => fillAccountId(f) === target && isOurBuilderFill(f));
+    // Newest page first; keep following the cursor only while every builder fill on the page is
+    // new, i.e. the gap since the last import may continue on the next page.
+    let cursor = opts.cursor || '';
+    for (let page = 0; page < GRVT_IMPORT_MAX_PAGES; page++) {
+      const { rows: batch, next } = await getAccountFillPage(accountCreds, { ...opts, cursor });
+      const ours = batch.filter(f => fillAccountId(f) === target && isOurBuilderFill(f));
+      fills.push(...ours);
+      const reachedKnown = ours.some((f) => {
+        const t = normalizeBuilderFill(f);
+        return t && findImportedFill(db, t);
+      });
+      if (!next || !ours.length || reachedKnown || opts.cursor) break;
+      cursor = next;
+    }
   } else if (builderConfigured()) {
     source = 'builder_fill_history';
     const payload = await getBuilderFillHistory(opts);
@@ -1025,14 +1128,15 @@ async function importFillsForPlayer(playerId, accountInput, opts = {}) {
     const trade = normalizeBuilderFill(fill);
     if (!trade) { skipped++; continue; }
     try {
-      const before = db.db.prepare('SELECT id, player_id FROM trade_history WHERE client_order_id = ? LIMIT 1').get(trade.clientOrderId);
+      const before = findImportedFill(db, trade);
       if (before) {
         db.db.prepare(`
           UPDATE trade_history
           SET fee = COALESCE(NULLIF(fee, ''), ?),
-              proof_json = COALESCE(NULLIF(proof_json, ''), ?)
+              proof_json = COALESCE(NULLIF(proof_json, ''), ?),
+              pnl = COALESCE(pnl, ?)
           WHERE id = ? AND dex = 'grvt' AND verified_source = 'grvt_builder'
-        `).run(trade.fee || null, trade.proofJson || null, before.id);
+        `).run(trade.fee || null, trade.proofJson || null, trade.pnl, before.id);
         if (before.player_id !== playerId) {
           const moved = db.db.prepare(`
             UPDATE trade_history

@@ -89,10 +89,32 @@ async function ticker(instrument) {
   }
 }
 
+// GRVT lists 180+ perps (crypto, equities, commodities) and has no all-tickers endpoint,
+// so fetch every ticker through a small pool instead of truncating the list.
+const TICKER_CONCURRENCY = 12;
+
+async function mapPool(items, limit, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const idx = next++;
+      out[idx] = await fn(items[idx], idx);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
+
+function tickerVolume24hUsd(tickerRow) {
+  const direct = num(tickerRow.volume_24h, NaN);
+  if (Number.isFinite(direct)) return direct;
+  return num(tickerRow.buy_volume_24h_q) + num(tickerRow.sell_volume_24h_q);
+}
+
 export async function fetchGrvtMarketsDirect() {
-  const instruments = await getInstruments();
-  const visible = instruments.slice(0, 120);
-  const tickers = await Promise.all(visible.map(item => ticker(item.instrument)));
+  const visible = await getInstruments();
+  const tickers = await mapPool(visible, TICKER_CONCURRENCY, item => ticker(item.instrument));
   const data = visible.map((instrument, idx) => {
     const tickerRow = tickers[idx] || {};
     const mark = num(tickerRow.mark_price || tickerRow.markPrice || tickerRow.last_price || tickerRow.index_price);
@@ -121,9 +143,9 @@ export async function fetchGrvtMarketsDirect() {
       high_24h: num(tickerRow.high_price),
       low_24h: num(tickerRow.low_price),
       open_interest: num(tickerRow.open_interest),
-      volume_24h: num(tickerRow.volume_24h),
+      volume_24h: tickerVolume24hUsd(tickerRow),
       funding_rate: normalizeTickerFundingRate(tickerRow.funding_rate ?? tickerRow.fr2),
-      funding_interval_hours: Number(tickerRow.funding_interval_hours || tickerRow.fi || 0) || null,
+      funding_interval_hours: Number(tickerRow.funding_interval_hours || tickerRow.fi || instrument.funding_interval_hours || 0) || null,
       next_funding_time: tickerRow.next_funding_time || tickerRow.nf || null,
       _grvt: { instrument: instrument.instrument, raw: instrument, ticker: tickerRow },
       _raw: instrument,
