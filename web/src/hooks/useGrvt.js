@@ -3,6 +3,7 @@ import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { GRVT_CHAIN_ID, ensureGrvtChain } from '../lib/grvtConfig';
 import { signTypedDataCompat } from '../lib/risexClient';
+import { reportClientEvent } from '../lib/clientLogger';
 import { usePlayer } from './useGodot';
 import { useCredentialOperationScope } from './useCredentialOperationScope';
 import { registeredDexWallet } from '../lib/playerDexAccounts';
@@ -14,6 +15,13 @@ import {
   writeEncryptedCredential,
 } from '../lib/encryptedCredentialStorage';
 import { fetchGrvtMarketsDirect } from '../lib/grvtClient';
+import {
+  buildGrvtPositionConfigTypedData,
+  formatGrvtLeverage,
+  grvtLeverageFailureAllowsOrder,
+  planGrvtLeverageUpdate,
+} from '../lib/grvtPositionConfig';
+import { buildGrvtOrderTypedData, formatGrvtSize, grvtBaseDecimals } from '../lib/grvtOrderSigning';
 
 const STORAGE_KEY = 'clash_grvt_credentials_v1';
 const ONE_TAP_SIGNER_STORAGE_KEY = 'clash_grvt_one_tap_signer_v1';
@@ -123,6 +131,35 @@ function stripDomainTypes(types = {}) {
   return rest;
 }
 
+// GRVT onboarding happens almost entirely in the wallet, so without these events a failed
+// setup leaves no server trace (see a wallet that never reached /grvt/authorize-builder).
+function reportGrvtSetupEvent(type, data = {}, level = 'info') {
+  try {
+    reportClientEvent(`grvt.setup.${type}`, { at: new Date().toISOString(), ...data }, {
+      level,
+      source: 'grvt.setup',
+      message: `grvt.setup.${type}`,
+      flush: level === 'warn' || level === 'error',
+    });
+  } catch {}
+}
+
+const GRVT_WALLET_STEP_TIMEOUT_MS = 120_000;
+
+// A wallet request that never settles (popup hidden, extension stuck) otherwise leaves the
+// setup button spinning forever with no error.
+function withWalletTimeout(promise, step) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const err = new Error(`Your wallet did not respond (${step}). Open the wallet extension, approve or reject the pending request, then try again.`);
+      err.code = 'wallet_timeout';
+      reject(err);
+    }, GRVT_WALLET_STEP_TIMEOUT_MS);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 function grvtErrorMessage(error, fallback = 'GRVT request failed') {
   return error?.detail || error?.error || error?.message || String(error || fallback);
 }
@@ -170,18 +207,6 @@ function randomClientOrderId() {
 
 function nowNs() {
   return BigInt(Date.now()) * 1_000_000n;
-}
-
-function decimalToFixedInt(value, decimals) {
-  const text = String(value ?? '').trim();
-  if (!text || !Number.isFinite(Number(text))) throw new Error('Invalid GRVT order number');
-  const negative = text.startsWith('-');
-  if (negative) throw new Error('GRVT order number cannot be negative');
-  const [wholeRaw, fracRaw = ''] = text.replace(/^\+/u, '').split('.');
-  const whole = wholeRaw || '0';
-  const frac = fracRaw.padEnd(decimals, '0').slice(0, decimals);
-  const digits = `${whole}${frac}`.replace(/^0+(?=\d)/u, '') || '0';
-  return BigInt(digits);
 }
 
 function decimalPlaces(value) {
@@ -484,8 +509,14 @@ export function useGrvt() {
     const scope = captureCredential();
     if (!token) throw new Error('Game session is not ready');
     const mainAccountId = String(evmWallet?.address || '').trim();
-    if (!/^0x[a-fA-F0-9]{40}$/u.test(mainAccountId)) throw new Error('Connect your GRVT Exchange wallet first');
     const provider = evmWallet?.provider;
+    reportGrvtSetupEvent('start', {
+      has_evm_address: !!mainAccountId,
+      has_provider: !!provider,
+      wallet_source: evmWallet?.source || null,
+      wallet_matches_player: !!(mainAccountId && player?.wallet && mainAccountId.toLowerCase() === String(player.wallet).toLowerCase()),
+    });
+    if (!/^0x[a-fA-F0-9]{40}$/u.test(mainAccountId)) throw new Error('Connect your GRVT Exchange wallet first');
     if (!provider) throw new Error('GRVT wallet signer is not ready');
 
     const config = builderConfig || await fetchBuilderConfig();
@@ -496,7 +527,8 @@ export function useGrvt() {
       throw new Error('GRVT builder account is not configured');
     }
 
-    await ensureGrvtSigningChain(provider);
+    await withWalletTimeout(ensureGrvtSigningChain(provider), 'switch to GRVT Exchange network').catch((e) => { if (e && typeof e === 'object' && !e.grvtStep) e.grvtStep = 'switch_chain'; throw e; });
+    reportGrvtSetupEvent('chain_ready');
     const signer = createOneTapSigner();
     const nonce = randomUint32();
     const expiration = nowNs() + 30n * 60n * 1_000_000_000n;
@@ -519,7 +551,7 @@ export function useGrvt() {
         { name: 'expiration', type: 'int64' },
       ],
     };
-    const rawSignature = await signTypedDataCompat({
+    const rawSignature = await withWalletTimeout(signTypedDataCompat({
       provider,
       walletClient: null,
       account: mainAccountId,
@@ -536,7 +568,8 @@ export function useGrvt() {
         nonce,
         expiration,
       },
-    });
+    }), 'sign GRVT builder authorization').catch((e) => { if (e && typeof e === 'object' && !e.grvtStep) e.grvtStep = 'sign_builder_authorization'; throw e; });
+    reportGrvtSetupEvent('signed');
     const sig = splitSignature(rawSignature);
     const authorized = await fetchJson('/api/futures/grvt/authorize-builder', {
       method: 'POST',
@@ -558,10 +591,10 @@ export function useGrvt() {
           chain_id: String(GRVT_CHAIN_ID),
         },
       }),
-    });
+    }).catch((e) => { if (e && typeof e === 'object' && !e.grvtStep) e.grvtStep = 'authorize_builder'; throw e; });
     const apiKey = apiKeyFromAuthorizeResult(authorized);
     if (!apiKey) throw new Error('GRVT did not return an API key for this authorization');
-    const saved = await resolveBrowserCredentials({ apiKey });
+    const saved = await resolveBrowserCredentials({ apiKey }).catch((e) => { if (e && typeof e === 'object' && !e.grvtStep) e.grvtStep = 'resolve_sub_account'; throw e; });
     const resolved = {
       apiKey,
       subAccountId: String(saved?.sub_account_id || '').trim(),
@@ -579,13 +612,14 @@ export function useGrvt() {
     setCredentials(resolved);
     setOneTapSigner(signer);
     setBuilderAuthorized(true);
+    reportGrvtSetupEvent('authorized');
     return {
       success: true,
       auto_created_api_key: true,
       signer: signer.address,
       sub_account_id: resolved.subAccountId,
     };
-  }, [authHeaders, builderConfig, evmWallet?.address, evmWallet?.provider, fetchBuilderConfig, fetchJson, resolveBrowserCredentials, token, captureCredential, assertCredential]);
+  }, [authHeaders, builderConfig, evmWallet?.address, evmWallet?.provider, evmWallet?.source, fetchBuilderConfig, fetchJson, player?.wallet, resolveBrowserCredentials, token, captureCredential, assertCredential]);
 
   const fetchMarkets = useCallback(async () => {
     try {
@@ -926,6 +960,9 @@ export function useGrvt() {
       return { success: true };
     } catch (e) {
       const msg = grvtErrorMessage(e, 'GRVT activation failed');
+      const step = e?.grvtStep || (input?.apiKey || input?.api_key ? 'manual_api_key' : 'precheck');
+      console.warn('[useGrvt] activation failed:', step, msg);
+      reportGrvtSetupEvent('failed', { step, error: String(msg).slice(0, 300), code: e?.code ?? null }, 'warn');
       setError(msg);
       return { error: msg };
     } finally {
@@ -1055,9 +1092,12 @@ export function useGrvt() {
     return result;
   }, [authedPost, builderAuthorized, builderConfig, credentials, evmWallet, hasResolvedCredentials, walletAddr]);
 
+  // GRVT set_position_config: signed SetSubAccountPositionMarginConfig (replaces the
+  // deprecated set_initial_leverage). Signed by the same key that signs orders.
   const syncPositionConfig = useCallback(async (instrument, symbol, leverage, isIsolated) => {
-    const lev = Number(leverage);
-    if (!instrument || !Number.isFinite(lev) || lev <= 0) return null;
+    if (!instrument) return null;
+    const leverageText = formatGrvtLeverage(leverage);
+    if (!hasResolvedCredentials) throw new Error('Connect GRVT API session first');
     const signerAddress = oneTapSigner?.address || walletAddr;
     if (!signerAddress) throw new Error('Connect your GRVT Exchange wallet first');
     const provider = evmWallet?.provider;
@@ -1065,83 +1105,31 @@ export function useGrvt() {
       if (!provider) throw new Error('GRVT wallet signer is not ready');
       await ensureGrvtSigningChain(provider);
     }
+    const market = marketForSymbol(symbol);
+    const instrumentHash = market?._raw?.instrument_hash || market?._grvt?.raw?.instrument_hash;
+    if (!instrumentHash) throw new Error(`GRVT instrument metadata is not ready for ${symbol || instrument}`);
 
     const nonce = randomUint32();
     const expiration = nowNs() + 24n * 60n * 60n * 1_000_000_000n;
     const marginType = isIsolated ? 'ISOLATED' : 'CROSS';
-    const marginTypeValue = isIsolated ? 1 : 2;
-    const signConfig = async ({ variant = 'doc' } = {}) => {
-      const isLegacyAccountOnly = variant === 'account-only';
-      const isLegacyPosition = variant === 'position-camel';
-      const primaryType = isLegacyAccountOnly
-        ? 'SetSubAccountMarginType'
-        : isLegacyPosition
-          ? 'SetSubAccountPositionMarginConfig'
-          : 'ApiSetSubAccountPositionMarginConfigRequest';
-      const types = {
-        EIP712Domain: [
-          { name: 'name', type: 'string' },
-          { name: 'version', type: 'string' },
-          { name: 'chainId', type: 'uint256' },
-        ],
-        [primaryType]: isLegacyAccountOnly ? [
-          { name: 'subAccountID', type: 'uint64' },
-          { name: 'marginType', type: 'uint8' },
-          { name: 'nonce', type: 'uint32' },
-          { name: 'expiration', type: 'int64' },
-        ] : isLegacyPosition ? [
-          { name: 'subAccountID', type: 'uint64' },
-          { name: 'instrument', type: 'string' },
-          { name: 'marginType', type: 'uint8' },
-          { name: 'leverage', type: 'string' },
-          { name: 'nonce', type: 'uint32' },
-          { name: 'expiration', type: 'int64' },
-        ] : [
-          { name: 'sub_account_id', type: 'string' },
-          { name: 'instrument', type: 'string' },
-          { name: 'margin_type', type: 'string' },
-          { name: 'leverage', type: 'string' },
-          { name: 'nonce', type: 'uint32' },
-          { name: 'expiration', type: 'int64' },
-        ],
-      };
-      const message = isLegacyAccountOnly
-        ? {
-          subAccountID: BigInt(credentials.subAccountId),
-          marginType: marginTypeValue,
-          nonce,
-          expiration,
-        }
-        : isLegacyPosition
-          ? {
-            subAccountID: BigInt(credentials.subAccountId),
-            instrument,
-            marginType: marginTypeValue,
-            leverage: String(lev),
-            nonce,
-            expiration,
-          }
-          : {
-            sub_account_id: String(credentials.subAccountId),
-            instrument,
-            margin_type: marginType,
-            leverage: String(lev),
-            nonce,
-            expiration,
-          };
-      const rawSignature = await signTypedDataForGrvt({
-        provider,
-        account: signerAddress,
-        domain: { name: 'GRVT Exchange', version: '0', chainId: GRVT_CHAIN_ID },
-        types,
-        primaryType,
-        message,
-      });
-      return splitSignature(rawSignature);
-    };
-    const postConfig = (sig) => authedPost('/api/futures/grvt/set-position-config', {
+    const typed = buildGrvtPositionConfigTypedData({
+      subAccountId: credentials.subAccountId,
+      instrumentHash,
+      marginType,
+      leverage: leverageText,
+      nonce,
+      expiration,
+      chainId: GRVT_CHAIN_ID,
+    });
+    const rawSignature = await signTypedDataForGrvt({
+      provider,
+      account: signerAddress,
+      ...typed,
+    });
+    const sig = splitSignature(rawSignature);
+    const result = await authedPost('/api/futures/grvt/set-position-config', {
       instrument,
-      leverage: String(lev),
+      leverage: leverageText,
       margin_type: marginType,
       signature: {
         signer: signerAddress,
@@ -1153,35 +1141,13 @@ export function useGrvt() {
         chain_id: String(GRVT_CHAIN_ID),
       },
     });
-    let sig = await signConfig();
-    let result;
-    try {
-      result = await postConfig(sig);
-    } catch (e) {
-      const msg = String(e?.message || e || '');
-      if (!/2002|signature does not match payload/i.test(msg)) throw e;
-      let fallbackError = e;
-      for (const variant of ['position-camel', 'account-only']) {
-        try {
-          sig = await signConfig({ variant });
-          result = await postConfig(sig);
-          fallbackError = null;
-          break;
-        } catch (nextError) {
-          fallbackError = nextError;
-          const nextMsg = String(nextError?.message || nextError || '');
-          if (!/2002|signature does not match payload/i.test(nextMsg)) throw nextError;
-        }
-      }
-      if (fallbackError) throw fallbackError;
-    }
     const sym = String(symbol || '').toUpperCase();
     if (sym) {
-      setLeverageSettings(prev => ({ ...prev, [sym]: lev }));
+      setLeverageSettings(prev => ({ ...prev, [sym]: Number(leverageText) }));
       setMarginModes(prev => ({ ...prev, [sym]: !!isIsolated }));
     }
     return result;
-  }, [authedPost, credentials, evmWallet, oneTapSigner, signTypedDataForGrvt, walletAddr]);
+  }, [authedPost, credentials, evmWallet, hasResolvedCredentials, marketForSymbol, oneTapSigner, signTypedDataForGrvt, walletAddr]);
 
   const setGrvtMarginMode = useCallback(async (symbol, isIsolated) => {
     const market = marketForSymbol(symbol);
@@ -1190,17 +1156,15 @@ export function useGrvt() {
     return syncPositionConfig(instrument, symbol, lev, !!isIsolated);
   }, [leverageSettings, marketForSymbol, syncPositionConfig]);
 
+  // Change leverage only; keep the position's current GRVT margin type (CROSS by default).
   const setGrvtInitialLeverage = useCallback(async (instrument, symbol, leverage) => {
     const lev = Number(leverage);
     if (!instrument || !Number.isFinite(lev) || lev <= 0) return null;
-    const result = await authedPost('/api/futures/grvt/set-leverage', {
-      instrument,
-      leverage: String(lev),
-    });
     const sym = String(symbol || '').toUpperCase();
-    if (sym) setLeverageSettings(prev => ({ ...prev, [sym]: lev }));
-    return result;
-  }, [authedPost]);
+    const plan = planGrvtLeverageUpdate({ requested: lev, current: leverageSettings[sym] });
+    if (!plan.update) return { success: true, skipped: true, reason: plan.reason, leverage: lev };
+    return syncPositionConfig(instrument, symbol, lev, !!marginModes[sym]);
+  }, [leverageSettings, marginModes, syncPositionConfig]);
 
   const buildSignedOrder = useCallback(async ({
     symbol,
@@ -1244,8 +1208,14 @@ export function useGrvt() {
       try {
         await setGrvtInitialLeverage(instrument, symbol, lev);
       } catch (e) {
-        console.warn('[useGrvt] set initial leverage:', e?.message || e);
-        throw e;
+        const msg = grvtErrorMessage(e, 'GRVT leverage update failed');
+        const current = leverageSettings[String(symbol || '').toUpperCase()];
+        console.warn('[useGrvt] set position config:', msg, { symbol, requested: lev, current: current ?? null });
+        // GRVT already runs this market at >= the requested leverage, so the order needs no
+        // more margin than the player chose; place it rather than block on the update.
+        if (!grvtLeverageFailureAllowsOrder({ requested: lev, current })) {
+          throw new Error(`Could not set GRVT leverage to ${lev}x for ${symbol}${Number(current) > 0 ? ` (currently ${current}x)` : ''}: ${msg}`);
+        }
       }
     }
     const explicitSize = Number(amountBase);
@@ -1271,66 +1241,38 @@ export function useGrvt() {
     const expiration = nowNs() + 3n * 60n * 60n * 1_000_000_000n;
     const clientOrderId = randomClientOrderId();
     const tifInfo = timeInForceValue(tif, isMarket);
-    const sizeText = formatStepNumber(contractSize, sizeStep, 9);
+    // GRVT signs contractSize with the instrument's base_decimals (6 or 3 on many markets),
+    // so the wire size must not carry more decimals than that.
+    const baseDecimals = grvtBaseDecimals(market?._raw || market?._grvt?.raw);
+    const sizeText = formatGrvtSize(formatStepNumber(contractSize, sizeStep, baseDecimals), baseDecimals);
     // GRVT rejects prices off the instrument tick, so snap typed/limit/trigger prices to it.
     const tickSize = String(market?._raw?.tick_size || market?.tick_size || '');
     const limitPriceText = isMarket ? '0' : roundToTick(price || orderPrice, tickSize);
     const triggerPriceText = trigger ? roundToTick(trigger.price, tickSize) : '';
     const isBuyingAsset = side === 'bid' || side === 'buy' || side === 'long';
-    const builderFee = builderFeeSignValue(builderFeeRate);
-
-    const primaryType = 'OrderWithBuilderFee';
-    const types = {
-      EIP712Domain: [
-        { name: 'name', type: 'string' },
-        { name: 'version', type: 'string' },
-        { name: 'chainId', type: 'uint256' },
-      ],
-      [primaryType]: [
-        { name: 'subAccountID', type: 'uint64' },
-        { name: 'isMarket', type: 'bool' },
-        { name: 'timeInForce', type: 'uint8' },
-        { name: 'postOnly', type: 'bool' },
-        { name: 'reduceOnly', type: 'bool' },
-        { name: 'legs', type: 'OrderLeg[]' },
-        { name: 'builder', type: 'address' },
-        { name: 'builderFee', type: 'uint32' },
-        { name: 'nonce', type: 'uint32' },
-        { name: 'expiration', type: 'int64' },
-      ],
-      OrderLeg: [
-        { name: 'assetID', type: 'uint256' },
-        { name: 'contractSize', type: 'uint64' },
-        { name: 'limitPrice', type: 'uint64' },
-        { name: 'isBuyingContract', type: 'bool' },
-      ],
-    };
-    const message = {
-      subAccountID: BigInt(credentials.subAccountId),
+    const typed = buildGrvtOrderTypedData({
+      subAccountId: credentials.subAccountId,
       isMarket,
-      timeInForce: tifInfo.sign,
+      timeInForceCode: tifInfo.sign,
       postOnly: false,
       reduceOnly,
       legs: [{
-        assetID: BigInt(assetId),
-        contractSize: decimalToFixedInt(sizeText, 9),
-        limitPrice: isMarket ? 0n : decimalToFixedInt(limitPriceText, 9),
-        isBuyingContract: isBuyingAsset,
+        instrumentHash: assetId,
+        size: sizeText,
+        limitPrice: limitPriceText,
+        isBuying: isBuyingAsset,
+        baseDecimals,
       }],
-      ...({
-        builder: builderAccount,
-        builderFee,
-      }),
+      builder: builderAccount,
+      builderFee: builderFeeRate,
       nonce,
       expiration,
-    };
+      chainId: GRVT_CHAIN_ID,
+    });
     const rawSignature = await signTypedDataForGrvt({
       provider,
       account: signerAddress,
-      domain: { name: 'GRVT Exchange', version: '0', chainId: GRVT_CHAIN_ID },
-      types,
-      primaryType,
-      message,
+      ...typed,
     });
     const sig = splitSignature(rawSignature);
     const order = {
@@ -1379,7 +1321,7 @@ export function useGrvt() {
       sizeText,
       instrument,
     };
-  }, [builderConfig, credentials, evmWallet, hasResolvedCredentials, marketForSymbol, maxLeverageBySymbol, oneTapSigner, priceForOrder, setGrvtInitialLeverage, signTypedDataForGrvt, walletAddr]);
+  }, [builderConfig, credentials, evmWallet, hasResolvedCredentials, leverageSettings, marketForSymbol, maxLeverageBySymbol, oneTapSigner, priceForOrder, setGrvtInitialLeverage, signTypedDataForGrvt, walletAddr]);
 
   const postSignedGrvtPayload = useCallback(async (path, payload) => {
     try {

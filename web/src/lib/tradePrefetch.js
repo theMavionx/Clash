@@ -390,13 +390,8 @@ function buildDexSpecificRequests({ dex, token, walletAddress, signal }) {
 
   if (dex === 'grvt' && token) {
     addPrefetchRequest(requests, futuresUrl('/grvt/config?dex=grvt'), { headers, signal });
-    // GRVT supports authenticated generic positions/orders, but not account.
-    // Unsupported generic reads fall through to the legacy Pacifica handler.
-    if (address) {
-      const qs = `dex=grvt&address=${encoded(address)}`;
-      addPrefetchRequest(requests, futuresUrl(`/positions?${qs}`), { headers, signal });
-      addPrefetchRequest(requests, futuresUrl(`/orders?${qs}`), { headers, signal });
-    }
+    // GRVT positions/orders need session credentials (/grvt/positions, /grvt/orders);
+    // the generic address-only reads always answer 400, so they are not prefetched.
     return requests;
   }
 

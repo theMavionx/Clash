@@ -94,14 +94,14 @@ for (const dex of ['monad', 'ondo', 'hibachi']) {
   });
 }
 
-test('GRVT never prefetches unsupported account route; positions/orders remain authenticated', async () => {
+test('GRVT never prefetches generic account/positions/orders (they need session credentials)', async () => {
   const anonymous = await run('grvt');
   assert.equal(anonymous.length, 2);
   const authenticated = await run('grvt', 'fixture-token');
-  assert.equal(authenticated.length, 5);
-  assert.ok(!authenticated.some(url => url.includes('/account?')));
-  assert.ok(authenticated.some(url => url.includes('/positions?dex=grvt')));
-  assert.ok(authenticated.some(url => url.includes('/orders?dex=grvt')));
+  // markets + prices + /grvt/config only: the generic address reads always answer 400.
+  assert.equal(authenticated.length, 3);
+  assert.ok(authenticated.includes('/api/futures/grvt/config?dex=grvt'));
+  assert.ok(authenticated.every(url => !/\/(account|positions|orders)\?/.test(url)));
 });
 
 test('anonymous warmup does not throttle the subsequent authenticated warmup', async () => {

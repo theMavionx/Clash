@@ -5602,6 +5602,15 @@ function grvtSymbolFromInstrument(value) {
     .replace(/\/USD[TC]?$/u, '');
 }
 
+/** Our own validation errors carry e.status; GRVT 4xx replies keep their status; else 502. */
+function grvtErrorStatus(e, endpoint) {
+  if (Number(e?.status) >= 400 && Number(e?.status) < 600) return Number(e.status);
+  const m = new RegExp(`${endpoint}\\s+(\\d{3})`, 'i').exec(e?.message || '');
+  const upstream = Number(m?.[1]);
+  // GRVT 401/403 are GRVT-session problems, not Clash auth: keep them off our 401/403.
+  return upstream >= 400 && upstream < 500 && upstream !== 401 && upstream !== 403 ? upstream : 502;
+}
+
 function requireGrvtOwner(req, res) {
   if (req.dex !== 'grvt') {
     res.status(409).json({
@@ -5854,11 +5863,17 @@ router.post('/grvt/set-leverage', auth, async (req, res) => {
     const result = await grvt.setInitialLeverage(creds, {
       instrument: req.body?.instrument || req.body?.i,
       leverage: req.body?.leverage || req.body?.l,
+      marginType: req.body?.margin_type || req.body?.marginType || req.body?.mt,
+      signature: req.body?.signature,
     });
     res.json(result);
   } catch (e) {
     console.warn('[grvt] set-leverage failed:', e.message);
-    res.status(502).json({ error: 'Failed to set GRVT leverage', detail: e.message });
+    res.status(grvtErrorStatus(e, 'set_position_config')).json({
+      error: 'Failed to set GRVT leverage',
+      detail: e.message,
+      ...(e.code ? { code: e.code } : {}),
+    });
   }
 });
 
@@ -5875,8 +5890,7 @@ router.post('/grvt/set-position-config', auth, async (req, res) => {
     res.json(result);
   } catch (e) {
     console.warn('[grvt] set-position-config failed:', e.message);
-    const status = /set_position_config\s+(\d{3})/i.exec(e.message || '')?.[1];
-    res.status(Number(status) || 502).json({ error: 'Failed to set GRVT position config', detail: e.message });
+    res.status(grvtErrorStatus(e, 'set_position_config')).json({ error: 'Failed to set GRVT position config', detail: e.message });
   }
 });
 

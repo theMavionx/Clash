@@ -441,7 +441,13 @@ async function getAccount(credsInput) {
   const usdc = spotBalances.find(b => String(valueOf(b, 'currency', 'c') || '').toUpperCase() === 'USDC') || null;
   const spotBalance = valueOf(usdt, 'balance', 'b') ?? valueOf(usdc, 'balance', 'b');
   const equity = valueOf(r, 'account_equity', 'total_account_value', 'total_equity', 'equity', 'te', 'total_cross_equity', 'tc', 'margin_balance', 'mb', 'balance') ?? spotBalance;
-  const available = valueOf(r, 'available_balance', 'available_to_spend', 'available_to_withdraw', 'ab', 'total_sub_account_available_balance', 'available') ?? spotBalance;
+  // SubAccount.available_balance is deprecated; GRVT points to the settle/quote currency's
+  // spot_balances[].available_to_transfer. Keep the old field only as a fallback.
+  const settleCurrency = String(valueOf(r, 'settle_currency', 'sc') || '').toUpperCase();
+  const settleSpot = spotBalances.find(b => String(valueOf(b, 'currency', 'c') || '').toUpperCase() === settleCurrency) || usdt || usdc;
+  const available = valueOf(settleSpot, 'available_to_transfer', 'at')
+    ?? valueOf(r, 'available_balance', 'available_to_spend', 'available_to_withdraw', 'ab', 'total_sub_account_available_balance', 'available')
+    ?? spotBalance;
   const initialMargin = valueOf(r, 'total_initial_margin', 'initial_margin', 'im');
   const maintenanceMargin = valueOf(r, 'maintenance_margin', 'mm');
   return {
@@ -484,7 +490,8 @@ async function getPositions(credsInput) {
       size_usd: notional,
       entry_price: String(p.entry_price || p.average_entry_price || ''),
       mark_price: String(p.mark_price || ''),
-      liquidation_price: p.liquidation_price || null,
+      // GRVT Positions expose est_liquidation_price (there is no liquidation_price field).
+      liquidation_price: valueOf(p, 'est_liquidation_price', 'liquidation_price', 'el') || null,
       margin: String(isolatedMargin || derivedMargin || ''),
       leverage: String(leverage || ''),
       pnl_usd: String(p.unrealized_pnl || p.pnl || ''),
@@ -641,7 +648,8 @@ function fillAccountId(fill) {
 }
 
 function fillBuilderId(fill) {
-  return normalizeAddress(valueOf(fill, 'builder', 'builder_account_id', 'builderAccountId', 'b'));
+  // Lite Fill: builder is "b1" ("b" is broker).
+  return normalizeAddress(valueOf(fill, 'builder', 'builder_account_id', 'builderAccountId', 'b1'));
 }
 
 function isOurBuilderFill(fill, { trustedBuilderEndpoint = false } = {}) {
@@ -825,40 +833,69 @@ async function submitSignedOrdersBulk(credsInput, signedOrdersInput, opts = {}) 
   };
 }
 
+/** Error carrying the HTTP status the route should answer with (GRVT 4xx stays 4xx). */
+function grvtError(message, status = 400, extra = {}) {
+  const err = new Error(message);
+  err.status = status;
+  Object.assign(err, extra);
+  return err;
+}
+
+/** GRVT leverage wire string: positive decimal with at most 6 places (signed as leverage x 10^6). */
+function normalizeLeverage(value) {
+  const text = String(value ?? '').trim();
+  if (!/^\d+(\.\d+)?$/u.test(text) || !(Number(text) > 0)) throw grvtError('GRVT leverage required');
+  const [whole, frac = ''] = text.split('.');
+  const trimmed = frac.replace(/0+$/u, '');
+  if (trimmed.length > 6) throw grvtError('GRVT leverage supports at most 6 decimals');
+  const out = `${whole.replace(/^0+(?=\d)/u, '')}${trimmed ? `.${trimmed}` : ''}`;
+  if (Number(out) * 1e6 > 2_147_483_647) throw grvtError('GRVT leverage is out of range');
+  return out;
+}
+
+/**
+ * Legacy `/grvt/set-leverage`. GRVT removed `set_initial_leverage` (error 2106: "This API has
+ * been deprecated and can no longer be used to set leverage"); leverage is now changed only by
+ * the signed `set_position_config`. With a signature this forwards there. Without one (older
+ * clients) it never calls the dead endpoint: it answers success when GRVT already runs the
+ * instrument at >= the requested leverage, so those orders are not blocked, and otherwise
+ * explains that a signed position config is required.
+ */
 async function setInitialLeverage(credsInput, opts = {}) {
-  const creds = await resolveCreds(credsInput);
   const instrument = String(opts.instrument || opts.i || '').trim();
-  const leverage = String(opts.leverage || opts.l || '').trim();
-  if (!instrument) throw new Error('GRVT instrument required');
-  if (!leverage || !Number.isFinite(Number(leverage)) || Number(leverage) <= 0) {
-    throw new Error('GRVT leverage required');
+  if (!instrument) throw grvtError('GRVT instrument required');
+  const leverage = normalizeLeverage(opts.leverage || opts.l);
+  if (opts.signature) {
+    return setPositionConfig(credsInput, { ...opts, instrument, leverage });
   }
-  const full = {
-    sub_account_id: creds.subAccountId,
-    instrument,
-    leverage,
-  };
-  const lite = {
-    sa: creds.subAccountId,
-    i: instrument,
-    l: leverage,
-  };
-  const payload = await tradePost('set_initial_leverage', full, lite, authHeaders(creds));
-  const result = resultOf(payload);
-  return { success: !!(result.success ?? result.s ?? true), result };
+  const rowsForAccount = await (opts.getInitialLeverage || getInitialLeverage)(credsInput);
+  const row = rowsForAccount.find(r => r.instrument === instrument) || null;
+  const current = Number(row?.leverage);
+  if (Number.isFinite(current) && current > 0 && current + 1e-9 >= Number(leverage)) {
+    return {
+      success: true,
+      applied: false,
+      reason: current === Number(leverage) ? 'unchanged' : 'current_leverage_covers_order',
+      current_leverage: String(row.leverage),
+      margin_type: row.margin_type || 'CROSS',
+    };
+  }
+  throw grvtError(
+    `GRVT now requires a signed position config to change leverage (set_initial_leverage is deprecated). `
+      + `${instrument} is at ${Number.isFinite(current) && current > 0 ? `${current}x` : 'an unknown leverage'}; reload Clash and retry.`,
+    409,
+    { code: 'grvt_signed_position_config_required' },
+  );
 }
 
 async function setPositionConfig(credsInput, opts = {}) {
   const creds = await resolveCreds(credsInput);
   const instrument = String(opts.instrument || opts.i || '').trim();
   const marginType = String(opts.marginType || opts.margin_type || opts.mt || 'CROSS').trim().toUpperCase();
-  const leverage = String(opts.leverage || opts.l || '').trim();
   const sig = opts.signature || {};
-  if (!instrument) throw new Error('GRVT instrument required');
-  if (!['CROSS', 'ISOLATED'].includes(marginType)) throw new Error('GRVT margin_type must be CROSS or ISOLATED');
-  if (!leverage || !Number.isFinite(Number(leverage)) || Number(leverage) <= 0) {
-    throw new Error('GRVT leverage required');
-  }
+  if (!instrument) throw grvtError('GRVT instrument required');
+  if (!['CROSS', 'ISOLATED'].includes(marginType)) throw grvtError('GRVT margin_type must be CROSS or ISOLATED');
+  const leverage = normalizeLeverage(opts.leverage || opts.l);
   const signature = {
     signer: String(sig.signer || sig.s || '').trim(),
     r: String(sig.r || '').trim(),
@@ -869,7 +906,7 @@ async function setPositionConfig(credsInput, opts = {}) {
     chain_id: String(sig.chain_id || sig.ci || GRVT_CHAIN_ID),
   };
   if (!signature.signer || !signature.r || !signature.s || !signature.expiration || !Number.isFinite(signature.nonce)) {
-    throw new Error('GRVT position config signature required');
+    throw grvtError('GRVT position config signature required');
   }
   const full = {
     sub_account_id: creds.subAccountId,
