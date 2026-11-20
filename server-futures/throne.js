@@ -167,7 +167,9 @@ async function request(method, path, { creds = null, query = null, body = undefi
   try { const text = await response.text(); parsed = text ? JSON.parse(text) : null; } catch { parsed = null; }
   if (!response.ok || !parsed || parsed.success === false) {
     if (response.ok && parsed && parsed.success === false) throw mapOrderlyError(400, parsed, write);
-    console.warn('[throne] upstream rejected', { path: url.pathname, status: response.status, code: parsed?.code ?? null });
+    console.warn('[throne] upstream rejected', { path: url.pathname, status: response.status, code: parsed?.code ?? null,
+      message: String(parsed?.message || '').replace(/[^ -~]/gu, '').slice(0, 200) || null,
+      query: [...url.searchParams.keys()].join(',') || null });
     throw mapOrderlyError(response.status, parsed, write);
   }
   return parsed.data !== undefined ? parsed.data : parsed;

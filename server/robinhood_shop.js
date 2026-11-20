@@ -21,12 +21,40 @@ function selectPrice(pairs) {
   if (!pair) throw new Error('Robinhood CLASH price unavailable; no payment requested');
   return String(pair.priceUsd);
 }
+// GeckoTerminal fallback: DexScreener dropped the Robinhood CLASH pairs
+// (pairs: null) on 2026-11-20, which stopped holder snapshots and shop quotes.
+// Same rule as DexScreener: deepest pool with >= $10k liquidity.
+function selectGeckoPrice(pools) {
+  const tokenId = `robinhood_${TOKEN.toLowerCase()}`;
+  const pool = (pools || []).filter(p => String(p?.relationships?.base_token?.data?.id || '').toLowerCase() === tokenId
+    && Number.isFinite(Number(p?.attributes?.base_token_price_usd)) && Number(p.attributes.base_token_price_usd) > 0
+    && Number(p?.attributes?.reserve_in_usd) >= 10000)
+    .sort((a, b) => Number(b.attributes.reserve_in_usd) - Number(a.attributes.reserve_in_usd))[0];
+  if (!pool) throw new Error('Robinhood CLASH price unavailable; no payment requested');
+  return String(pool.attributes.base_token_price_usd);
+}
+async function dexScreenerPrice() {
+  const r = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${TOKEN}`, { signal: AbortSignal.timeout(8000) });
+  if (!r.ok) throw new Error('Robinhood CLASH price unavailable');
+  return selectPrice((await r.json()).pairs);
+}
+async function geckoTerminalPrice() {
+  const r = await fetch(`https://api.geckoterminal.com/api/v2/networks/robinhood/tokens/${TOKEN}/pools`, {
+    headers: { accept: 'application/json' },
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!r.ok) throw new Error('Robinhood CLASH price unavailable');
+  return selectGeckoPrice((await r.json()).data);
+}
 let cached;
 async function price() {
   if (cached?.until > Date.now()) return cached.price;
-  const r = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${TOKEN}`, { signal: AbortSignal.timeout(8000) });
-  if (!r.ok) throw new Error('Robinhood CLASH price unavailable');
-  const value = selectPrice((await r.json()).pairs);
+  let value;
+  try { value = await dexScreenerPrice(); }
+  catch (primaryError) {
+    try { value = await geckoTerminalPrice(); }
+    catch { throw primaryError; }
+  }
   cached = { price: value, until: Date.now() + 60000 };
   return value;
 }
@@ -40,4 +68,4 @@ function validRead(body) {
     && /^0x70a082310{24}[0-9a-f]{40}$/i.test(p[0].data) && p[1] === 'latest';
   return false;
 }
-module.exports = { TOKEN, rpcUrl, price, selectPrice, validRead };
+module.exports = { TOKEN, rpcUrl, price, selectPrice, selectGeckoPrice, validRead };

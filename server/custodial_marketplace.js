@@ -2339,19 +2339,38 @@ function settlementRetrySeconds() {
   return Math.max(60, Math.min(3600, Number(process.env.CUSTODIAL_MARKETPLACE_SETTLEMENT_RETRY_SECONDS || 300) || 300));
 }
 
+const DELIVERY_RETRY_MAX_BACKOFF_SEC = 6 * 60 * 60;
+
+function deliveryRetryBackoffSeconds(failures) {
+  const n = Math.max(0, Math.floor(Number(failures) || 0));
+  if (n === 0) return 30;
+  return Math.min(DELIVERY_RETRY_MAX_BACKOFF_SEC, 60 * 2 ** Math.min(n - 1, 20));
+}
+
 async function runSettlementSweep(ctx) {
   if (settlementWorkerRunning) return;
   settlementWorkerRunning = true;
   try {
     const config = await marketplaceRuntimeConfig(ctx);
     const retrySeconds = settlementRetrySeconds();
+    // Failed deliveries back off exponentially (60s, 2m, 4m ... capped at 6h).
+    // A permanent failure (paused destination contract, custody not owning the
+    // asset) used to be retried every minute forever: two stuck orders piled
+    // up 80k+ delivery_failed events and bridge_logs rows.
     const paidRows = gameDb.db.prepare(`
-      SELECT * FROM custodial_marketplace_orders
-      WHERE status = 'paid'
-        AND datetime(updated_at) <= datetime('now', '-30 seconds')
-      ORDER BY updated_at ASC
-      LIMIT 10
-    `).all();
+      SELECT o.*,
+             (julianday('now') - julianday(o.updated_at)) * 86400.0 AS _age_sec,
+             (SELECT COUNT(*) FROM custodial_marketplace_events e
+               WHERE e.order_id = o.id AND e.event_type = 'delivery_failed') AS _delivery_failures
+        FROM custodial_marketplace_orders o
+       WHERE o.status = 'paid'
+         AND datetime(o.updated_at) <= datetime('now', '-30 seconds')
+       ORDER BY o.updated_at ASC
+       LIMIT 50
+    `).all()
+      .filter((row) => Number(row._age_sec || 0) >= deliveryRetryBackoffSeconds(row._delivery_failures))
+      .slice(0, 10)
+      .map(({ _age_sec, _delivery_failures, ...row }) => row);
     for (const row of paidRows) {
       try {
         // eslint-disable-next-line no-await-in-loop

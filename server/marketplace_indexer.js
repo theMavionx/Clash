@@ -63,10 +63,36 @@ async function publicClient(chainKey) {
   };
   const spec = map[chainKey];
   if (!spec) throw new Error(`Unsupported chain ${chainKey}`);
-  const rpc = process.env[`NFT_${chainKey.toUpperCase()}_RPC_URL`]
-    || process.env[`${chainKey.toUpperCase()}_RPC_URL`]
-    || spec.defaultRpc;
+  const rpc = indexerRpcUrl(chainKey) || spec.defaultRpc;
   return createPublicClient({ chain: spec.viem, transport: http(rpc) });
+}
+
+// getLogs-heavy: prefer Alchemy over the public RPCs. mainnet.base.org answers
+// eth_getLogs with "request limit reached" and rpc-gel.inkonchain.com caps the
+// range at 1000 blocks, which left Base ~7.8M and Ink ~3M blocks behind.
+const ALCHEMY_HOSTS = {
+  base: 'base-mainnet',
+  arbitrum: 'arb-mainnet',
+  ink: 'ink-mainnet',
+};
+
+function alchemyKeyFor(chainKey) {
+  const own = process.env[`${chainKey.toUpperCase()}_ALCHEMY_KEY`];
+  return String(own || process.env.BASE_ALCHEMY_KEY || process.env.ARBITRUM_ALCHEMY_KEY || '').trim();
+}
+
+function indexerRpcUrl(chainKey) {
+  const upper = chainKey.toUpperCase();
+  const explicit = process.env[`MARKETPLACE_INDEXER_${upper}_RPC_URL`];
+  if (explicit) return explicit;
+  const host = ALCHEMY_HOSTS[chainKey];
+  const key = host ? alchemyKeyFor(chainKey) : '';
+  if (host && key) return `https://${host}.g.alchemy.com/v2/${key}`;
+  return process.env[`NFT_${upper}_RPC_URL`] || process.env[`${upper}_RPC_URL`] || null;
+}
+
+function indexerUsesAlchemy(chainKey) {
+  return /\.g\.alchemy\.com\//.test(String(indexerRpcUrl(chainKey) || ''));
 }
 
 function readMarketplaceDeployment(chainKey) {
@@ -93,7 +119,8 @@ function dataUint(hex, i)     { return BigInt(hexSlot(hex, i)).toString(); }
 const CHAIN_TUNING = {
   // Base: Alchemy/standard public RPCs allow 10k blocks per getLogs.
   base:     { windowSize: 4_000,  pollIntervalMs: 12_000, lookbackBlocks:  216_000 },   // ~5d at 2s blocks
-  ink:      { windowSize: 4_000,  pollIntervalMs: 12_000, lookbackBlocks:  216_000 },
+  // Ink: rpc-gel caps getLogs at 1000 blocks; Alchemy takes larger windows.
+  ink:      { windowSize: 1_000,  alchemyWindowSize: 4_000, pollIntervalMs: 12_000, lookbackBlocks:  216_000 },
   // Arbitrum: 10k blocks too, but blocks are ~0.25s.
   arbitrum: { windowSize: 4_000,  pollIntervalMs: 12_000, lookbackBlocks: 2_000_000 },  // ~5d at 0.25s
   // Monad: STRICT 100-block limit on rpc.monad.xyz. Poll faster + multiple
@@ -111,7 +138,11 @@ async function startMarketplaceIndexer({
 } = {}) {
   const tuning = CHAIN_TUNING[chain] || CHAIN_TUNING.base;
   if (pollIntervalMs === undefined) pollIntervalMs = tuning.pollIntervalMs;
-  if (windowSize === undefined)     windowSize     = tuning.windowSize;
+  if (windowSize === undefined) {
+    windowSize = tuning.alchemyWindowSize && indexerUsesAlchemy(chain)
+      ? tuning.alchemyWindowSize
+      : tuning.windowSize;
+  }
   if (lookbackBlocks === undefined) lookbackBlocks = tuning.lookbackBlocks;
   if (_handles.has(chain)) return _handles.get(chain);
 

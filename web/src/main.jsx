@@ -10,10 +10,12 @@ import './styles/clashbot.css'
 import './hooks/useFuturesTheme'
 import { installClientLogger } from './lib/clientLogger'
 import { installPrivyAnalyticsGuard } from './lib/privyAnalyticsGuard'
+import { installStaleBuildNotice } from './lib/staleBuildNotice'
 import App from './App.jsx'
 
 installPrivyAnalyticsGuard()
 installClientLogger()
+installStaleBuildNotice()
 
 createRoot(document.getElementById('root')).render(
   <App />,
