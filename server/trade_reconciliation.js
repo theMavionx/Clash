@@ -10,7 +10,7 @@ const APTOS_WALLET_RE = /^0x[0-9a-fA-F]{1,64}$/;
 const FUTURES_REWARD_DEXES = new Set([
   'avantis',
   'domfi',
-  'etoro', 'qfex', 'throne',
+  'etoro', 'qfex', 'throne', 'strike',
   'decibel',
   'gmx',
   'ostium',
@@ -57,6 +57,7 @@ const DEX_REQUIRED_CHAIN = {
   lighter: 'evm',
   rhlighter: 'evm',
   throne: 'evm',
+  strike: 'evm',
 };
 
 const VERIFIED_SOURCES_BY_DEX = {
@@ -66,6 +67,8 @@ const VERIFIED_SOURCES_BY_DEX = {
   qfex: ['qfex_builder_api'],
   // Fills of our own accepted orders on Orderly accounts registered under broker `throne`.
   throne: ['throne_orderly'],
+  // Fills of our own accepted Strike orders that Strike reports under builder code clashofperps.
+  strike: ['strike_builder'],
   decibel: ['decibel_fill', 'server'],
   gmx: ['worker', 'server'],
   ostium: ['ostium_api'],
@@ -92,7 +95,7 @@ const VERIFIED_SOURCES_BY_DEX = {
 const USER_SCOPED_IMPORT_DEXES = new Set([
   'decibel',
   'domfi',
-  'etoro', 'qfex', 'throne',
+  'etoro', 'qfex', 'throne', 'strike',
   'hyperliquid',
   'ostium',
   'gmtrade',
@@ -111,7 +114,7 @@ const USER_SCOPED_IMPORT_DEXES = new Set([
 ]);
 
 const CREDENTIAL_SCOPED_IMPORT_DEXES = new Set([
-  'etoro', 'qfex', 'throne',
+  'etoro', 'qfex', 'throne', 'strike',
   'hibachi',
   'katana',
   'grvt',
@@ -499,6 +502,43 @@ function qfexBuilderEligibilityClause() {
   ) ELSE 0 END)`;
 }
 
+function strikeBuilderEligibilityClause() {
+  // Same proof model as Throne: the fill row must carry Strike's per-order fill of an order we
+  // placed ourselves (accepted/reconciled add_order or strategy_order intent whose order Strike
+  // reports with builder code clashofperps) on an account claimed by this player. Credited once per fill id.
+  return `(CASE WHEN json_valid(trade_history.proof_json) THEN (
+    json_extract(proof_json, '$.builder_code') = 'clashofperps'
+    AND json_extract(proof_json, '$.order_builder_code') = 'clashofperps'
+    AND trade_history.client_order_id = 'strike:' || json_extract(proof_json, '$.account_id') || ':fill:' || json_extract(proof_json, '$.fill.id')
+    AND trade_history.order_id = CAST(json_extract(proof_json, '$.fill.order_id') AS TEXT)
+    AND trade_history.order_id = json_extract(proof_json, '$.order_id')
+    AND trade_history.symbol = json_extract(proof_json, '$.fill.symbol')
+    AND CAST(trade_history.amount AS REAL) = abs(CAST(json_extract(proof_json, '$.fill.size') AS REAL))
+    AND CAST(trade_history.price AS REAL) = CAST(json_extract(proof_json, '$.fill.price') AS REAL)
+    AND CAST(trade_history.price AS REAL) > 0 AND CAST(trade_history.amount AS REAL) > 0
+    AND abs(trade_history.notional_usd - CAST(trade_history.amount AS REAL) * CAST(trade_history.price AS REAL)) <= max(0.00000001, trade_history.notional_usd * 0.000000001)
+    AND EXISTS (SELECT 1 FROM strike_action_intents si
+      JOIN strike_account_claims sc ON sc.account_id = si.account_id AND sc.player_id = si.player_id AND sc.builder_code = 'clashofperps'
+      WHERE si.player_id = trade_history.player_id
+        AND si.account_id = json_extract(trade_history.proof_json, '$.account_id')
+        AND si.action_id = json_extract(trade_history.proof_json, '$.action_id')
+        AND si.order_id = trade_history.order_id AND si.kind IN ('add_order', 'strategy_order')
+        AND si.status IN ('accepted', 'reconciled') AND si.builder_code = 'clashofperps'
+        AND si.order_builder_code = 'clashofperps'
+        AND json_valid(si.params_json)
+        AND json_extract(si.params_json, '$.symbol') = trade_history.symbol
+        AND json_extract(si.params_json, '$.side') = lower(json_extract(trade_history.proof_json, '$.fill.side'))
+        AND CAST(trade_history.amount AS REAL) <= CAST(json_extract(si.params_json, '$.size') AS REAL)
+        AND trade_history.side = CASE
+          WHEN json_extract(si.params_json, '$.reduce_only') = 1 THEN
+            CASE json_extract(si.params_json, '$.side') WHEN 'sell' THEN 'close_long' ELSE 'close_short' END
+          ELSE CASE json_extract(si.params_json, '$.side') WHEN 'buy' THEN 'open_long' ELSE 'open_short' END END)
+    AND NOT EXISTS (SELECT 1 FROM trade_history earlier
+      WHERE earlier.dex = 'strike' AND earlier.id < trade_history.id
+        AND earlier.client_order_id = trade_history.client_order_id)
+  ) ELSE 0 END)`;
+}
+
 function throneBrokerEligibilityClause() {
   // Same proof model as QFEX: the fill row must carry Orderly's per-order fill of an order we
   // placed ourselves (accepted/reconciled add_order intent with that order_id) on an account
@@ -539,6 +579,7 @@ function verifiedSourceClauseForDex(dex) {
   const sources = VERIFIED_SOURCES_BY_DEX[normalizedDex] || ['worker'];
   if (normalizedDex === 'qfex') return `verified_source = ${sqlQuote(sources[0])} AND ${qfexBuilderEligibilityClause()}`;
   if (normalizedDex === 'throne') return `verified_source = ${sqlQuote(sources[0])} AND ${throneBrokerEligibilityClause()}`;
+  if (normalizedDex === 'strike') return `verified_source = ${sqlQuote(sources[0])} AND ${strikeBuilderEligibilityClause()}`;
   if (normalizedDex === 'ostium') {
     return `verified_source = ${sqlQuote(sources[0])} AND ${ostiumBuilderEligibilityClause()}`;
   }
@@ -698,6 +739,13 @@ function adapterCredentials(dex, wallet, headers = {}, opts = {}) {
     const address = headerValue(headers, 'x-throne-address') || opts.address;
     return accountId && orderlyKey && orderlySecret && address ? { accountId, orderlyKey, orderlySecret, address } : null;
   }
+  if (dex === 'strike') {
+    const accountId = headerValue(headers, 'x-strike-account-id') || opts.accountId;
+    const publicKey = headerValue(headers, 'x-strike-public-key') || opts.publicKey;
+    const privateKey = headerValue(headers, 'x-strike-private-key') || opts.privateKey;
+    const address = headerValue(headers, 'x-strike-address') || opts.address;
+    return accountId && publicKey && privateKey && address ? { accountId, publicKey, privateKey, address } : null;
+  }
   if (dex === 'etoro') {
     const apiKey = headerValue(headers, 'x-etoro-api-key') || opts.apiKey || opts.api_key;
     const userKey = headerValue(headers, 'x-etoro-user-key') || opts.userKey || opts.user_key;
@@ -780,6 +828,12 @@ async function runDexAdapter(player, dex, wallet, opts = {}) {
     const creds = adapterCredentials(dex, wallet, opts.headers, opts.credentials || opts);
     if (!creds) return { ok: false, skipped: 'browser_credentials_required', dex };
     return { dex, ...(await require('../server-futures/throne').importTradesForPlayer(playerId, creds, { maxOrders: Math.min(40, limit) })) };
+  }
+
+  if (dex === 'strike') {
+    const creds = adapterCredentials(dex, wallet, opts.headers, opts.credentials || opts);
+    if (!creds) return { ok: false, skipped: 'browser_credentials_required', dex };
+    return { dex, ...(await require('../server-futures/strike').importTradesForPlayer(playerId, creds, { maxOrders: Math.min(40, limit) })) };
   }
 
   if (dex === 'etoro') {

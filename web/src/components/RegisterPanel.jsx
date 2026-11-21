@@ -147,6 +147,7 @@ function DexPicker({ onPick, isInFrame, isSolanaMobile }) {
                   cfg.id === 'aster' ? 'Self-custody · EVM' :
                   cfg.id === 'hibachi' ? 'Self-custody · EVM' :
                   cfg.id === 'throne' ? 'Orderly · EVM' :
+                  cfg.id === 'strike' ? 'Strike · EVM' :
                   cfg.id === 'hotstuff' ? 'Self-custody · HOT' :
                   cfg.id === 'grvt' ? 'Self-custody · GRVT' :
                   cfg.id === 'katana' ? 'Self-custody · Katana' :
@@ -542,6 +543,7 @@ function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthe
     : dex === 'aster' ? 'Aster'
     : dex === 'hibachi' ? 'Hibachi'
     : dex === 'throne' ? 'Throne'
+    : dex === 'strike' ? 'Strike'
     : dex === 'hotstuff' ? 'Hotstuff'
     : dex === 'grvt' ? 'GRVT'
     : dex === 'katana' ? 'Katana'
@@ -560,6 +562,7 @@ function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthe
     : dex === 'aster' ? 'EVM'
     : dex === 'hibachi' ? 'EVM'
     : dex === 'throne' ? 'EVM'
+    : dex === 'strike' ? 'EVM'
     : dex === 'hotstuff' ? 'Hotstuff L1'
     : dex === 'grvt' ? 'GRVT Exchange'
     : dex === 'katana' ? 'Katana'
@@ -762,6 +765,7 @@ function RegisterPanel() {
                   dex === 'aster' ? 'Aster' :
                   dex === 'hibachi' ? 'Hibachi' :
                   dex === 'throne' ? 'Throne' :
+                  dex === 'strike' ? 'Strike' :
                   dex === 'hotstuff' ? 'Hotstuff' :
                   dex === 'grvt' ? 'GRVT' :
                   dex === 'katana' ? 'Katana' :
@@ -838,7 +842,7 @@ function RegisterPanel() {
             />
           );
         }
-        if (dex === 'avantis' || dex === 'domfi' || dex === 'etoro' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'leverup' || dex === 'aster' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'throne' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter' || dex === 'rhlighter') {
+        if (dex === 'avantis' || dex === 'domfi' || dex === 'etoro' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'leverup' || dex === 'aster' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'hibachi' || dex === 'throne' || dex === 'strike' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter' || dex === 'rhlighter') {
           return (
             <ConnectAvantis
               dex={dex}
@@ -901,6 +905,7 @@ function RegisterPanel() {
     if (dex === 'aster') return 'Aster login';
     if (dex === 'hibachi') return 'Hibachi login';
     if (dex === 'throne') return 'Throne login';
+    if (dex === 'strike') return 'Strike login';
     if (dex === 'hotstuff') return 'Hotstuff login';
     if (dex === 'grvt') return 'GRVT login';
     if (dex === 'katana') return 'Katana login';
@@ -958,7 +963,7 @@ function RegisterPanel() {
       <EvmWalletModal
         open={evmModalOpen}
         onClose={() => setEvmModalOpen(false)}
-        targetChain={!dexPicked || dex === 'qfex' ? 'baseConnect' : dex === 'gmx' || dex === 'ostium' || dex === 'hyperliquid' ? 'arbitrum' : dex === 'monad' || dex === 'leverup' ? 'monad' : dex === 'risex' ? 'rise' : dex === 'nado' ? 'ink' : dex === 'hibachi' ? 'base' : dex === 'grvt' || dex === 'aster' || dex === 'throne' ? 'baseConnect' : dex === 'katana' ? 'katana' : dex === 'hotstuff' || dex === 'ondo' ? 'mainnet' : dex === 'lighter' || dex === 'rhlighter' ? 'baseConnect' : 'base'}
+        targetChain={!dexPicked || dex === 'qfex' ? 'baseConnect' : dex === 'gmx' || dex === 'ostium' || dex === 'hyperliquid' ? 'arbitrum' : dex === 'monad' || dex === 'leverup' ? 'monad' : dex === 'risex' ? 'rise' : dex === 'nado' ? 'ink' : dex === 'hibachi' ? 'base' : dex === 'grvt' || dex === 'aster' || dex === 'throne' || dex === 'strike' ? 'baseConnect' : dex === 'katana' ? 'katana' : dex === 'hotstuff' || dex === 'ondo' ? 'mainnet' : dex === 'lighter' || dex === 'rhlighter' ? 'baseConnect' : 'base'}
         onConnected={handleEvmConnected}
       />
     </div>

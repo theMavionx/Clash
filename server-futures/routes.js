@@ -897,7 +897,7 @@ function auth(req, res, next) {
   // Trust the SERVER-stored dex, not whatever the client asks for. The client
   // header/query is still useful as a best-effort sanity check: if it explicitly
   // asks for the wrong dex, reject so the UI can prompt the user to /set-dex.
-  const SUPPORTED_DEXES = new Set(['avantis', 'domfi', 'etoro', 'qfex', 'throne', 'pacifica', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'ondo', 'leverup', 'aster', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'lighter', 'rhlighter', 'bulk', 'imperial']);
+  const SUPPORTED_DEXES = new Set(['avantis', 'domfi', 'etoro', 'qfex', 'throne', 'strike', 'pacifica', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'ondo', 'leverup', 'aster', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'lighter', 'rhlighter', 'bulk', 'imperial']);
   const storedDex = SUPPORTED_DEXES.has(player.dex) ? player.dex : 'pacifica';
   const askedDex = (req.query.dex || req.headers['x-dex'] || storedDex).toLowerCase();
   const normalizedAsked = SUPPORTED_DEXES.has(askedDex) ? askedDex : 'pacifica';
@@ -966,7 +966,7 @@ function gmtradeRequestWallet(req) {
 // Get or create custodial wallet for player
 router.post('/wallet', auth, (req, res) => {
   try {
-    if (req.dex === 'avantis' || req.dex === 'domfi' || req.dex === 'etoro' || req.dex === 'qfex' || req.dex === 'throne' || req.dex === 'gmx' || req.dex === 'ostium' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'ondo' || req.dex === 'leverup' || req.dex === 'aster' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'bulk' || req.dex === 'imperial') {
+    if (req.dex === 'avantis' || req.dex === 'domfi' || req.dex === 'etoro' || req.dex === 'qfex' || req.dex === 'throne' || req.dex === 'strike' || req.dex === 'gmx' || req.dex === 'ostium' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'ondo' || req.dex === 'leverup' || req.dex === 'aster' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'bulk' || req.dex === 'imperial') {
       return res.status(410).json({
         error: req.dex === 'etoro'
           ? 'eToro uses the dedicated browser API-account setup.'
@@ -998,7 +998,7 @@ router.post('/wallet', auth, (req, res) => {
 
 // Get wallet info (public key only — never expose secret)
 router.get('/wallet', auth, (req, res) => {
-  if (req.dex === 'avantis' || req.dex === 'domfi' || req.dex === 'etoro' || req.dex === 'qfex' || req.dex === 'throne' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'ondo' || req.dex === 'leverup' || req.dex === 'aster' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'ostium' || req.dex === 'bulk' || req.dex === 'imperial') {
+  if (req.dex === 'avantis' || req.dex === 'domfi' || req.dex === 'etoro' || req.dex === 'qfex' || req.dex === 'throne' || req.dex === 'strike' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'ondo' || req.dex === 'leverup' || req.dex === 'aster' || req.dex === 'hibachi' || req.dex === 'hotstuff' || req.dex === 'grvt' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'ostium' || req.dex === 'bulk' || req.dex === 'imperial') {
     return res.status(410).json({
       error: req.dex === 'etoro'
         ? 'eToro uses the dedicated browser API-account setup.'
@@ -1022,6 +1022,7 @@ router.get('/account', async (req, res) => {
     if (dex === 'etoro') return res.status(410).json({ error: 'Use the authenticated /etoro/account-snapshot endpoint.' });
     if (dex === 'qfex') return res.status(410).json({ error: 'Use the authenticated /qfex/account-snapshot endpoint.' });
     if (dex === 'throne') return res.status(410).json({ error: 'Use the authenticated /throne/account-snapshot endpoint.' });
+    if (dex === 'strike') return res.status(410).json({ error: 'Use the authenticated /strike/account-snapshot endpoint.' });
     if (dex === 'avantis') {
       const address = String(req.query.address || '').trim();
       if (!/^0x[0-9a-fA-F]{40}$/.test(address)) {
@@ -2004,6 +2005,7 @@ router.post('/katana/orders/cancel', auth, async (req, res) => {
 
 require('./qfex-routes').attachQfexRoutes(router, auth);
 require('./throne-routes').attachThroneRoutes(router, auth);
+require('./strike-routes').attachStrikeRoutes(router, auth);
 
 function ensureEtoro(req, res) {
   if (req.dex !== 'etoro') {
@@ -2939,6 +2941,7 @@ router.get('/positions', async (req, res) => {
     if (dex === 'etoro') return res.status(410).json({ error: 'Use the authenticated /etoro/account-snapshot endpoint.' });
     if (dex === 'qfex') return res.status(410).json({ error: 'Use the authenticated /qfex/account-snapshot endpoint.' });
     if (dex === 'throne') return res.status(410).json({ error: 'Use the authenticated /throne/account-snapshot endpoint.' });
+    if (dex === 'strike') return res.status(410).json({ error: 'Use the authenticated /strike/account-snapshot endpoint.' });
     if (dex === 'avantis') {
       const address = String(req.query.address || '').trim();
       if (!/^0x[0-9a-fA-F]{40}$/.test(address)) {
@@ -3058,6 +3061,7 @@ router.get('/orders', async (req, res) => {
     if (dex === 'etoro') return res.status(410).json({ error: 'Use the authenticated /etoro/account-snapshot endpoint.' });
     if (dex === 'qfex') return res.status(410).json({ error: 'Use the authenticated /qfex/account-snapshot endpoint.' });
     if (dex === 'throne') return res.status(410).json({ error: 'Use the authenticated /throne/account-snapshot endpoint.' });
+    if (dex === 'strike') return res.status(410).json({ error: 'Use the authenticated /strike/account-snapshot endpoint.' });
     if (dex === 'avantis') {
       const address = String(req.query.address || '').trim();
       if (!/^0x[0-9a-fA-F]{40}$/.test(address)) {
@@ -3172,7 +3176,7 @@ router.get('/orders', async (req, res) => {
 
 // Reject self-custody writes on legacy Pacifica server endpoints. These
 // venues sign in the browser or use their dedicated route groups.
-const CLIENT_SIGNED_DEXES = new Set(['avantis', 'domfi', 'etoro', 'qfex', 'throne', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'ondo', 'leverup', 'aster', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'bulk']);
+const CLIENT_SIGNED_DEXES = new Set(['avantis', 'domfi', 'etoro', 'qfex', 'throne', 'strike', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado', 'ondo', 'leverup', 'aster', 'hibachi', 'hotstuff', 'grvt', 'katana', 'gmtrade', 'bulk']);
 
 function avantisMigratedGuard(req, res, next) {
   if (CLIENT_SIGNED_DEXES.has(req.dex)) {
@@ -6978,7 +6982,7 @@ router.get('/deposits', auth, (req, res) => {
 // Get USDC & native balance on custodial wallet
 const balanceCache = new Map();
 router.get('/balance', auth, async (req, res) => {
-  if (req.dex === 'domfi' || req.dex === 'etoro' || req.dex === 'qfex' || req.dex === 'throne' || req.dex === 'gmx' || req.dex === 'ostium' || req.dex === 'monad' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'ondo' || req.dex === 'leverup' || req.dex === 'aster' || req.dex === 'hibachi' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'bulk' || req.dex === 'imperial') {
+  if (req.dex === 'domfi' || req.dex === 'etoro' || req.dex === 'qfex' || req.dex === 'throne' || req.dex === 'strike' || req.dex === 'gmx' || req.dex === 'ostium' || req.dex === 'monad' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado' || req.dex === 'ondo' || req.dex === 'leverup' || req.dex === 'aster' || req.dex === 'hibachi' || req.dex === 'katana' || req.dex === 'gmtrade' || req.dex === 'bulk' || req.dex === 'imperial') {
     return res.status(410).json({ error: `${req.dex} balances are read directly by the client wallet.` });
   }
   const wallet = db.getWallet(req.playerId, req.dex);

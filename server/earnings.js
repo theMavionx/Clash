@@ -3199,6 +3199,30 @@ async function fetchThroneEarnings() {
     note: 'Verified volume on Throne (Orderly broker "throne"). Broker fees go to Throne, so nothing is counted as Clash revenue.' };
 }
 
+// Strike pays builder fees (X-Builder-Fee-Bps, charged on fill) to builder code clashofperps.
+// Revenue is estimated from verified Clash-attributed fills at the per-order fee Strike
+// reported (Builder.FeeBps in the fill proof), falling back to the configured rate.
+const STRIKE_BUILDER_FEE_BPS = Math.max(0, Math.min(100, Number(process.env.STRIKE_BUILDER_FEE_BPS ?? 1) || 0));
+async function fetchStrikeEarnings() {
+  const local = readVerifiedFuturesDexStats('strike', 'strike_builder', { rowWhere: tradeRecon.verifiedSourceClauseForDex('strike') });
+  let estimated = local.volume_usd * (STRIKE_BUILDER_FEE_BPS / 10000);
+  const Db = loadSqlite();
+  let fdb = null;
+  try {
+    if (Db && FS.existsSync(FUTURES_DB)) {
+      fdb = new Db(FUTURES_DB, { readonly: true, fileMustExist: true });
+      const row = fdb.prepare(`SELECT COALESCE(SUM(notional_usd * COALESCE(CAST(json_extract(proof_json, '$.builder_fee_bps') AS REAL), ?) / 10000.0), 0) AS fee
+        FROM trade_history WHERE dex = 'strike' AND ${tradeRecon.verifiedSourceClauseForDex('strike')}`).get(STRIKE_BUILDER_FEE_BPS);
+      if (Number.isFinite(Number(row?.fee))) estimated = Number(row.fee);
+    }
+  } catch { /* keep the configured-rate estimate */ } finally { try { fdb?.close(); } catch {} }
+  return { ...local, earned_usd: roundUsd(estimated), currency: 'USD (Strike)',
+    user_fee_usd: local.fee_usd, estimated_fee_usd: roundUsd(estimated), builder_fee_bps: STRIKE_BUILDER_FEE_BPS,
+    builder_fee_pct: STRIKE_BUILDER_FEE_BPS / 100,
+    model: 'strike_builder_fee', source_detail: 'strike_builder_order_and_fill_proof',
+    note: 'Builder fee on verified fills of orders placed through builder code clashofperps (estimated from the fee Strike reported per order).' };
+}
+
 async function fetchEtoroEarnings() {
   const local = readVerifiedFuturesDexStats('etoro', 'etoro_api');
   return {
@@ -3728,6 +3752,7 @@ const ANALYTICS_DEXES = [
   { key: 'etoro', label: 'eToro' },
   { key: 'qfex', label: 'QFEX' },
   { key: 'throne', label: 'Throne' },
+  { key: 'strike', label: 'Strike' },
   { key: 'gmx', label: 'GMX' },
   { key: 'ostium', label: 'Ostium' },
   { key: 'phoenix', label: 'Phoenix' },
@@ -3812,6 +3837,7 @@ function decibelFeeBpsForDate(value) {
 function tradeSourceWhereForAnalytics(dex) {
   if (dex === 'qfex') return tradeRecon.verifiedSourceClauseForDex('qfex');
   if (dex === 'throne') return tradeRecon.verifiedSourceClauseForDex('throne');
+  if (dex === 'strike') return tradeRecon.verifiedSourceClauseForDex('strike');
   if (dex === 'domfi') return "verified_source = 'domfi_api'";
   if (dex === 'etoro') return "verified_source = 'etoro_api'";
   if (dex === 'decibel') return "verified_source IN ('decibel_fill', 'server')";
@@ -3872,6 +3898,10 @@ function revenueModelForDex(dex, dateForRate = null) {
       source_detail: 'domfi_api_volume_x_documented_referral_share_range',
     };
   }
+  if (dex === 'strike') return { configured: STRIKE_BUILDER_FEE_BPS > 0, rate: STRIKE_BUILDER_FEE_BPS / 10000,
+    rate_label: STRIKE_BUILDER_FEE_BPS > 0 ? `${STRIKE_BUILDER_FEE_BPS} bps builder fee` : 'builder fee off',
+    builder_fee_bps: STRIKE_BUILDER_FEE_BPS, builder_fee_pct: STRIKE_BUILDER_FEE_BPS / 100,
+    model: 'single_builder_fee', source_detail: 'strike_builder_order_and_fill_proof' };
   if (dex === 'throne') return { configured: false, rate: 0, rate_label: 'Broker fees accrue to Throne',
     builder_fee_bps: 0, builder_fee_pct: 0, model: 'throne_verified_volume_no_revenue', source_detail: 'throne_orderly_order_and_fill_proof' };
   if (dex === 'qfex') return { configured: false, rate: 0, rate_label: 'Commission settlement not indexed',
@@ -4536,6 +4566,7 @@ const EARNINGS_READER_CONFIG = {
   etoro: { source: 'etoro_api_verified_volume_no_revenue_attribution', read: () => fetchEtoroEarnings() },
   qfex: { source: 'qfex_server_order_and_execution_proof', read: () => fetchQfexEarnings() },
   throne: { source: 'throne_orderly_order_and_fill_proof', read: () => fetchThroneEarnings() },
+  strike: { source: 'strike_builder_order_and_fill_proof', read: () => fetchStrikeEarnings() },
   gmx: { source: 'gmx_claimable_ui_fee_datastore_exact', read: () => fetchGmxEarnings() },
   ostium: { source: 'arbitrum_usdc_balance_of_builder', read: ({ mainDb }) => fetchOstiumEarnings({ mainDb }) },
   phoenix: { source: 'phoenix_flight_collateral_transfers', read: ({ mainDb }) => fetchPhoenixEarnings({ mainDb }) },
@@ -4563,7 +4594,7 @@ const EARNINGS_DEX_ORDER = [
   'avantis',
   'domfi',
   'etoro',
-  'qfex', 'throne',
+  'qfex', 'throne', 'strike',
   'gmx',
   'ostium',
   'phoenix',

@@ -6,6 +6,7 @@ import { normalizeBulkOrderBook } from '../lib/bulkClient';
 import { ONDO_WS_URL, buildOndoWsPing, ondoMarketName } from '../lib/ondoClient';
 import { fetchQfexJson } from '../lib/qfexClient';
 import { fetchThroneJson, readThroneCredentials } from '../lib/throneClient';
+import { fetchStrikeJson } from '../lib/strikeClient';
 
 const PRICE_STEPS = [0.01, 0.02, 0.1, 1];
 const FUTURES_API = import.meta.env.VITE_FUTURES_API || '/api/futures';
@@ -113,6 +114,21 @@ function OrderBook({
       setBook({ bids: [], asks: [] });
       load();
       const timer = window.setInterval(load, 5000);
+      return () => { cancelled = true; controller.abort(); window.clearInterval(timer); };
+    }
+    if (dex === 'strike') {
+      // Strike's depth is public (price service), relayed by our server.
+      let cancelled = false;
+      const controller = new AbortController();
+      const load = async () => {
+        try {
+          const json = await fetchStrikeJson(`/api/futures/strike/orderbook?symbol=${encodeURIComponent(symbol)}`, { token: window._playerToken, credentials: null, signal: controller.signal });
+          if (!cancelled) setBook(normalizePhoenixBook(json));
+        } catch { if (!cancelled) setBook({ bids: [], asks: [] }); }
+      };
+      setBook({ bids: [], asks: [] });
+      load();
+      const timer = window.setInterval(load, 3000);
       return () => { cancelled = true; controller.abort(); window.clearInterval(timer); };
     }
     if (dex === 'throne') {

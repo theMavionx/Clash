@@ -868,6 +868,7 @@ app.get('/api/admin/panel', (req, res) => {
               <option value="etoro">eToro</option>
               <option value="qfex">QFEX</option>
               <option value="throne">Throne</option>
+              <option value="strike">Strike</option>
               <option value="decibel">Decibel</option>
               <option value="gmx">GMX</option>
               <option value="ostium">Ostium</option>
@@ -895,7 +896,7 @@ app.get('/api/admin/panel', (req, res) => {
               <label style="font-size:11px;color:#d1d5db;display:flex;align-items:center;gap:6px"><input data-tn-dex-check value="avantis" type="checkbox" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:auto;margin:0">Avantis</label>
               <label style="font-size:11px;color:#d1d5db;display:flex;align-items:center;gap:6px"><input data-tn-dex-check value="domfi" type="checkbox" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:auto;margin:0">DomFi</label>
               <label style="font-size:11px;color:#d1d5db;display:flex;align-items:center;gap:6px"><input data-tn-dex-check value="etoro" type="checkbox" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:auto;margin:0">eToro</label>
-              <label style="font-size:11px;color:#d1d5db;display:flex;align-items:center;gap:6px"><input data-tn-dex-check value="qfex" type="checkbox" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:auto;margin:0">QFEX</label><label style="font-size:11px;color:#d1d5db;display:flex;align-items:center;gap:6px"><input data-tn-dex-check value="throne" type="checkbox" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:auto;margin:0">Throne</label>
+              <label style="font-size:11px;color:#d1d5db;display:flex;align-items:center;gap:6px"><input data-tn-dex-check value="qfex" type="checkbox" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:auto;margin:0">QFEX</label><label style="font-size:11px;color:#d1d5db;display:flex;align-items:center;gap:6px"><input data-tn-dex-check value="throne" type="checkbox" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:auto;margin:0">Throne</label><label style="font-size:11px;color:#d1d5db;display:flex;align-items:center;gap:6px"><input data-tn-dex-check value="strike" type="checkbox" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:auto;margin:0">Strike</label>
               <label style="font-size:11px;color:#d1d5db;display:flex;align-items:center;gap:6px"><input data-tn-dex-check value="decibel" type="checkbox" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:auto;margin:0">Decibel</label>
               <label style="font-size:11px;color:#d1d5db;display:flex;align-items:center;gap:6px"><input data-tn-dex-check value="gmx" type="checkbox" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:auto;margin:0">GMX</label>
               <label style="font-size:11px;color:#d1d5db;display:flex;align-items:center;gap:6px"><input data-tn-dex-check value="ostium" type="checkbox" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:auto;margin:0">Ostium</label>
@@ -3257,6 +3258,7 @@ const TOURNAMENT_DEX_LABELS_ADMIN = {
   etoro: 'eToro',
   qfex: 'QFEX',
   throne: 'Throne',
+  strike: 'Strike',
   decibel: 'Decibel',
   gmx: 'GMX',
   ostium: 'Ostium',
@@ -4557,6 +4559,7 @@ function renderRevenueAnalytics(data) {
     { key: 'etoro', label: 'eToro' },
     { key: 'qfex', label: 'QFEX' },
     { key: 'throne', label: 'Throne' },
+    { key: 'strike', label: 'Strike' },
     { key: 'gmx', label: 'GMX' },
     { key: 'ostium', label: 'Ostium' },
     { key: 'phoenix', label: 'Phoenix' },
@@ -4646,6 +4649,7 @@ async function loadEarnings(force) {
       ['etoro',    'eToro',    '#79df4b', '#5cbf2a'],
       ['qfex',    'QFEX',    '#b6ec43', '#95c22f'],
       ['throne',  'Throne',  '#f5c542', '#c99a1c'],
+      ['strike',  'Strike',  '#26fab0', '#12b87f'],
       ['gmx',      'GMX',      '#a5b4fc', '#4f46e5'],
       ['ostium',   'Ostium',   '#fb923c', '#f97316'],
       ['phoenix',  'Phoenix',  '#fb923c', '#f97316'],
@@ -5685,6 +5689,26 @@ server.listen(PORT, '127.0.0.1', () => {
       }).start({ intervalMs: Math.max(60 * 1000, Number(process.env.QFEX_VAULT_SYNC_INTERVAL_MS) || 5 * 60 * 1000) });
     } catch (error) {
       console.warn('[qfex-vault-sync] disabled:', error?.message || error);
+    }
+  }
+
+  // Strike (builder code clashofperps) fills from server-stored API wallet keys, same pattern.
+  //   STRIKE_VAULT_SYNC=0                    → disable
+  //   STRIKE_VAULT_SYNC_INTERVAL_MS=300000    → run interval (default 5 min)
+  if (process.env.STRIKE_VAULT_SYNC !== '0') {
+    try {
+      const { createTradingCredentialVault } = require('./trading_credential_vault');
+      const { createStrikeVaultSync } = require('./strike_vault_sync');
+      const tradeRecon = require('./trade_reconciliation');
+      const playerById = clashDb.db.prepare('SELECT * FROM players WHERE id = ?');
+      createStrikeVaultSync({
+        db: clashDb.db,
+        vault: createTradingCredentialVault({ db: clashDb.db, catalog: require('./trading_credential_catalog') }),
+        getPlayer: playerId => playerById.get(playerId),
+        reconcile: (player, opts) => tradeRecon.reconcileTradesForPlayer(player, opts),
+      }).start({ intervalMs: Math.max(60 * 1000, Number(process.env.STRIKE_VAULT_SYNC_INTERVAL_MS) || 5 * 60 * 1000) });
+    } catch (error) {
+      console.warn('[strike-vault-sync] disabled:', error?.message || error);
     }
   }
 

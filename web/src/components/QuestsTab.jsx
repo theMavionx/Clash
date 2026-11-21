@@ -15,6 +15,7 @@ import { nftRarityCardStyle, normalizeNftRarity } from '../lib/nftV3Client';
 import { uiButton } from '../styles/theme';
 import { readQfexTaskHeaders, fetchQfexJson } from '../lib/qfexClient';
 import { readThroneTaskHeaders, fetchThroneJson } from '../lib/throneClient';
+import { readStrikeTaskHeaders, fetchStrikeJson, strikeCredentialsFromHeaders } from '../lib/strikeClient';
 
 
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
@@ -617,6 +618,9 @@ function QuestsTab({ markets = [] }) {
     if (activeDex === 'throne') {
       try { return await readThroneTaskHeaders(tok); } catch { return base; }
     }
+    if (activeDex === 'strike') {
+      try { return await readStrikeTaskHeaders(tok); } catch { return base; }
+    }
     if (activeDex === 'hibachi') {
       try {
         const creds = normalizeHibachiTaskCredentials(await readEncryptedCredential(HIBACHI_STORAGE_KEY));
@@ -697,6 +701,13 @@ function QuestsTab({ markets = [] }) {
             orderlySecret: headers['x-throne-orderly-secret'], address: headers['x-throne-address'] },
             method: 'POST', body: {}, signal: AbortSignal.timeout(30000) });
         } catch (reason) { console.warn('[Quests] Throne trade import failed:', reason?.message || reason); }
+      }
+      if (activeDex === 'strike' && headers['x-strike-private-key']) {
+        // Import verified Strike fills of Clash orders before reading progress; failures keep saved progress.
+        try {
+          await fetchStrikeJson('/api/futures/strike/import-trades', { token: tok, credentials: strikeCredentialsFromHeaders(headers),
+            method: 'POST', body: {}, signal: AbortSignal.timeout(30000) });
+        } catch (reason) { console.warn('[Quests] Strike trade import failed:', reason?.message || reason); }
       }
       if (!current()) return;
       if (activeDex === 'pacifica') headers['x-skip-live-progress'] = 'browser';

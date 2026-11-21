@@ -118,6 +118,8 @@ function ProfileModal({ onClose, onSwitchDex }) {
     ? { account: null, walletAddr: player?.wallet || '' }
     : dex === 'throne'
     ? { account: null, walletAddr: evmAddress || player?.wallet || '' }
+    : dex === 'strike'
+    ? { account: null, walletAddr: evmAddress || player?.wallet || '' }
     : dex === 'imperial'
     ? imperialHook
     : dex === 'avantis'
@@ -206,7 +208,7 @@ function ProfileModal({ onClose, onSwitchDex }) {
   // though the Avantis account is registered with an EVM wallet. Resolve
   // to the chain-correct address for the active DEX.
   const adapterAddr = (connected && publicKey) ? publicKey.toBase58() : null;
-  const liveWallet = (dex === 'avantis' || dex === 'domfi' || dex === 'etoro' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter' || dex === 'rhlighter' || dex === 'throne')
+  const liveWallet = (dex === 'avantis' || dex === 'domfi' || dex === 'etoro' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter' || dex === 'rhlighter' || dex === 'throne' || dex === 'strike')
     ? (walletAddr || null)            // EVM from useAvantis/useGmx/useMonad
     : dex === 'decibel'
     ? (walletAddr || null)            // Aptos from useDecibel
@@ -215,7 +217,7 @@ function ProfileModal({ onClose, onSwitchDex }) {
     : (adapterAddr || walletAddr || null); // Solana adapter / Privy
   const linkedWallet = player?.wallet || null;
   const activeWallet = dex === 'qfex' ? linkedWallet : liveWallet || linkedWallet;
-  const walletSource = (dex === 'avantis' || dex === 'domfi' || dex === 'etoro' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter' || dex === 'rhlighter' || dex === 'throne')
+  const walletSource = (dex === 'avantis' || dex === 'domfi' || dex === 'etoro' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'ondo' || dex === 'leverup' || dex === 'aster' || dex === 'hibachi' || dex === 'hotstuff' || dex === 'grvt' || dex === 'katana' || dex === 'lighter' || dex === 'rhlighter' || dex === 'throne' || dex === 'strike')
     ? (liveWallet ? 'evm' : null)
     : dex === 'decibel'
     ? (liveWallet ? 'aptos' : null)
@@ -1046,6 +1048,10 @@ function ProfileModal({ onClose, onSwitchDex }) {
           {dex === 'throne' && <div style={{ padding: 12 }}>
             <p>Throne trades on your Orderly account (broker throne) linked to the EVM wallet you connected in the Throne setup.</p>
             <button style={uiButton('primary', { width: '100%', minHeight: 44 })} onClick={() => { onClose(); setFuturesOpen(true); }}>OPEN THRONE SETUP &amp; ACCOUNT</button>
+          </div>}
+          {dex === 'strike' && <div style={{ padding: 12 }}>
+            <p>Strike trades on your Strike account linked to the EVM wallet you connected in the Strike setup, through the Clash builder code.</p>
+            <button style={uiButton('primary', { width: '100%', minHeight: 44 })} onClick={() => { onClose(); setFuturesOpen(true); }}>OPEN STRIKE SETUP &amp; ACCOUNT</button>
           </div>}
           {dex === 'qfex' && <div style={{ padding: 12 }}>
             <p>QFEX uses separate API credentials. Your Clash login wallet does not determine the QFEX trading account.</p>

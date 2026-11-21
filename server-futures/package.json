@@ -34,7 +34,8 @@
     "test:gmx-ui-fee": "node test-gmx-ui-fee-attribution.js",
     "test:leverup-rewards": "node test-leverup-rewards.js",
     "test:imperial": "node --test test-imperial-adapter.js",
-    "test:imperial:live": "node --test test-imperial-openapi-live.js"
+    "test:imperial:live": "node --test test-imperial-openapi-live.js",
+    "test:strike": "node --test test-strike-adapter.js test-strike-routes.js"
   },
   "type": "commonjs",
   "dependencies": {

@@ -32,6 +32,7 @@ const DEX_WALLET = {
   aster: { kind: 'evm', chain: 'Aster', label: 'Aster', cta: 'Reconnect EVM wallet', targetChain: 'baseConnect' },
   hibachi: { kind: 'evm', chain: 'EVM', label: 'Hibachi', cta: 'Reconnect EVM wallet', targetChain: 'base' },
   throne: { kind: 'evm', chain: 'EVM', label: 'Throne', cta: 'Reconnect EVM wallet', targetChain: 'baseConnect' },
+  strike: { kind: 'evm', chain: 'EVM', label: 'Strike', cta: 'Reconnect EVM wallet', targetChain: 'baseConnect' },
   hotstuff: { kind: 'evm', chain: 'Ethereum', label: 'Hotstuff', cta: 'Reconnect Ethereum wallet', targetChain: 'mainnet' },
   grvt: { kind: 'evm', chain: 'GRVT Exchange', label: 'GRVT', cta: 'Reconnect GRVT wallet', targetChain: 'grvt' },
   katana: { kind: 'evm', chain: 'Katana', label: 'Katana', cta: 'Reconnect Katana wallet', targetChain: 'katana' },

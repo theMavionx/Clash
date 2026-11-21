@@ -23,7 +23,8 @@
     "test:aster-earnings": "node test-aster-earnings.js",
     "test:rh-lighter-earnings": "node test-rh-lighter-earnings.js",
     "test:rh-lighter-tournament-migration": "node test-rhlighter-tournament-migration.js",
-    "test:gmx-ui-fee": "node test-gmx-ui-fee-earnings.js"
+    "test:gmx-ui-fee": "node test-gmx-ui-fee-earnings.js",
+    "test:strike-rewards": "node test-strike-reward-flow.js && node test-strike-vault-sync.js"
   },
   "keywords": [],
   "author": "",

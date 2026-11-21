@@ -1,5 +1,5 @@
 const VALID_DEXES = new Set([
-  'pacifica', 'avantis', 'domfi', 'etoro', 'qfex', 'throne', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix',
+  'pacifica', 'avantis', 'domfi', 'etoro', 'qfex', 'throne', 'strike', 'decibel', 'gmx', 'ostium', 'monad', 'phoenix',
   'hyperliquid', 'risex', 'nado', 'ondo', 'leverup', 'aster', 'hibachi', 'hotstuff', 'grvt', 'katana',
   'gmtrade', 'lighter', 'rhlighter', 'bulk', 'imperial',
 ]);

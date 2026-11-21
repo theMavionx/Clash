@@ -6,6 +6,9 @@ import { useQfex } from '../hooks/useQfex';
 import ThroneSetup from './trading/ThroneSetup';
 import ThroneStandingCard from './trading/ThroneStandingCard';
 import { useThrone } from '../hooks/useThrone';
+import StrikeSetup from './trading/StrikeSetup';
+import StrikeAccountCard from './trading/StrikeAccountCard';
+import { useStrike } from '../hooks/useStrike';
 import ImperialRouteCard from './trading/ImperialRouteCard';
 import PositionActionDialog from './trading/PositionActionDialog';
 import './trading/OpenTpslEditor.css';
@@ -157,6 +160,7 @@ const DEX_ERROR_LABELS = {
   etoro: 'eToro',
   qfex: 'QFEX',
   throne: 'Throne',
+  strike: 'Strike',
   decibel: 'Decibel',
   gmtrade: 'GMTrade',
   gmx: 'GMX',
@@ -181,7 +185,8 @@ const DEX_ERROR_LABELS = {
 };
 // throne: the server attaches TP/SL itself (BRACKET algo order for limits, positional TP/SL
 // after a market fill) and reports failures as result.tpsl_error.
-const OPEN_TPSL_NATIVE_ORDER_ATTACH_DEXES = new Set(['throne', 'qfex', 'avantis', 'domfi', 'etoro', 'bulk', 'decibel', 'gmx', 'hibachi', 'hotstuff', 'hyperliquid', 'imperial', 'katana', 'lighter', 'rhlighter', 'nado', 'ondo', 'ostium', 'pacifica']);
+// strike: the server sends entry + TP/SL as one strategy order (market and limit).
+const OPEN_TPSL_NATIVE_ORDER_ATTACH_DEXES = new Set(['throne', 'strike', 'qfex', 'avantis', 'domfi', 'etoro', 'bulk', 'decibel', 'gmx', 'hibachi', 'hotstuff', 'hyperliquid', 'imperial', 'katana', 'lighter', 'rhlighter', 'nado', 'ondo', 'ostium', 'pacifica']);
 const OPEN_TPSL_NATIVE_LIMIT_ATTACH_DEXES = new Set([...OPEN_TPSL_NATIVE_ORDER_ATTACH_DEXES, 'grvt', 'leverup', 'phoenix']);
 const OPEN_TPSL_POST_MARKET_DEXES = new Set([
   'throne',
@@ -3448,6 +3453,7 @@ function FuturesPanel() {
   const etoroHook = useEtoro();
   const qfexHook = useQfex();
   const throneHook = useThrone();
+  const strikeHook = useStrike();
   const decibelHook = useDecibel();
   const gmxHook = useGmx();
   const monadHook = useMonad();
@@ -3484,6 +3490,8 @@ function FuturesPanel() {
     ? qfexHook
     : dex === 'throne'
     ? throneHook
+    : dex === 'strike'
+    ? strikeHook
     : dex === 'decibel'
     ? decibelHook
     : dex === 'gmx'
@@ -4987,7 +4995,7 @@ function FuturesPanel() {
       // executes against whatever leverage was last persisted (e.g. 40× from
       // a previous session even though the slider shows 20×). Avantis/GMX
       // take leverage per-trade in the place-order call, so no pre-flush.
-      if (dex === 'qfex' || dex === 'throne' || dex === 'pacifica' || dex === 'bulk' || dex === 'decibel' || dex === 'hotstuff' || isLighterDex) {
+      if (dex === 'qfex' || dex === 'throne' || dex === 'strike' || dex === 'pacifica' || dex === 'bulk' || dex === 'decibel' || dex === 'hotstuff' || isLighterDex) {
         if (levTimerRef.current) {
           clearTimeout(levTimerRef.current);
           levTimerRef.current = null;
@@ -7104,6 +7112,10 @@ function FuturesPanel() {
   // ==================== THRONE (ORDERLY) ONE-TAP GATE ====================
   if (dex === 'throne' && setupVerified !== true) {
     return <div ref={panelRef} className="futures-terminal-shell" style={{ ...(fullscreen ? S.containerFull : S.container), overflowY: 'auto', ...(isMobile ? { left: 8, right: 8, width: 'auto' } : {}) }}><ThroneSetup connectWithWallet={throneHook.connectWithWallet} loading={loading} restoring={throneHook.restoring === true} error={error} onboardingStep={throneHook.onboardingStep} evmAddress={throneHook.evmAddress} onClose={handleClose} /></div>;
+  }
+  // ==================== STRIKE (BUILDER CONNECT) ONE-TAP GATE ====================
+  if (dex === 'strike' && setupVerified !== true) {
+    return <div ref={panelRef} className="futures-terminal-shell" style={{ ...(fullscreen ? S.containerFull : S.container), overflowY: 'auto', ...(isMobile ? { left: 8, right: 8, width: 'auto' } : {}) }}><StrikeSetup connectWithWallet={strikeHook.connectWithWallet} loading={loading} restoring={strikeHook.restoring === true} error={error} onboardingStep={strikeHook.onboardingStep} evmAddress={strikeHook.evmAddress} feeBps={strikeHook.inviteStatus?.builder_fee_bps ?? null} onClose={handleClose} /></div>;
   }
   // ==================== ETORO API KEY GATE ====================
   if (dex === 'qfex' && setupVerified !== true) {
@@ -10219,6 +10231,8 @@ function FuturesPanel() {
       <ThroneStandingCard address={account?.address} token={window._playerToken} />
       <button style={S.btnSmall} disabled={loading} onClick={async () => { try { await disconnect(); } catch (reason) { setLocalAlert(reason.message); } }}>Disconnect Throne key</button>
     </div>;
+
+    if (dex === 'strike') return <StrikeAccountCard strike={strikeHook} styles={S} onAlert={setLocalAlert} />;
 
     if (dex === 'qfex') return <div style={{ ...S.fullCard, display: 'grid', gap: 14 }}>
       <h3>QFEX account</h3>

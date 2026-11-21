@@ -98,7 +98,7 @@ const TASK_START_TRADE_GRACE_MS = Math.max(0, Number(process.env.TASK_START_TRAD
 const FUTURES_TASK_DEXES = new Set([
   'avantis',
   'domfi',
-  'etoro', 'qfex', 'throne',
+  'etoro', 'qfex', 'throne', 'strike',
   'decibel',
   'gmx',
   'ostium',
@@ -381,7 +381,7 @@ function isTaskStartBoundaryTrade(snap, trade) {
 
 function isAfterTaskSnapshot(snap, trade) {
   // API fills can arrive after task start despite executing before it.
-  if (['qfex', 'throne'].includes(String(trade?.dex || snap?.dex || '').toLowerCase())) {
+  if (['qfex', 'throne', 'strike'].includes(String(trade?.dex || snap?.dex || '').toLowerCase())) {
     const startedMs = parseTaskTimeMs(snap?.start_time);
     const tradeMs = parseTaskTimeMs(trade?.created_at);
     if (!Number.isFinite(startedMs) || !Number.isFinite(tradeMs) || tradeMs <= startedMs) return false;

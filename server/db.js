@@ -1091,7 +1091,7 @@ try {
       event_kind   TEXT NOT NULL DEFAULT 'standard' CHECK(event_kind IN ('standard','lucky_raider')),
       name         TEXT NOT NULL,
       description  TEXT,
-      dex          TEXT NOT NULL CHECK(dex IN ('pacifica','avantis','domfi','etoro', 'qfex','throne','decibel','dango','gmx','ostium','monad','phoenix','hyperliquid','risex','nado','ondo','leverup','hibachi','hotstuff','grvt','katana','gmtrade','flash','lighter','rhlighter','bulk','imperial')),
+      dex          TEXT NOT NULL CHECK(dex IN ('pacifica','avantis','domfi','etoro', 'qfex','throne','strike','decibel','dango','gmx','ostium','monad','phoenix','hyperliquid','risex','nado','ondo','leverup','hibachi','hotstuff','grvt','katana','gmtrade','flash','lighter','rhlighter','bulk','imperial')),
       dex_scope    TEXT NOT NULL DEFAULT 'single' CHECK(dex_scope IN ('single','custom','all')),
       eligible_dexes TEXT NOT NULL DEFAULT '[]',
       mode         TEXT NOT NULL DEFAULT 'individual' CHECK(mode IN ('individual','dex_vs_dex')),
@@ -1243,7 +1243,7 @@ try {
   try {
     const schema = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tournaments'").get()?.sql || '';
     const needsRebuild = schema
-      && (!schema.includes("event_kind") || !schema.includes("'points'") || !schema.includes("'volume_trophies_50_50'") || !schema.includes("'dango'") || !schema.includes("'domfi'") || !schema.includes("'etoro'") || !schema.includes("'qfex'") || !schema.includes("'throne'") || !schema.includes("'ostium'") || !schema.includes("'monad'") || !schema.includes("'phoenix'") || !schema.includes("'hyperliquid'") || !schema.includes("'risex'") || !schema.includes("'nado'") || !schema.includes("'ondo'") || !schema.includes("'leverup'") || !schema.includes("'hibachi'") || !schema.includes("'grvt'") || !schema.includes("'katana'") || !schema.includes("'gmtrade'") || !schema.includes("'flash'") || !schema.includes("'lighter'") || !schema.includes("'rhlighter'") || !schema.includes("'bulk'") || !schema.includes("'imperial'") || !schema.includes("points_trophy_weight") || !schema.includes("scoring_mode") || !schema.includes("daily_pool_points") || !schema.includes("daily_pool_growth_pct") || !schema.includes("daily_pool_overrides") || !schema.includes("daily_pool_award_time_utc") || !schema.includes("prize_tiers") || !schema.includes("mega_config") || !schema.includes("reward_config") || !schema.includes("rewards_in_cop") || !schema.includes("seeker_only") || !schema.includes("seeker_gold_boost") || !schema.includes("shield_hours") || !schema.includes("dex_scope") || !schema.includes("eligible_dexes") || !schema.includes("dex_vs_dex") || !schema.includes("team_prize_splits") || !schema.includes("attack_match_policy"));
+      && (!schema.includes("event_kind") || !schema.includes("'points'") || !schema.includes("'volume_trophies_50_50'") || !schema.includes("'dango'") || !schema.includes("'domfi'") || !schema.includes("'etoro'") || !schema.includes("'qfex'") || !schema.includes("'throne'") || !schema.includes("'strike'") || !schema.includes("'ostium'") || !schema.includes("'monad'") || !schema.includes("'phoenix'") || !schema.includes("'hyperliquid'") || !schema.includes("'risex'") || !schema.includes("'nado'") || !schema.includes("'ondo'") || !schema.includes("'leverup'") || !schema.includes("'hibachi'") || !schema.includes("'grvt'") || !schema.includes("'katana'") || !schema.includes("'gmtrade'") || !schema.includes("'flash'") || !schema.includes("'lighter'") || !schema.includes("'rhlighter'") || !schema.includes("'bulk'") || !schema.includes("'imperial'") || !schema.includes("points_trophy_weight") || !schema.includes("scoring_mode") || !schema.includes("daily_pool_points") || !schema.includes("daily_pool_growth_pct") || !schema.includes("daily_pool_overrides") || !schema.includes("daily_pool_award_time_utc") || !schema.includes("prize_tiers") || !schema.includes("mega_config") || !schema.includes("reward_config") || !schema.includes("rewards_in_cop") || !schema.includes("seeker_only") || !schema.includes("seeker_gold_boost") || !schema.includes("shield_hours") || !schema.includes("dex_scope") || !schema.includes("eligible_dexes") || !schema.includes("dex_vs_dex") || !schema.includes("team_prize_splits") || !schema.includes("attack_match_policy"));
     if (needsRebuild) {
       db.pragma('foreign_keys = OFF');
       db.transaction(() => {
@@ -1253,7 +1253,7 @@ try {
             event_kind   TEXT NOT NULL DEFAULT 'standard' CHECK(event_kind IN ('standard','lucky_raider')),
             name         TEXT NOT NULL,
             description  TEXT,
-            dex          TEXT NOT NULL CHECK(dex IN ('pacifica','avantis','domfi','etoro', 'qfex','throne','decibel','dango','gmx','ostium','monad','phoenix','hyperliquid','risex','nado','ondo','leverup','hibachi','hotstuff','grvt','katana','gmtrade','flash','lighter','rhlighter','bulk','imperial')),
+            dex          TEXT NOT NULL CHECK(dex IN ('pacifica','avantis','domfi','etoro', 'qfex','throne','strike','decibel','dango','gmx','ostium','monad','phoenix','hyperliquid','risex','nado','ondo','leverup','hibachi','hotstuff','grvt','katana','gmtrade','flash','lighter','rhlighter','bulk','imperial')),
             dex_scope    TEXT NOT NULL DEFAULT 'single' CHECK(dex_scope IN ('single','custom','all')),
             eligible_dexes TEXT NOT NULL DEFAULT '[]',
             mode         TEXT NOT NULL DEFAULT 'individual' CHECK(mode IN ('individual','dex_vs_dex')),
@@ -1306,11 +1306,11 @@ try {
             id,
             CASE WHEN event_kind IN ('standard','lucky_raider') THEN event_kind ELSE 'standard' END,
             name, description,
-            CASE WHEN dex IN ('pacifica','avantis','domfi','etoro', 'qfex','throne','decibel','dango','gmx','ostium','monad','phoenix','hyperliquid','risex','nado','ondo','leverup','hibachi','hotstuff','grvt','katana','gmtrade','flash','lighter','rhlighter','bulk','imperial') THEN dex ELSE 'pacifica' END,
+            CASE WHEN dex IN ('pacifica','avantis','domfi','etoro', 'qfex','throne','strike','decibel','dango','gmx','ostium','monad','phoenix','hyperliquid','risex','nado','ondo','leverup','hibachi','hotstuff','grvt','katana','gmtrade','flash','lighter','rhlighter','bulk','imperial') THEN dex ELSE 'pacifica' END,
             CASE WHEN dex_scope IN ('single','custom','all') THEN dex_scope ELSE 'single' END,
             CASE
               WHEN eligible_dexes IS NOT NULL AND eligible_dexes != '' AND eligible_dexes != '[]' THEN eligible_dexes
-              ELSE '["' || CASE WHEN dex IN ('pacifica','avantis','domfi','etoro', 'qfex','throne','decibel','dango','gmx','ostium','monad','phoenix','hyperliquid','risex','nado','ondo','leverup','hibachi','hotstuff','grvt','katana','gmtrade','flash','lighter','rhlighter','bulk','imperial') THEN dex ELSE 'pacifica' END || '"]'
+              ELSE '["' || CASE WHEN dex IN ('pacifica','avantis','domfi','etoro', 'qfex','throne','strike','decibel','dango','gmx','ostium','monad','phoenix','hyperliquid','risex','nado','ondo','leverup','hibachi','hotstuff','grvt','katana','gmtrade','flash','lighter','rhlighter','bulk','imperial') THEN dex ELSE 'pacifica' END || '"]'
             END,
             CASE WHEN mode IN ('individual','dex_vs_dex') THEN mode ELSE 'individual' END,
             COALESCE(team_score_by, 'volume_usd'),
@@ -1354,6 +1354,21 @@ try {
             registration_opens_at,
             registration_closes_at
           FROM tournaments;
+        `);
+        // Columns other modules add with ALTER TABLE (e.g. ranked raid settings in
+        // ranked_raid_tournaments.js) are not in the definition above; carry them over with
+        // their values so a rebuild never resets them to defaults.
+        const rebuilt = new Set(db.prepare('PRAGMA table_info(tournaments_new)').all().map(col => col.name));
+        for (const col of db.prepare('PRAGMA table_info(tournaments)').all().filter(c => !rebuilt.has(c.name))) {
+          const name = `"${String(col.name).replace(/"/g, '""')}"`;
+          const type = /^[A-Za-z ()0-9,]*$/.test(String(col.type || '')) ? String(col.type || '') : '';
+          const defaultSql = col.dflt_value != null ? ` DEFAULT ${col.dflt_value}` : '';
+          const notNull = col.notnull && col.dflt_value != null ? ' NOT NULL' : '';
+          db.exec(`ALTER TABLE tournaments_new ADD COLUMN ${name} ${type}${notNull}${defaultSql}`);
+          db.exec(`UPDATE tournaments_new SET ${name} = (SELECT old.${name} FROM tournaments old WHERE old.id = tournaments_new.id)
+            WHERE EXISTS (SELECT 1 FROM tournaments old WHERE old.id = tournaments_new.id AND old.${name} IS NOT NULL)`);
+        }
+        db.exec(`
           DROP TABLE tournaments;
           ALTER TABLE tournaments_new RENAME TO tournaments;
           CREATE INDEX IF NOT EXISTS idx_tournaments_dex_status ON tournaments(dex, status);
@@ -4342,7 +4357,7 @@ const TOURNAMENT_CREDIT_DEXES = new Set([
   'pacifica',
   'avantis',
   'domfi',
-  'etoro', 'qfex', 'throne',
+  'etoro', 'qfex', 'throne', 'strike',
   'decibel',
   'gmx',
   'ostium',

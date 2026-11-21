@@ -31,6 +31,14 @@ export const DEX_CONFIG = {
     borderColor: '#F5C542', chain: 'Orderly', chainShort: 'ORDERLY',
     description: 'Yield Court of Robinhood Chain: Orderly perps under broker throne',
   },
+  strike: {
+    id: 'strike', label: 'Strike', shortLabel: 'STRIKE', emoji: 'S',
+    // Strike Finance's official app icon, served from /public (fetched from strikefinance.org).
+    logo: '/strike-logo.png', logoIsWordmark: false,
+    color: '#26FAB0', colorDark: '#12B87F', colorLight: 'rgba(38,250,176,0.16)',
+    borderColor: '#26FAB0', chain: 'Strike', chainShort: 'STRIKE',
+    description: 'Strike Finance perps: crypto, stocks, indices and gold',
+  },
   imperial: {
     id: 'imperial',
     label: 'IMPERIAL',
@@ -445,7 +453,7 @@ export const DEX_ORDER = [
   'avantis',
   'domfi',
   'etoro',
-  'qfex', 'throne',
+  'qfex', 'throne', 'strike',
   'ostium',
   'monad',
 ];

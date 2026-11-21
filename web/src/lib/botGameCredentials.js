@@ -505,7 +505,7 @@ export function savePhoenixBotSigner(privateKey, solOwner, options = {}) {
 }
 
 /** Temporarily disabled in Bots — broken auth or needs access codes. */
-export const BOTS_DISABLED_EXCHANGES = ['qfex', 'throne', 'domfi', 'etoro', 'gmx', 'gmtrade', 'perpl', 'phoenix'];
+export const BOTS_DISABLED_EXCHANGES = ['qfex', 'throne', 'strike', 'domfi', 'etoro', 'gmx', 'gmtrade', 'perpl', 'phoenix'];
 
 /**
  * Exchanges removed from Clash entirely (Flash Trade). The bot backend can
@@ -559,6 +559,7 @@ export const GAME_WALLET_EXCHANGE_LABELS = {
 export const UNSUPPORTED_GAME_WALLET_EXCHANGES = [
   { id: 'qfex', label: 'QFEX', reason: 'API credentials are not exported to Bots' },
   { id: 'throne', label: 'Throne', reason: 'Orderly trading keys are not exported to Bots' },
+  { id: 'strike', label: 'Strike', reason: 'Strike API wallet keys are not exported to Bots' },
   { id: 'etoro', label: 'eToro', reason: 'browser API credentials are not exported to Bots' },
   { id: 'gmx', label: 'GMX', reason: 'temporarily disabled — delegate auth required' },
   { id: 'gmtrade', label: 'GMTrade', reason: 'temporarily disabled — not working' },
