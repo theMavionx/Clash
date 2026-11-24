@@ -201,10 +201,14 @@ function BasicTradeFlow({
     setSubmitting(true);
     setErrorMsg(null);
     try {
-      const isCollateralDex = dex === 'avantis' || dex === 'domfi' || dex === 'etoro' || dex === 'decibel' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'gmtrade' || dex === 'leverup';
+      // These hooks also take USDC margin + leverage (as in FuturesPanel), but expect bid/ask.
+      // Sending them the Pacifica-style base-token amount made e.g. a $25 GRVT order a
+      // 0.003 "USDC" order at 1x, which always failed the lot-size check.
+      const isMarginBidAskDex = dex === 'grvt' || dex === 'aster' || dex === 'hibachi' || dex === 'bulk' || dex === 'imperial';
+      const isCollateralDex = isMarginBidAskDex || dex === 'avantis' || dex === 'domfi' || dex === 'etoro' || dex === 'decibel' || dex === 'gmx' || dex === 'ostium' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' || dex === 'gmtrade' || dex === 'leverup';
       const sideForOpen = pickedDir === 'long'
-        ? (isCollateralDex ? 'long' : 'bid')
-        : (isCollateralDex ? 'short' : 'ask');
+        ? (isCollateralDex && !isMarginBidAskDex ? 'long' : 'bid')
+        : (isCollateralDex && !isMarginBidAskDex ? 'short' : 'ask');
 
       let result;
       if (isCollateralDex) {
@@ -239,6 +243,18 @@ function BasicTradeFlow({
           if (minPosting > 0 && notional < minPosting) {
             setErrorMsg(
               `Perpl requires a position >= $${minPosting.toFixed(2)}. Yours: ` +
+              `$${Number.isFinite(notional) ? notional.toFixed(2) : '0.00'}. Increase amount or leverage.`
+            );
+            submittedRef.current = false;
+            setSubmitting(false);
+            return;
+          }
+        }
+        if (isMarginBidAskDex) {
+          const minNotional = Number(pickedToken?.min_notional_usd || 0);
+          if (minNotional > 0 && notional + 1e-9 < minNotional) {
+            setErrorMsg(
+              `This market requires a position >= $${minNotional.toFixed(2)}. Yours: ` +
               `$${Number.isFinite(notional) ? notional.toFixed(2) : '0.00'}. Increase amount or leverage.`
             );
             submittedRef.current = false;
