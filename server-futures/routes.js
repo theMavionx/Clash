@@ -5607,12 +5607,18 @@ function grvtSymbolFromInstrument(value) {
 }
 
 /** Our own validation errors carry e.status; GRVT 4xx replies keep their status; else 502. */
-function grvtErrorStatus(e, endpoint) {
-  if (Number(e?.status) >= 400 && Number(e?.status) < 600) return Number(e.status);
-  const m = new RegExp(`${endpoint}\\s+(\\d{3})`, 'i').exec(e?.message || '');
-  const upstream = Number(m?.[1]);
+// Never answer GRVT failures with 502/504: Cloudflare replaces those bodies with its own
+// "502: Bad gateway" HTML, so the client loses the GRVT error (and e.g. never sees 7504
+// "Builder is not authorized", which is what triggers the builder authorization retry).
+function grvtErrorStatus(e, endpoint = '') {
+  const own = Number(e?.status);
+  if (own >= 400 && own < 600 && own !== 502 && own !== 504) return own;
+  const pattern = endpoint ? `${endpoint}\\s+(\\d{3})` : 'GRVT [^:]*?\\b(\\d{3}):';
+  const upstream = Number(new RegExp(pattern, 'i').exec(e?.message || '')?.[1]);
   // GRVT 401/403 are GRVT-session problems, not Clash auth: keep them off our 401/403.
-  return upstream >= 400 && upstream < 500 && upstream !== 401 && upstream !== 403 ? upstream : 502;
+  if (upstream === 401 || upstream === 403) return 422;
+  if (upstream >= 400 && upstream < 500) return upstream;
+  return 500;
 }
 
 function requireGrvtOwner(req, res) {
@@ -5726,7 +5732,7 @@ router.post('/grvt/account', auth, async (req, res) => {
     res.json(await grvt.getAccount(creds));
   } catch (e) {
     console.warn('[grvt] account failed:', e.message);
-    res.status(502).json({ error: 'Failed to load GRVT account', detail: e.message });
+    res.status(grvtErrorStatus(e)).json({ error: 'Failed to load GRVT account', detail: e.message });
   }
 });
 
@@ -5737,7 +5743,7 @@ router.post('/grvt/positions', auth, async (req, res) => {
     res.json(await grvt.getPositions(creds));
   } catch (e) {
     console.warn('[grvt] positions failed:', e.message);
-    res.status(502).json({ error: 'Failed to load GRVT positions', detail: e.message });
+    res.status(grvtErrorStatus(e)).json({ error: 'Failed to load GRVT positions', detail: e.message });
   }
 });
 
@@ -5748,7 +5754,7 @@ router.post('/grvt/leverage', auth, async (req, res) => {
     res.json(await grvt.getInitialLeverage(creds));
   } catch (e) {
     console.warn('[grvt] leverage failed:', e.message);
-    res.status(502).json({ error: 'Failed to load GRVT leverage config', detail: e.message });
+    res.status(grvtErrorStatus(e)).json({ error: 'Failed to load GRVT leverage config', detail: e.message });
   }
 });
 
@@ -5759,7 +5765,7 @@ router.post('/grvt/orders', auth, async (req, res) => {
     res.json(await grvt.getOrders(creds));
   } catch (e) {
     console.warn('[grvt] orders failed:', e.message);
-    res.status(502).json({ error: 'Failed to load GRVT orders', detail: e.message });
+    res.status(grvtErrorStatus(e)).json({ error: 'Failed to load GRVT orders', detail: e.message });
   }
 });
 
@@ -5803,7 +5809,7 @@ router.post('/grvt/create-order', auth, async (req, res) => {
     res.json(result);
   } catch (e) {
     console.warn('[grvt] create-order failed:', e.message);
-    res.status(502).json({ error: 'Failed to create GRVT order', detail: e.message });
+    res.status(grvtErrorStatus(e)).json({ error: 'Failed to create GRVT order', detail: e.message });
   }
 });
 
@@ -5856,7 +5862,7 @@ router.post('/grvt/bulk-orders', auth, async (req, res) => {
     res.json(result);
   } catch (e) {
     console.warn('[grvt] bulk-orders failed:', e.message);
-    res.status(502).json({ error: 'Failed to create GRVT bulk orders', detail: e.message });
+    res.status(grvtErrorStatus(e)).json({ error: 'Failed to create GRVT bulk orders', detail: e.message });
   }
 });
 
@@ -5952,7 +5958,7 @@ router.post('/grvt/authorize-builder', auth, async (req, res) => {
           + 'make sure the account is funded, create the API key there, then save it again in Clash (Account tab).',
       });
     }
-    res.status(502).json({ error: 'Failed to authorize GRVT builder', detail: e.message });
+    res.status(grvtErrorStatus(e)).json({ error: 'Failed to authorize GRVT builder', detail: e.message });
   }
 });
 
@@ -5968,7 +5974,7 @@ router.post('/grvt/cancel-order', auth, async (req, res) => {
     res.json(result);
   } catch (e) {
     console.warn('[grvt] cancel-order failed:', e.message);
-    res.status(502).json({ error: 'Failed to cancel GRVT order', detail: e.message });
+    res.status(grvtErrorStatus(e)).json({ error: 'Failed to cancel GRVT order', detail: e.message });
   }
 });
 
@@ -5987,7 +5993,7 @@ router.post('/grvt/trade-history', auth, async (req, res) => {
     res.json(Array.isArray(rows) ? rows : []);
   } catch (e) {
     console.warn('[grvt] trade-history failed:', e.message);
-    res.status(502).json({ error: 'Failed to load GRVT trade history', detail: e.message });
+    res.status(grvtErrorStatus(e)).json({ error: 'Failed to load GRVT trade history', detail: e.message });
   }
 });
 
@@ -6007,7 +6013,7 @@ router.post('/grvt/import-fills', auth, async (req, res) => {
     res.json(result);
   } catch (e) {
     console.warn('[grvt] import-fills failed:', e.message);
-    res.status(502).json({ error: 'Failed to import GRVT fills', detail: e.message });
+    res.status(grvtErrorStatus(e)).json({ error: 'Failed to import GRVT fills', detail: e.message });
   }
 });
 
