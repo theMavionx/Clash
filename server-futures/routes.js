@@ -5926,11 +5926,15 @@ router.post('/grvt/authorize-builder', auth, async (req, res) => {
     // wallet only yields GRVT's opaque "invalid main account ID". First-time setup has no
     // key yet, so this lookup is best-effort.
     let grvtMainAccountId = '';
+    const short = (a) => (/^0x[a-fA-F0-9]{40}$/u.test(String(a || '')) ? `${a.slice(0, 6)}...${a.slice(-4)}` : String(a || '').slice(0, 140));
+    const diag = {};
     try {
-      grvtMainAccountId = await grvt.getMainAccountId(grvtCredsFromReq(req));
-    } catch {}
+      grvtMainAccountId = await grvt.getMainAccountId(grvtCredsFromReq(req), diag);
+    } catch (e) {
+      diag.lookup_error = String(e?.message || e).slice(0, 120);
+    }
+    console.log(`[grvt] authorize-builder lookup player=${req.playerName} wallet=${short(mainAccountId)} grvt_main=${short(grvtMainAccountId) || '-'} diag=${JSON.stringify(Object.fromEntries(Object.entries(diag).map(([k, v]) => [k, short(v)])))}`);
     if (grvtMainAccountId && grvtMainAccountId.toLowerCase() !== mainAccountId.toLowerCase()) {
-      const short = (a) => `${a.slice(0, 6)}...${a.slice(-4)}`;
       console.warn(`[grvt] authorize-builder wallet mismatch player=${req.playerName} wallet=${short(mainAccountId)} grvt_main=${short(grvtMainAccountId)}`);
       return res.status(409).json({
         error: 'GRVT API key belongs to another wallet',

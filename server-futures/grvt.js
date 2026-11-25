@@ -971,15 +971,23 @@ async function cancelOrder(credsInput, opts = {}) {
  * funding_account_summary (full mode: `main_account_id`). Builder authorization must name
  * exactly this account; a Clash wallet that differs gets "invalid main account ID" from GRVT.
  */
-async function getMainAccountId(credsInput) {
+async function getMainAccountId(credsInput, diag = null) {
   const creds = await resolveCreds(credsInput);
   const headers = authHeaders(creds);
+  const note = (k, v) => { if (diag) diag[k] = v; };
+  note('login_funding_address', creds.fundingAccountAddress || '');
   for (const endpoint of ['funding_account_summary', 'aggregated_account_summary']) {
-    try {
-      const payload = await post(GRVT_TRADES_API, endpoint, {}, headers, 'full');
-      const id = String(resultOf(payload)?.main_account_id || payload?.main_account_id || '').trim();
-      if (/^0x[a-fA-F0-9]{40}$/u.test(id)) return id;
-    } catch {}
+    for (const mode of ['full', 'lite']) {
+      try {
+        const payload = await post(GRVT_TRADES_API, endpoint, {}, headers, mode);
+        const r = resultOf(payload);
+        const id = String(valueOf(r, 'main_account_id', 'ma', 'mai') || valueOf(payload, 'main_account_id') || '').trim();
+        note(`${endpoint}.${mode}`, id || `keys:${Object.keys(r || {}).join(',').slice(0, 80)}`);
+        if (/^0x[a-fA-F0-9]{40}$/u.test(id)) return id;
+      } catch (e) {
+        note(`${endpoint}.${mode}`, `error:${String(e?.message || e).slice(0, 120)}`);
+      }
+    }
   }
   return String(creds.fundingAccountAddress || '').trim();
 }
