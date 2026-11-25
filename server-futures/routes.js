@@ -5904,6 +5904,20 @@ router.post('/grvt/set-position-config', auth, async (req, res) => {
   }
 });
 
+// Main account the saved API key belongs to (see grvt.getMainAccountId); the client signs
+// builder authorization for this account with the player's linked wallet.
+router.post('/grvt/main-account', auth, async (req, res) => {
+  try {
+    const creds = requireGrvtOwner(req, res);
+    if (!creds) return;
+    const id = await grvt.getMainAccountId(creds);
+    res.json({ main_account_id: id || null });
+  } catch (e) {
+    console.warn('[grvt] main-account failed:', e.message);
+    res.status(grvtErrorStatus(e)).json({ error: 'Failed to read GRVT main account', detail: e.message });
+  }
+});
+
 router.post('/grvt/authorize-builder', auth, async (req, res) => {
   try {
     if (req.dex !== 'grvt') {
@@ -5919,12 +5933,15 @@ router.post('/grvt/authorize-builder', auth, async (req, res) => {
       || ''
     ).trim();
     const playerWallet = String(req.playerWallet || '').trim().toLowerCase();
-    if (/^0x[a-f0-9]{40}$/i.test(playerWallet) && mainAccountId.toLowerCase() !== playerWallet) {
-      return res.status(403).json({ error: 'GRVT authorization wallet does not match this game account.' });
+    const hasPlayerWallet = /^0x[a-f0-9]{40}$/i.test(playerWallet);
+    const signer = String(req.body?.signature?.signer || '').trim().toLowerCase();
+    if (hasPlayerWallet && signer && signer !== playerWallet) {
+      return res.status(403).json({ error: 'GRVT authorization must be signed by this game account wallet.' });
     }
-    // With a saved API key, ask GRVT which wallet owns that account. Authorizing any other
-    // wallet only yields GRVT's opaque "invalid main account ID". First-time setup has no
-    // key yet, so this lookup is best-effort.
+    // With a saved API key, ask GRVT which main account the key belongs to. Email-registered
+    // GRVT accounts have a GRVT-managed main account; the wallet the player linked later is
+    // only a signer on it, so the authorization must name that main account. First-time
+    // setup has no key yet, so this lookup is best-effort.
     let grvtMainAccountId = '';
     const short = (a) => (/^0x[a-fA-F0-9]{40}$/u.test(String(a || '')) ? `${a.slice(0, 6)}...${a.slice(-4)}` : String(a || '').slice(0, 140));
     const diag = {};
@@ -5933,18 +5950,24 @@ router.post('/grvt/authorize-builder', auth, async (req, res) => {
     } catch (e) {
       diag.lookup_error = String(e?.message || e).slice(0, 120);
     }
-    console.log(`[grvt] authorize-builder lookup player=${req.playerName} wallet=${short(mainAccountId)} grvt_main=${short(grvtMainAccountId) || '-'} diag=${JSON.stringify(Object.fromEntries(Object.entries(diag).map(([k, v]) => [k, short(v)])))}`);
-    if (grvtMainAccountId && grvtMainAccountId.toLowerCase() !== mainAccountId.toLowerCase()) {
-      console.warn(`[grvt] authorize-builder wallet mismatch player=${req.playerName} wallet=${short(mainAccountId)} grvt_main=${short(grvtMainAccountId)}`);
+    console.log(`[grvt] authorize-builder lookup player=${req.playerName} main=${short(mainAccountId)} signer=${short(signer)} grvt_main=${short(grvtMainAccountId) || '-'} diag=${JSON.stringify(Object.fromEntries(Object.entries(diag).map(([k, v]) => [k, short(v)])))}`);
+    const mainIsWallet = hasPlayerWallet && mainAccountId.toLowerCase() === playerWallet;
+    const mainIsGrvtVerified = !!grvtMainAccountId && mainAccountId.toLowerCase() === grvtMainAccountId.toLowerCase();
+    if (hasPlayerWallet && !mainIsWallet && !mainIsGrvtVerified) {
+      return res.status(403).json({ error: 'GRVT authorization account does not match this game account.' });
+    }
+    if (grvtMainAccountId && !mainIsGrvtVerified) {
+      // Signed for the wallet, but GRVT's main account is another address: the client
+      // re-signs for grvt_main_account_id (the signature covers the main account id).
       return res.status(409).json({
-        error: 'GRVT API key belongs to another wallet',
-        detail: `This GRVT API key is from the GRVT account of wallet ${short(grvtMainAccountId)}, but Clash is connected with ${short(mainAccountId)}. `
-          + `Log in to grvt.io with ${short(mainAccountId)}, create a new API key there and save it in Clash (Account tab), or play Clash with wallet ${short(grvtMainAccountId)}.`,
+        error: 'GRVT main account differs from this wallet',
+        detail: 'Your GRVT account is managed by GRVT (for example an email sign-up). Refresh the game and approve the GRVT signature again.',
+        code: 'grvt_main_account_mismatch',
         grvt_main_account_id: grvtMainAccountId,
       });
     }
     const result = await grvt.authorizeBuilder({
-      mainAccountId: grvtMainAccountId || mainAccountId,
+      mainAccountId,
       signature: req.body?.signature,
       maxFuturesFeeRate: req.body?.max_futures_fee_rate || req.body?.maxFuturesFeeRate,
       maxSpotFeeRate: req.body?.max_spot_fee_rate || req.body?.maxSpotFeeRate,

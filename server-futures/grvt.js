@@ -976,6 +976,7 @@ async function getMainAccountId(credsInput, diag = null) {
   const headers = authHeaders(creds);
   const note = (k, v) => { if (diag) diag[k] = v; };
   note('login_funding_address', creds.fundingAccountAddress || '');
+  note('login_account_header', creds.accountId || '');
   for (const endpoint of ['funding_account_summary', 'aggregated_account_summary']) {
     for (const mode of ['full', 'lite']) {
       try {
@@ -989,7 +990,13 @@ async function getMainAccountId(credsInput, diag = null) {
       }
     }
   }
-  return String(creds.fundingAccountAddress || '').trim();
+  // Email-registered GRVT accounts: the login's account header / funding address is the
+  // main account (a GRVT-managed address), not the wallet the player linked later.
+  for (const candidate of [creds.fundingAccountAddress, creds.accountId]) {
+    const id = String(candidate || '').trim().replace(/^ACC:/iu, '');
+    if (/^0x[a-fA-F0-9]{40}$/u.test(id)) return id;
+  }
+  return '';
 }
 
 async function authorizeBuilder(input = {}) {

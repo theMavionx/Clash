@@ -1024,15 +1024,26 @@ export function useGrvt() {
     if (builderAuthorized && !force) return { success: true, already_authorized: true };
     const builderAccount = String(builderConfig?.accountId || GRVT_BUILDER_ACCOUNT_ID || '').trim();
     const builderFeeRate = String(builderConfig?.feeRate || GRVT_BUILDER_FEE_RATE || '0').trim();
-    const mainAccountId = String(credentials?.fundingAccountAddress || walletAddr || '').trim();
+    // Email-registered GRVT accounts have a GRVT-managed main account; the player's wallet is
+    // only a linked signer on it. Authorize the builder for the main account GRVT reports for
+    // this API key, signed by the linked wallet.
+    let grvtMain = '';
+    try {
+      grvtMain = String((await authedPost('/api/futures/grvt/main-account'))?.main_account_id || '').trim();
+    } catch (e) {
+      console.warn('[useGrvt] main account lookup:', e?.message || e);
+    }
+    const mainAccountId = String(
+      (/^0x[a-fA-F0-9]{40}$/.test(grvtMain) && grvtMain)
+      || credentials?.fundingAccountAddress
+      || walletAddr
+      || '',
+    ).trim();
     if (!builderAccount || !/^0x[a-fA-F0-9]{40}$/.test(builderAccount)) {
       throw new Error('GRVT builder account is not configured');
     }
     if (!/^0x[a-fA-F0-9]{40}$/.test(mainAccountId)) {
       throw new Error('GRVT funding account address is not ready. Save your GRVT API key again.');
-    }
-    if (String(mainAccountId).toLowerCase() !== String(walletAddr).toLowerCase()) {
-      throw new Error('Connect the same GRVT wallet that owns this GRVT funding account.');
     }
     const provider = evmWallet?.provider;
     if (!provider) throw new Error('GRVT wallet signer is not ready');
