@@ -966,6 +966,24 @@ async function cancelOrder(credsInput, opts = {}) {
   return { success: true, ack: result.ack ?? result.a ?? true, result };
 }
 
+/**
+ * Main account (funding wallet) that owns the API key's GRVT account, read from
+ * funding_account_summary (full mode: `main_account_id`). Builder authorization must name
+ * exactly this account; a Clash wallet that differs gets "invalid main account ID" from GRVT.
+ */
+async function getMainAccountId(credsInput) {
+  const creds = await resolveCreds(credsInput);
+  const headers = authHeaders(creds);
+  for (const endpoint of ['funding_account_summary', 'aggregated_account_summary']) {
+    try {
+      const payload = await post(GRVT_TRADES_API, endpoint, {}, headers, 'full');
+      const id = String(resultOf(payload)?.main_account_id || payload?.main_account_id || '').trim();
+      if (/^0x[a-fA-F0-9]{40}$/u.test(id)) return id;
+    } catch {}
+  }
+  return String(creds.fundingAccountAddress || '').trim();
+}
+
 async function authorizeBuilder(input = {}) {
   if (!GRVT_BUILDER_ACCOUNT_ID) throw new Error('GRVT builder account is not configured');
   const mainAccountId = String(input.mainAccountId || input.main_account_id || '').trim();
@@ -1217,4 +1235,5 @@ module.exports = {
   setPositionConfig,
   cancelOrder,
   authorizeBuilder,
+  getMainAccountId,
 };

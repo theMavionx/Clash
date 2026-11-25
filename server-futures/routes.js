@@ -5916,8 +5916,25 @@ router.post('/grvt/authorize-builder', auth, async (req, res) => {
     if (/^0x[a-f0-9]{40}$/i.test(playerWallet) && mainAccountId.toLowerCase() !== playerWallet) {
       return res.status(403).json({ error: 'GRVT authorization wallet does not match this game account.' });
     }
+    // With a saved API key, ask GRVT which wallet owns that account. Authorizing any other
+    // wallet only yields GRVT's opaque "invalid main account ID". First-time setup has no
+    // key yet, so this lookup is best-effort.
+    let grvtMainAccountId = '';
+    try {
+      grvtMainAccountId = await grvt.getMainAccountId(grvtCredsFromReq(req));
+    } catch {}
+    if (grvtMainAccountId && grvtMainAccountId.toLowerCase() !== mainAccountId.toLowerCase()) {
+      const short = (a) => `${a.slice(0, 6)}...${a.slice(-4)}`;
+      console.warn(`[grvt] authorize-builder wallet mismatch player=${req.playerName} wallet=${short(mainAccountId)} grvt_main=${short(grvtMainAccountId)}`);
+      return res.status(409).json({
+        error: 'GRVT API key belongs to another wallet',
+        detail: `This GRVT API key is from the GRVT account of wallet ${short(grvtMainAccountId)}, but Clash is connected with ${short(mainAccountId)}. `
+          + `Log in to grvt.io with ${short(mainAccountId)}, create a new API key there and save it in Clash (Account tab), or play Clash with wallet ${short(grvtMainAccountId)}.`,
+        grvt_main_account_id: grvtMainAccountId,
+      });
+    }
     const result = await grvt.authorizeBuilder({
-      mainAccountId,
+      mainAccountId: grvtMainAccountId || mainAccountId,
       signature: req.body?.signature,
       maxFuturesFeeRate: req.body?.max_futures_fee_rate || req.body?.maxFuturesFeeRate,
       maxSpotFeeRate: req.body?.max_spot_fee_rate || req.body?.maxSpotFeeRate,
@@ -5930,8 +5947,9 @@ router.post('/grvt/authorize-builder', auth, async (req, res) => {
     console.warn('[grvt] authorize-builder failed:', e.message);
     if (/invalid main account id/i.test(e.message || '')) {
       return res.status(400).json({
-        error: 'This wallet has no GRVT account yet',
-        detail: 'Create and fund a GRVT account with this wallet on grvt.io, then connect again.',
+        error: 'GRVT did not accept this wallet as the account owner',
+        detail: 'GRVT does not list this wallet as the owner of a GRVT account. Log in to grvt.io with the same wallet you use in Clash, '
+          + 'make sure the account is funded, create the API key there, then save it again in Clash (Account tab).',
       });
     }
     res.status(502).json({ error: 'Failed to authorize GRVT builder', detail: e.message });
